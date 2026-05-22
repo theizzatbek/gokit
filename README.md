@@ -47,24 +47,32 @@ verify that handler/middleware/factory names are registered — your Go
 binary is the only place those live. For full validation (including
 registrations), use `Engine.Validate()` in a Go test or boot script.
 
-## Run the example
+## Examples
 
-A complete runnable demo lives in [`examples/quickstart`](./examples/quickstart):
+Two runnable examples — pick the one matching how you intend to use the lib:
 
-```bash
-cd examples/quickstart
-go run .
+- **[`examples/quickstart`](./examples/quickstart)** — minimal
+  single-file demo (~100 LOC). Stub auth via `?role=` query, three
+  inline handlers. Read this to *understand* fibermap.
 
-# in another shell:
-curl                 'http://localhost:3000/v1/patients'
-curl -X POST         'http://localhost:3000/v1/patients?role=director'
-curl -X POST         'http://localhost:3000/v1/patients?role=guest'      # 403
-curl -X PUT          'http://localhost:3000/v1/patients/7?role=director'
-```
+  ```bash
+  go run ./examples/quickstart
+  curl -X POST 'http://localhost:3000/v1/patients?role=director'   # 201
+  curl -X POST 'http://localhost:3000/v1/patients?role=guest'      # 403
+  ```
 
-The example prints the resolved route table at startup and uses a stub
-auth middleware that takes the role from `?role=` so role guards are easy
-to exercise from curl.
+- **[`examples/tasks`](./examples/tasks)** — realistic starting
+  template. Multi-package layout under `internal/`, real Bearer-token
+  auth, in-memory store behind a `Store` interface, request-id +
+  structured `slog` logger, embedded `routes.yaml` via `embed.FS`,
+  graceful shutdown, `/admin/routes` introspection endpoint, and
+  `fibermaptest.AssertRoute` covering the route table. **Copy this
+  directory** to start a new service.
+
+  ```bash
+  go run ./examples/tasks
+  curl -H "Authorization: Bearer alice-token" http://localhost:3000/api/v1/tasks
+  ```
 
 ## Lifecycle
 

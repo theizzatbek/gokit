@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/fibermap/main/schema/routes.schema.json
+
+# Auth + request_id run at the Fiber level (see main.go) — they must
+# execute before fibermap's ContextBuilder, so they're not listed here.
+# This YAML focuses on the part that ACTUALLY varies per route:
+# authorization rules and route metadata.
+
+groups:
+  - prefix: /api/v1
+
+    groups:
+      - prefix: /tasks
+        routes:
+          - method: GET
+            path: ""
+            handler: tasks.list
+            tags: [tasks, read]
+            description: List the caller's tasks
+          - method: POST
+            path: ""
+            handler: tasks.create
+            tags: [tasks, write]
+            description: Create a task for the caller
+          - method: GET
+            path: /:id
+            handler: tasks.get
+            tags: [tasks, read]
+            description: Get one of the caller's tasks
+          - method: PATCH
+            path: /:id
+            handler: tasks.update
+            tags: [tasks, write]
+            description: Update fields of an existing task
+          - method: DELETE
+            path: /:id
+            handler: tasks.delete
+            tags: [tasks, admin]
+            description: Delete a task — admin only
+            middleware:
+              - require_role: [admin]
+
+      - prefix: /admin
+        middleware:
+          - require_role: [admin]
+        routes:
+          - method: GET
+            path: /routes
+            handler: admin.routes
+            tags: [admin, ops]
+            description: Introspection — list every route fibermap registered
