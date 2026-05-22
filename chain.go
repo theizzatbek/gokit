@@ -6,8 +6,8 @@ import "strings"
 //
 //   - sets:       middleware_sets map from YAML.
 //   - ancestors:  one slice per ancestor group, ordered outermost-first.
-//                 Each entry is a group's combined `middleware_set` + `middleware`
-//                 (already concatenated by the caller — see engine.go Mount).
+//     Each entry is a group's combined `middleware_set` + `middleware`
+//     (already concatenated by the caller — see engine.go Mount).
 //   - routeMW:    the route's own middleware (set expansion happens here too).
 //
 // Each ref whose Name matches a key in `sets` is recursively expanded.
