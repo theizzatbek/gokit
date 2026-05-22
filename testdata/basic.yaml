@@ -1,0 +1,4 @@
+groups:
+  - prefix: /v1
+    routes:
+      - { method: GET, path: /ping, handler: ping.handle }

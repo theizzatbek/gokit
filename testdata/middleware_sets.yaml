@@ -1,0 +1,8 @@
+middleware_sets:
+  base: [logger]
+  protected: [base, auth, authorized]
+groups:
+  - prefix: /v1
+    middleware_set: protected
+    routes:
+      - { method: GET, path: /me, handler: user.me }

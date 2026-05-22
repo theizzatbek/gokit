@@ -1,0 +1,13 @@
+groups:
+  - prefix: /v1
+    middleware: [auth]
+    groups:
+      - prefix: /patients
+        routes:
+          - method: GET
+            path: ""
+            handler: patient.list
+          - method: POST
+            path: ""
+            handler: patient.create
+            roles: [director]

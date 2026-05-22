@@ -1,0 +1,7 @@
+middleware_sets:
+  a: [b]
+  b: [a]
+groups:
+  - prefix: /v1
+    routes:
+      - { method: GET, path: /x, handler: x.handle }
