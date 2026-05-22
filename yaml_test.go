@@ -36,7 +36,10 @@ func TestParseBytes_Basic(t *testing.T) {
 }
 
 func TestParseBytes_NestedGroups(t *testing.T) {
-	data, _ := os.ReadFile(filepath.Join("testdata", "nested_groups.yaml"))
+	data, err := os.ReadFile(filepath.Join("testdata", "nested_groups.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cfg, err := parseBytes(data, "nested_groups.yaml")
 	if err != nil {
@@ -72,6 +75,9 @@ groups:
 	if fe.Code != CodeMissingField {
 		t.Errorf("code = %q, want %q", fe.Code, CodeMissingField)
 	}
+	if !strings.HasSuffix(fe.Path, ".method") {
+		t.Errorf("Path = %q, want suffix .method", fe.Path)
+	}
 }
 
 func TestParseBytes_InvalidMethod(t *testing.T) {
@@ -90,12 +96,18 @@ groups:
 	if fe.Code != CodeInvalidHTTPMethod {
 		t.Errorf("code = %q, want %q", fe.Code, CodeInvalidHTTPMethod)
 	}
+	if !strings.HasSuffix(fe.Path, ".method") {
+		t.Errorf("Path = %q, want suffix .method", fe.Path)
+	}
 }
 
 func TestParseBytes_MiddlewareSetCycle(t *testing.T) {
-	data, _ := os.ReadFile(filepath.Join("testdata", "invalid_cycle.yaml"))
+	data, err := os.ReadFile(filepath.Join("testdata", "invalid_cycle.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := parseBytes(data, "invalid_cycle.yaml")
+	_, err = parseBytes(data, "invalid_cycle.yaml")
 
 	var fe *Error
 	if !errors.As(err, &fe) {
@@ -118,5 +130,24 @@ func TestParseBytes_MalformedYAML(t *testing.T) {
 	}
 	if fe.Code != CodeInvalidYAML {
 		t.Errorf("code = %q, want %q", fe.Code, CodeInvalidYAML)
+	}
+}
+
+func TestParseBytes_MiddlewareSets(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "middleware_sets.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := parseBytes(data, "middleware_sets.yaml")
+	if err != nil {
+		t.Fatalf("parseBytes: %v", err)
+	}
+
+	if len(cfg.MiddlewareSets) != 2 {
+		t.Errorf("middleware_sets count = %d, want 2", len(cfg.MiddlewareSets))
+	}
+	if got := cfg.MiddlewareSets["protected"]; len(got) != 3 || got[0] != "base" || got[1] != "auth" || got[2] != "authorized" {
+		t.Errorf("protected set = %v, want [base auth authorized]", got)
 	}
 }
