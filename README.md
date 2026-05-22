@@ -65,6 +65,13 @@ type AppCtx struct {
     UserID, OrgID, Role string
 }
 
+// Optional: hide the generic parameter behind project-local aliases so
+// handler/middleware signatures read as `func(c *Ctx) error`.
+type (
+    Ctx = fibermap.Context[AppCtx]
+    MW  = fibermap.MiddlewareFunc[AppCtx]
+)
+
 eng := fibermap.New[AppCtx]()
 
 eng.SetContextBuilder(func(c *fiber.Ctx) (AppCtx, error) {
@@ -77,16 +84,15 @@ eng.SetContextBuilder(func(c *fiber.Ctx) (AppCtx, error) {
 
 eng.RegisterMiddleware("auth", authMW)
 eng.RegisterMiddleware("audit", auditMW)
-eng.RegisterMiddlewareFactory("require_role",
-    func(args []string) (fibermap.MiddlewareFunc[AppCtx], error) {
-        allowed := append([]string(nil), args...)
-        return func(ctx *fibermap.Context[AppCtx]) error {
-            for _, r := range allowed {
-                if r == ctx.Data.Role { return ctx.Next() }
-            }
-            return ctx.Status(403).JSON(fiber.Map{"error": "forbidden"})
-        }, nil
-    })
+eng.RegisterMiddlewareFactory("require_role", func(args []string) (MW, error) {
+    allowed := append([]string(nil), args...)
+    return func(c *Ctx) error {
+        for _, r := range allowed {
+            if r == c.Data.Role { return c.Next() }
+        }
+        return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+    }, nil
+})
 eng.RegisterHandler("patient.create", patient.Create)
 
 if err := eng.LoadFile("routes.yaml"); err != nil { panic(err) }
@@ -117,13 +123,13 @@ groups:
               - audit
 ```
 
-Handlers receive the typed context:
+Handlers receive the typed context (with the `Ctx` alias from above):
 
 ```go
-func (h *Patient) Create(ctx *fibermap.Context[AppCtx]) error {
-    // ctx.Data.UserID is already populated by ContextBuilder
-    // ctx.Status / ctx.JSON / etc. — all Fiber methods via embedding
-    return ctx.Status(201).JSON(...)
+func (h *Patient) Create(c *Ctx) error {
+    // c.Data.UserID is already populated by ContextBuilder
+    // c.Status / c.JSON / etc. — all Fiber methods via embedding
+    return c.Status(201).JSON(...)
 }
 ```
 
@@ -186,19 +192,18 @@ called once per `(name, args)` tuple at `Mount` time and the resulting
 middleware is cached for the lifetime of the engine.
 
 ```go
-eng.RegisterMiddlewareFactory("require_role",
-    func(args []string) (fibermap.MiddlewareFunc[AppCtx], error) {
-        if len(args) == 0 {
-            return nil, errors.New("require_role: at least one role required")
+eng.RegisterMiddlewareFactory("require_role", func(args []string) (MW, error) {
+    if len(args) == 0 {
+        return nil, errors.New("require_role: at least one role required")
+    }
+    allowed := append([]string(nil), args...)
+    return func(c *Ctx) error {
+        for _, r := range allowed {
+            if r == c.Data.Role { return c.Next() }
         }
-        allowed := append([]string(nil), args...)
-        return func(c *fibermap.Context[AppCtx]) error {
-            for _, r := range allowed {
-                if r == c.Data.Role { return c.Next() }
-            }
-            return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
-        }, nil
-    })
+        return c.Status(403).JSON(fiber.Map{"error": "forbidden"})
+    }, nil
+})
 ```
 
 In YAML, a `middleware:` entry is either a scalar (plain middleware) or a
