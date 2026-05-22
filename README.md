@@ -9,6 +9,8 @@ Status: **0.x — API unstable.**
 See `engine_test.go` for runnable examples.
 
 ```go
+import "slices"
+
 type AppCtx struct {
     UserID, OrgID, Role string
 }

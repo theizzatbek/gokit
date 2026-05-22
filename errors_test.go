@@ -1,7 +1,6 @@
 package fibermap
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -15,12 +14,9 @@ func TestError_Error_FormatsAllFields(t *testing.T) {
 		Path:    "groups[0].routes[1].handler",
 	}
 
-	s := e.Error()
-
-	for _, want := range []string{"mount", "unknown_handler", "handler not registered", "routes.yaml", "42", "groups[0].routes[1].handler"} {
-		if !strings.Contains(s, want) {
-			t.Errorf("Error() = %q, missing %q", s, want)
-		}
+	want := "fibermap: [mount/unknown_handler] handler not registered (at groups[0].routes[1].handler) in file routes.yaml line 42"
+	if s := e.Error(); s != want {
+		t.Errorf("Error() = %q, want %q", s, want)
 	}
 }
 
@@ -31,12 +27,8 @@ func TestError_Error_OmitsEmptyFields(t *testing.T) {
 		Message: "bad yaml",
 	}
 
-	s := e.Error()
-
-	if strings.Contains(s, "line") {
-		t.Errorf("Error() = %q, should not include line when 0", s)
-	}
-	if strings.Contains(s, "file") {
-		t.Errorf("Error() = %q, should not include file when empty", s)
+	want := "fibermap: [parse/invalid_yaml] bad yaml"
+	if s := e.Error(); s != want {
+		t.Errorf("Error() = %q, want %q", s, want)
 	}
 }

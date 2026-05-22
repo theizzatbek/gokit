@@ -6,7 +6,7 @@ import (
 )
 
 // Error is the typed error returned by all fibermap operations.
-// Stage is either "parse" or "mount". Code is one of the Code* constants.
+// Stage is one of "parse", "mount", or "register". Code is one of the Code* constants.
 type Error struct {
 	Stage   string
 	Code    string
@@ -16,6 +16,7 @@ type Error struct {
 	Path    string
 }
 
+// Error implements the error interface.
 func (e *Error) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "fibermap: [%s/%s] %s", e.Stage, e.Code, e.Message)
