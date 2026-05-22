@@ -11,7 +11,7 @@ teaching demo. Copy this directory, rename, adjust, ship.
 | `routes.yaml` | declarative route tree, mounted via `Engine.LoadFS`; modeline at the top gives editor autocomplete via JSON Schema |
 | `internal/appctx/` | `AppCtx` struct (user_id, role, request_id, scoped logger) + `Ctx` / `H` / `MW` aliases so handler signatures don't carry the generic parameter |
 | `internal/auth/` | Fiber-level Bearer-token middleware (runs **before** `ContextBuilder`) + fibermap factory `require_role` |
-| `internal/tasks/` | domain — `Task` model, `Store` interface (memory impl behind it; swap for postgres without touching handlers), handlers with manual body validation |
+| `internal/tasks/` | domain — `Task` model, `Store` interface (memory impl behind it; swap for postgres without touching handlers), handlers using `bind.Body[T]` with `go-playground/validator` tags |
 | `internal/admin/` | `/admin/routes` endpoint built on `Engine.Routes()` — handy ops endpoint, also shows the JSON tags on `RouteInfo` in action |
 | `main_test.go` | `fibermaptest.AssertRoute` for "routes.yaml says what we think" + end-to-end requests through `fiber.App.Test()` for "the whole stack actually responds" |
 
@@ -83,12 +83,18 @@ curl -i -H "Authorization: Bearer root-token" \
    can `curl ../admin/routes` and see the live route table without
    re-reading config.
 
+7. **`bind.Body[T]` + `validator:` tags for request bodies.** Handlers
+   declare the request struct with `validate:` tags
+   (`required`, `min`, `max`, `omitempty`, ...) and the handler is
+   one-liner `req, err := bind.Body[createReq](c.Ctx, h.Validator)`.
+   Cross-field rules that don't fit tags ("at least one of title,
+   done") stay as hand-rolled checks after `bind.Body` succeeds.
+
 ## What you'd add for real production
 
 - Replace `demoTokens` with a real JWT verifier or session store.
 - Swap `tasks.NewMemStore()` for a database-backed `Store`.
-- Add request-body size limits and a real validator (e.g.
-  `go-playground/validator` on tagged struct fields).
+- Add request-body size limits (Fiber `BodyLimit` config).
 - Wire metrics (Prometheus middleware) at the Fiber level.
 - Use `getkin/kin-openapi` over `Engine.Walk()` to publish a real
   OpenAPI doc instead of just `/admin/routes`.

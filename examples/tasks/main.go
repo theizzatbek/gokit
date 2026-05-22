@@ -32,6 +32,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/theizzatbek/fibermap"
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/admin"
@@ -68,6 +69,7 @@ func main() {
 
 	// --- Engine setup.
 	store := tasks.NewMemStore()
+	valid := validator.New(validator.WithRequiredStructEnabled())
 	eng := fibermap.New[appctx.AppCtx]()
 
 	eng.SetContextBuilder(func(c *fiber.Ctx) (appctx.AppCtx, error) {
@@ -87,7 +89,7 @@ func main() {
 
 	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
 
-	taskH := tasks.New(store)
+	taskH := tasks.New(store, valid)
 	eng.RegisterHandler("tasks.list", taskH.List)
 	eng.RegisterHandler("tasks.get", taskH.Get)
 	eng.RegisterHandler("tasks.create", taskH.Create)

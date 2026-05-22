@@ -4,18 +4,27 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/theizzatbek/fibermap/bind"
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/appctx"
 )
 
-// Handler bundles store + handler funcs so they're easy to wire up in
-// main and to swap the store in tests.
+// Handler bundles store + validator + handler funcs so they're easy
+// to wire up in main and to swap out for tests.
+//
+// Validator is injected (constructor argument) rather than package-
+// global so tests can stub it. It's reused across requests — a
+// *validator.Validate is goroutine-safe.
 type Handler struct {
-	Store Store
+	Store     Store
+	Validator *validator.Validate
 }
 
-// New returns a Handler over the given Store.
-func New(s Store) *Handler { return &Handler{Store: s} }
+// New returns a Handler over the given Store + validator.
+func New(s Store, v *validator.Validate) *Handler {
+	return &Handler{Store: s, Validator: v}
+}
 
 // List handles GET /tasks — returns the caller's tasks.
 func (h *Handler) List(c *appctx.Ctx) error {
@@ -35,25 +44,20 @@ func (h *Handler) Get(c *appctx.Ctx) error {
 	return c.JSON(t)
 }
 
-// createReq is the POST /tasks body. JSON tags only — validation
-// happens in the handler since fibermap doesn't ship a validator.
+// createReq is the POST /tasks body. validate: tags do the work via
+// go-playground/validator; bind.Body[T] is the one-liner that parses
+// and validates.
 type createReq struct {
-	Title string `json:"title"`
+	Title string `json:"title" validate:"required,min=1,max=200"`
 }
 
 // Create handles POST /tasks.
 func (h *Handler) Create(c *appctx.Ctx) error {
-	var req createReq
-	if err := c.BodyParser(&req); err != nil {
-		return badRequest(c, "invalid JSON body")
+	req, err := bind.Body[createReq](c.Ctx, h.Validator)
+	if err != nil {
+		return badBody(c, err)
 	}
 	req.Title = strings.TrimSpace(req.Title)
-	if req.Title == "" {
-		return badRequest(c, "title is required")
-	}
-	if len(req.Title) > 200 {
-		return badRequest(c, "title must be 200 characters or fewer")
-	}
 
 	t := h.Store.Create(c.Data.UserID, req.Title)
 	c.Data.Log.Info("task created", "task_id", t.ID, "title", t.Title)
@@ -63,28 +67,26 @@ func (h *Handler) Create(c *appctx.Ctx) error {
 // updateReq is the PATCH /tasks/:id body. Pointer fields let us
 // distinguish "not provided" from "set to zero value" — important
 // because PATCH semantics are "update only the fields present".
+// `omitempty` on validate skips the rule when the pointer is nil.
 type updateReq struct {
-	Title *string `json:"title,omitempty"`
+	Title *string `json:"title,omitempty" validate:"omitempty,min=1,max=200"`
 	Done  *bool   `json:"done,omitempty"`
 }
 
 // Update handles PATCH /tasks/:id.
 func (h *Handler) Update(c *appctx.Ctx) error {
-	var req updateReq
-	if err := c.BodyParser(&req); err != nil {
-		return badRequest(c, "invalid JSON body")
+	req, err := bind.Body[updateReq](c.Ctx, h.Validator)
+	if err != nil {
+		return badBody(c, err)
 	}
 	if req.Title == nil && req.Done == nil {
+		// Cross-field rule that doesn't fit a struct tag — keep the
+		// hand-rolled check here. bind.Body covers the per-field rules;
+		// "at least one of" stays in code.
 		return badRequest(c, "at least one of title, done must be present")
 	}
 	if req.Title != nil {
 		title := strings.TrimSpace(*req.Title)
-		if title == "" {
-			return badRequest(c, "title cannot be empty")
-		}
-		if len(title) > 200 {
-			return badRequest(c, "title must be 200 characters or fewer")
-		}
 		req.Title = &title
 	}
 
@@ -112,6 +114,20 @@ func (h *Handler) Delete(c *appctx.Ctx) error {
 	}
 	c.Data.Log.Info("task deleted by admin", "task_id", id, "admin", c.Data.UserID)
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// badBody picks a user-facing message based on whether the failure
+// was JSON parsing or struct-tag validation, then strips the
+// `bind: ...:` prefix so clients get a clean message.
+func badBody(c *appctx.Ctx, err error) error {
+	msg := err.Error()
+	switch {
+	case errors.Is(err, bind.ErrParseBody):
+		msg = "invalid JSON body"
+	case errors.Is(err, bind.ErrValidateBody):
+		msg = strings.TrimPrefix(msg, "bind: validate body: ")
+	}
+	return badRequest(c, msg)
 }
 
 func notFound(c *appctx.Ctx) error {
