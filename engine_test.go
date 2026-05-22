@@ -338,3 +338,39 @@ func TestEngine_MountTwice(t *testing.T) {
 		t.Errorf("want CodeAlreadyMounted, got %v", err)
 	}
 }
+
+func TestEngine_Routes_AfterMount(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.SetRoleChecker(func(c *Context[engCtx], allowed []string) bool { return true })
+	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
+	_ = e.LoadFile(filepath.Join("testdata", "roles.yaml"))
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	rs := e.Routes()
+	if len(rs) != 1 {
+		t.Fatalf("routes = %d, want 1", len(rs))
+	}
+	r := rs[0]
+	if r.Method != "POST" || r.Path != "/v1/create" || r.Handler != "x.create" {
+		t.Errorf("route = %+v", r)
+	}
+	if !reflect.DeepEqual(r.Roles, []string{"admin"}) {
+		t.Errorf("roles = %v", r.Roles)
+	}
+	if !reflect.DeepEqual(r.Middleware, []string{"auth"}) {
+		t.Errorf("middleware = %v", r.Middleware)
+	}
+}
+
+func TestEngine_Routes_BeforeMount(t *testing.T) {
+	e := newTestEngine()
+	if rs := e.Routes(); len(rs) != 0 {
+		t.Errorf("routes before mount = %d, want 0", len(rs))
+	}
+}

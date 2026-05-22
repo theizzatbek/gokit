@@ -371,3 +371,11 @@ func filterOutSentinel(chain []string) []string {
 	}
 	return out
 }
+
+// Routes returns a snapshot of all routes registered during Mount.
+// Returns an empty slice if called before Mount.
+func (e *Engine[T]) Routes() []RouteInfo {
+	out := make([]RouteInfo, len(e.routes))
+	copy(out, e.routes)
+	return out
+}
