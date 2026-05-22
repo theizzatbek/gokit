@@ -91,21 +91,6 @@ func TestMount_UnknownHandler(t *testing.T) {
 	}
 }
 
-func TestMount_RolesWithoutChecker(t *testing.T) {
-	e := newTestEngine()
-	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
-	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
-	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
-	_ = e.LoadFile(filepath.Join("testdata", "roles.yaml"))
-
-	app := fiber.New()
-	err := e.Mount(app)
-
-	if !containsCode(err, CodeMissingRoleChecker) {
-		t.Errorf("want CodeMissingRoleChecker, got %v", err)
-	}
-}
-
 func TestMount_DuplicateRoute(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
@@ -242,22 +227,29 @@ func TestEngine_EndToEnd_MiddlewareOrder(t *testing.T) {
 	}
 }
 
-func TestEngine_EndToEnd_RoleGuard_Allowed(t *testing.T) {
+func registerRoleFactory(e *Engine[engCtx]) {
+	_ = e.RegisterMiddlewareFactory("require_role", func(args []string) (MiddlewareFunc[engCtx], error) {
+		allowed := append([]string(nil), args...)
+		return func(c *Context[engCtx]) error {
+			for _, a := range allowed {
+				if a == c.Data.Role {
+					return c.Next()
+				}
+			}
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "forbidden"})
+		}, nil
+	})
+}
+
+func TestEngine_EndToEnd_FactoryAllowed(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) {
 		return engCtx{Role: "admin"}, nil
 	})
-	e.SetRoleChecker(func(c *Context[engCtx], allowed []string) bool {
-		for _, r := range allowed {
-			if r == c.Data.Role {
-				return true
-			}
-		}
-		return false
-	})
+	registerRoleFactory(e)
 	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
 	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return c.SendString("created") })
-	_ = e.LoadFile(filepath.Join("testdata", "roles.yaml"))
+	_ = e.LoadFile(filepath.Join("testdata", "factories.yaml"))
 
 	app := fiber.New()
 	if err := e.Mount(app); err != nil {
@@ -270,25 +262,18 @@ func TestEngine_EndToEnd_RoleGuard_Allowed(t *testing.T) {
 	}
 }
 
-func TestEngine_EndToEnd_RoleGuard_Denied(t *testing.T) {
+func TestEngine_EndToEnd_FactoryDenied(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) {
 		return engCtx{Role: "doctor"}, nil
 	})
-	e.SetRoleChecker(func(c *Context[engCtx], allowed []string) bool {
-		for _, r := range allowed {
-			if r == c.Data.Role {
-				return true
-			}
-		}
-		return false
-	})
+	registerRoleFactory(e)
 	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
 	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error {
 		t.Fatal("handler should not be reached")
 		return nil
 	})
-	_ = e.LoadFile(filepath.Join("testdata", "roles.yaml"))
+	_ = e.LoadFile(filepath.Join("testdata", "factories.yaml"))
 
 	app := fiber.New()
 	if err := e.Mount(app); err != nil {
@@ -298,6 +283,57 @@ func TestEngine_EndToEnd_RoleGuard_Denied(t *testing.T) {
 	resp, _ := app.Test(httptest.NewRequest("POST", "/v1/create", nil))
 	if resp.StatusCode != fiber.StatusForbidden {
 		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestEngine_FactoryArgsRejected(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	_ = e.RegisterMiddlewareFactory("require_role", func(args []string) (MiddlewareFunc[engCtx], error) {
+		if len(args) == 0 {
+			return nil, errors.New("at least one role required")
+		}
+		return func(c *Context[engCtx]) error { return c.Next() }, nil
+	})
+	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
+	_ = e.LoadBytes([]byte(`
+groups:
+  - prefix: /v1
+    middleware: [auth]
+    routes:
+      - method: POST
+        path: /create
+        handler: x.create
+        middleware:
+          - require_role: []
+`))
+
+	app := fiber.New()
+	err := e.Mount(app)
+	if !containsCode(err, CodeInvalidFactoryArgs) {
+		t.Errorf("want CodeInvalidFactoryArgs, got %v", err)
+	}
+}
+
+func TestEngine_FactoryRegisteredAsPlain_MountError(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	registerRoleFactory(e)
+	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
+	_ = e.LoadBytes([]byte(`
+groups:
+  - prefix: /v1
+    middleware: [auth, require_role]
+    routes:
+      - { method: POST, path: /create, handler: x.create }
+`))
+
+	app := fiber.New()
+	err := e.Mount(app)
+	if !containsCode(err, CodeUnknownMiddleware) {
+		t.Errorf("want CodeUnknownMiddleware (factory used as scalar), got %v", err)
 	}
 }
 
@@ -342,10 +378,10 @@ func TestEngine_MountTwice(t *testing.T) {
 func TestEngine_Routes_AfterMount(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
-	e.SetRoleChecker(func(c *Context[engCtx], allowed []string) bool { return true })
+	registerRoleFactory(e)
 	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
 	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
-	_ = e.LoadFile(filepath.Join("testdata", "roles.yaml"))
+	_ = e.LoadFile(filepath.Join("testdata", "factories.yaml"))
 
 	app := fiber.New()
 	if err := e.Mount(app); err != nil {
@@ -360,11 +396,14 @@ func TestEngine_Routes_AfterMount(t *testing.T) {
 	if r.Method != "POST" || r.Path != "/v1/create" || r.Handler != "x.create" {
 		t.Errorf("route = %+v", r)
 	}
-	if !reflect.DeepEqual(r.Roles, []string{"admin"}) {
-		t.Errorf("roles = %v", r.Roles)
+	if len(r.Middleware) != 2 {
+		t.Fatalf("middleware len = %d, want 2", len(r.Middleware))
 	}
-	if !reflect.DeepEqual(r.Middleware, []string{"auth"}) {
-		t.Errorf("middleware = %v", r.Middleware)
+	if r.Middleware[0].Name != "auth" || len(r.Middleware[0].Args) != 0 {
+		t.Errorf("mw[0] = %+v", r.Middleware[0])
+	}
+	if r.Middleware[1].Name != "require_role" || len(r.Middleware[1].Args) != 1 || r.Middleware[1].Args[0] != "admin" {
+		t.Errorf("mw[1] = %+v", r.Middleware[1])
 	}
 }
 
@@ -378,10 +417,10 @@ func TestEngine_Routes_BeforeMount(t *testing.T) {
 func TestEngine_Routes_IsDefensiveCopy(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
-	e.SetRoleChecker(func(c *Context[engCtx], allowed []string) bool { return true })
+	registerRoleFactory(e)
 	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
 	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
-	_ = e.LoadFile(filepath.Join("testdata", "roles.yaml"))
+	_ = e.LoadFile(filepath.Join("testdata", "factories.yaml"))
 
 	app := fiber.New()
 	if err := e.Mount(app); err != nil {
@@ -389,14 +428,14 @@ func TestEngine_Routes_IsDefensiveCopy(t *testing.T) {
 	}
 
 	rs1 := e.Routes()
-	rs1[0].Middleware[0] = "MUTATED"
-	rs1[0].Roles[0] = "MUTATED"
+	rs1[0].Middleware[0].Name = "MUTATED"
+	rs1[0].Middleware[1].Args[0] = "MUTATED"
 
 	rs2 := e.Routes()
-	if rs2[0].Middleware[0] != "auth" {
-		t.Errorf("Middleware was mutated through Routes() snapshot: %v", rs2[0].Middleware)
+	if rs2[0].Middleware[0].Name != "auth" {
+		t.Errorf("Middleware.Name was mutated through Routes() snapshot")
 	}
-	if rs2[0].Roles[0] != "admin" {
-		t.Errorf("Roles was mutated through Routes() snapshot: %v", rs2[0].Roles)
+	if rs2[0].Middleware[1].Args[0] != "admin" {
+		t.Errorf("Middleware.Args was mutated through Routes() snapshot")
 	}
 }

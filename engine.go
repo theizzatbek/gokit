@@ -8,12 +8,11 @@ import (
 )
 
 type (
-	HandlerFunc[T any]    func(c *Context[T]) error
-	MiddlewareFunc[T any] func(c *Context[T]) error
-	ContextBuilder[T any] func(c *fiber.Ctx) (T, error)
-	RoleChecker[T any]    func(c *Context[T], allowed []string) bool
-	ForbiddenFunc[T any]  func(c *Context[T]) error
-	ContextErrorFunc      func(c *fiber.Ctx, err error) error
+	HandlerFunc[T any]           func(c *Context[T]) error
+	MiddlewareFunc[T any]        func(c *Context[T]) error
+	MiddlewareFactoryFunc[T any] func(args []string) (MiddlewareFunc[T], error)
+	ContextBuilder[T any]        func(c *fiber.Ctx) (T, error)
+	ContextErrorFunc             func(c *fiber.Ctx, err error) error
 )
 
 // Engine is the build-once-mount-once configurator. It is parameterized by T,
@@ -22,8 +21,7 @@ type Engine[T any] struct {
 	builder     ContextBuilder[T]
 	handlers    map[string]HandlerFunc[T]
 	middlewares map[string]MiddlewareFunc[T]
-	roleChecker RoleChecker[T]
-	forbidden   ForbiddenFunc[T]
+	factories   map[string]MiddlewareFactoryFunc[T]
 	ctxError    ContextErrorFunc
 
 	cfg     *rawConfig
@@ -34,13 +32,13 @@ type Engine[T any] struct {
 }
 
 // New constructs an empty Engine. Call SetContextBuilder, RegisterHandler,
-// RegisterMiddleware, and (if YAML uses `roles:`) SetRoleChecker before
+// RegisterMiddleware (and optionally RegisterMiddlewareFactory) before
 // LoadFile/LoadBytes and Mount.
 func New[T any]() *Engine[T] {
 	return &Engine[T]{
 		handlers:    map[string]HandlerFunc[T]{},
 		middlewares: map[string]MiddlewareFunc[T]{},
-		forbidden:   defaultForbidden[T],
+		factories:   map[string]MiddlewareFactoryFunc[T]{},
 		ctxError:    defaultContextError,
 	}
 }
@@ -48,13 +46,6 @@ func New[T any]() *Engine[T] {
 // SetContextBuilder installs the function that builds the per-request Data.
 // Calling more than once silently overwrites.
 func (e *Engine[T]) SetContextBuilder(fn ContextBuilder[T]) { e.builder = fn }
-
-// SetRoleChecker installs the role authorization function. Required if any
-// route declares `roles:` in YAML.
-func (e *Engine[T]) SetRoleChecker(fn RoleChecker[T]) { e.roleChecker = fn }
-
-// SetForbiddenHandler overrides the default 403 response.
-func (e *Engine[T]) SetForbiddenHandler(h ForbiddenFunc[T]) { e.forbidden = h }
 
 // SetContextErrorHandler overrides the default response when ContextBuilder
 // returns an error.
@@ -70,13 +61,32 @@ func (e *Engine[T]) RegisterHandler(name string, h HandlerFunc[T]) error {
 	return nil
 }
 
-// RegisterMiddleware registers a middleware under a name referenced from YAML.
-// Returns *Error with CodeDuplicateRegistration if the name is already taken.
+// RegisterMiddleware registers a plain (no-args) middleware. YAML references
+// it as a scalar string. Returns *Error with CodeDuplicateRegistration if
+// the name is already taken (in either the plain or factory registry).
 func (e *Engine[T]) RegisterMiddleware(name string, m MiddlewareFunc[T]) error {
 	if _, ok := e.middlewares[name]; ok {
 		return &Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "middleware " + name + " already registered"}
 	}
+	if _, ok := e.factories[name]; ok {
+		return &Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "name " + name + " already registered as a middleware factory"}
+	}
 	e.middlewares[name] = m
+	return nil
+}
+
+// RegisterMiddlewareFactory registers a parameterized middleware. YAML
+// references it as a single-key mapping {name: [args...]}. The factory is
+// invoked once per (name, args) pair at Mount time; the returned
+// MiddlewareFunc is cached for the lifetime of the engine.
+func (e *Engine[T]) RegisterMiddlewareFactory(name string, f MiddlewareFactoryFunc[T]) error {
+	if _, ok := e.factories[name]; ok {
+		return &Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "middleware factory " + name + " already registered"}
+	}
+	if _, ok := e.middlewares[name]; ok {
+		return &Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "name " + name + " already registered as a plain middleware"}
+	}
+	e.factories[name] = f
 	return nil
 }
 
@@ -100,10 +110,6 @@ func (e *Engine[T]) LoadBytes(data []byte) error {
 	e.cfg = cfg
 	e.cfgFile = ""
 	return nil
-}
-
-func defaultForbidden[T any](c *Context[T]) error {
-	return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "forbidden"})
 }
 
 func defaultContextError(c *fiber.Ctx, err error) error {
@@ -141,9 +147,8 @@ func (e *Engine[T]) Mount(router fiber.Router) error {
 // installed on Fiber.
 type plannedRoute struct {
 	Method, Path, Handler, Name, Description string
-	Chain       []string // resolved middleware names (may include roleGuardName)
-	Roles       []string
-	Tags        []string
+	Chain                                    []mwRef
+	Tags                                     []string
 }
 
 // buildPlan walks the parsed YAML tree, resolves chains, and returns either a
@@ -151,18 +156,17 @@ type plannedRoute struct {
 func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 	var errs []error
 	var routes []plannedRoute
-	seenRoute := map[string]string{} // "METHOD path" -> handler name (for diagnostics)
+	seenRoute := map[string]string{}
 
 	if e.builder == nil {
 		errs = append(errs, &Error{Stage: "mount", Code: CodeMissingContextBuilder, Message: "ContextBuilder is required"})
 	}
 
-	var walk func(groups []rawGroup, prefix string, ancestors [][]string, path string)
-	walk = func(groups []rawGroup, prefix string, ancestors [][]string, path string) {
+	var walk func(groups []rawGroup, prefix string, ancestors [][]mwRef, path string)
+	walk = func(groups []rawGroup, prefix string, ancestors [][]mwRef, path string) {
 		for i, g := range groups {
 			gPath := fmt.Sprintf("%s[%d]", path, i)
 
-			// Fix 1 (group-level): validate that the referenced middleware_set exists.
 			if g.MiddlewareSet != "" {
 				if _, ok := e.cfg.MiddlewareSets[g.MiddlewareSet]; !ok {
 					errs = append(errs, &Error{
@@ -175,12 +179,11 @@ func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 
 			combined := combineSetAndList(g.MiddlewareSet, g.Middleware)
 			fullPrefix := prefix + g.Prefix
-			groupAncestors := append(append([][]string{}, ancestors...), combined)
+			groupAncestors := append(append([][]mwRef{}, ancestors...), combined)
 
 			for j, r := range g.Routes {
 				rPath := fmt.Sprintf("%s.routes[%d]", gPath, j)
 
-				// Fix 1 (route-level): validate that the referenced middleware_set exists.
 				if r.MiddlewareSet != "" {
 					if _, ok := e.cfg.MiddlewareSets[r.MiddlewareSet]; !ok {
 						errs = append(errs, &Error{
@@ -192,19 +195,42 @@ func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 				}
 
 				routeMW := combineSetAndList(r.MiddlewareSet, r.Middleware)
+				chain := resolveChain(e.cfg.MiddlewareSets, groupAncestors, routeMW)
 
-				chain := resolveChain(e.cfg.MiddlewareSets, groupAncestors, routeMW, len(r.Roles) > 0)
-
-				// validate every chain entry exists (set names get expanded; only
-				// concrete middleware names should remain — roleGuardName is allowed).
-				for _, name := range chain {
-					if name == roleGuardName {
-						continue
-					}
-					if _, ok := e.middlewares[name]; !ok {
+				for _, ref := range chain {
+					// nil Args = scalar form; non-nil (even empty) = map form (factory call).
+					if ref.Args == nil {
+						if _, ok := e.middlewares[ref.Name]; ok {
+							continue
+						}
+						if _, ok := e.factories[ref.Name]; ok {
+							errs = append(errs, &Error{
+								Stage: "mount", Code: CodeUnknownMiddleware,
+								Message: fmt.Sprintf("middleware %q is registered as a factory; YAML must use {%s: [...]} form", ref.Name, ref.Name),
+								Path:    rPath + ".middleware", File: e.cfgFile,
+							})
+							continue
+						}
 						errs = append(errs, &Error{
 							Stage: "mount", Code: CodeUnknownMiddleware,
-							Message: fmt.Sprintf("middleware %q referenced from route is not registered", name),
+							Message: fmt.Sprintf("middleware %q referenced from route is not registered", ref.Name),
+							Path:    rPath + ".middleware", File: e.cfgFile,
+						})
+					} else {
+						if _, ok := e.factories[ref.Name]; ok {
+							continue
+						}
+						if _, ok := e.middlewares[ref.Name]; ok {
+							errs = append(errs, &Error{
+								Stage: "mount", Code: CodeUnknownMiddleware,
+								Message: fmt.Sprintf("middleware %q is plain (no factory); YAML must reference it as a scalar string", ref.Name),
+								Path:    rPath + ".middleware", File: e.cfgFile,
+							})
+							continue
+						}
+						errs = append(errs, &Error{
+							Stage: "mount", Code: CodeUnknownMiddleware,
+							Message: fmt.Sprintf("middleware factory %q referenced from route is not registered", ref.Name),
 							Path:    rPath + ".middleware", File: e.cfgFile,
 						})
 					}
@@ -215,14 +241,6 @@ func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 						Stage: "mount", Code: CodeUnknownHandler,
 						Message: fmt.Sprintf("handler %q is not registered", r.Handler),
 						Path:    rPath + ".handler", File: e.cfgFile,
-					})
-				}
-
-				if len(r.Roles) > 0 && e.roleChecker == nil {
-					errs = append(errs, &Error{
-						Stage: "mount", Code: CodeMissingRoleChecker,
-						Message: fmt.Sprintf("route uses roles %v but RoleChecker is not set", r.Roles),
-						Path:    rPath + ".roles", File: e.cfgFile,
 					})
 				}
 
@@ -245,7 +263,6 @@ func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 					Name:        r.Name,
 					Description: r.Description,
 					Chain:       chain,
-					Roles:       r.Roles,
 					Tags:        r.Tags,
 				})
 			}
@@ -257,14 +274,14 @@ func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 	return routes, errs
 }
 
-// combineSetAndList returns set name (if any) prepended to the explicit list.
-// resolveChain expands set names later.
-func combineSetAndList(set string, list []string) []string {
+// combineSetAndList prepends the set name (as a synthetic mwRef) to the
+// explicit list. resolveChain expands set names later.
+func combineSetAndList(set string, list []mwRef) []mwRef {
 	if set == "" {
 		return list
 	}
-	out := make([]string, 0, 1+len(list))
-	out = append(out, set)
+	out := make([]mwRef, 0, 1+len(list))
+	out = append(out, mwRef{Name: set})
 	out = append(out, list...)
 	return out
 }
@@ -276,7 +293,6 @@ func joinPath(prefix, path string) string {
 	if prefix == "" {
 		return path
 	}
-	// don't double up slashes
 	if prefix[len(prefix)-1] == '/' && path[0] == '/' {
 		return prefix + path[1:]
 	}
@@ -295,19 +311,30 @@ func (e *Engine[T]) installPlan(router fiber.Router, plan []plannedRoute) error 
 		c.Locals(ctxKey, &Context[T]{Ctx: c, Data: data})
 		return c.Next()
 	}
-
 	router.Use(contextInit)
+
+	factoryCache := map[string]fiber.Handler{}
 
 	for _, r := range plan {
 		handlers := make([]fiber.Handler, 0, len(r.Chain)+1)
-		for _, name := range r.Chain {
-			if name == roleGuardName {
-				roles := append([]string{}, r.Roles...) // capture
-				handlers = append(handlers, e.wrapRoleGuard(roles))
+		for _, ref := range r.Chain {
+			if ref.Args == nil {
+				handlers = append(handlers, e.wrapMW(e.middlewares[ref.Name]))
 				continue
 			}
-			mw := e.middlewares[name]
-			handlers = append(handlers, e.wrapMW(mw))
+			key := dedupKey(ref)
+			h, ok := factoryCache[key]
+			if !ok {
+				mw, err := e.factories[ref.Name](append([]string(nil), ref.Args...))
+				if err != nil {
+					return &Error{Stage: "mount", Code: CodeInvalidFactoryArgs,
+						Message: fmt.Sprintf("factory %q rejected args %v: %s", ref.Name, ref.Args, err.Error()),
+						File:    e.cfgFile}
+				}
+				h = e.wrapMW(mw)
+				factoryCache[key] = h
+			}
+			handlers = append(handlers, h)
 		}
 		handlers = append(handlers, e.wrapHandler(e.handlers[r.Handler]))
 
@@ -319,8 +346,7 @@ func (e *Engine[T]) installPlan(router fiber.Router, plan []plannedRoute) error 
 			Handler:     r.Handler,
 			Name:        r.Name,
 			Description: r.Description,
-			Middleware:  filterOutSentinel(r.Chain),
-			Roles:       r.Roles,
+			Middleware:  toPublicChain(r.Chain),
 			Tags:        r.Tags,
 		})
 	}
@@ -331,7 +357,6 @@ func (e *Engine[T]) wrapMW(mw MiddlewareFunc[T]) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		ctx, ok := c.Locals(ctxKey).(*Context[T])
 		if !ok {
-			// contextInit didn't run — fail loudly rather than silently bypass.
 			return c.SendStatus(fiber.StatusInternalServerError)
 		}
 		return mw(ctx)
@@ -348,26 +373,10 @@ func (e *Engine[T]) wrapHandler(h HandlerFunc[T]) fiber.Handler {
 	}
 }
 
-func (e *Engine[T]) wrapRoleGuard(allowed []string) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		ctx, ok := c.Locals(ctxKey).(*Context[T])
-		if !ok {
-			return c.SendStatus(fiber.StatusInternalServerError)
-		}
-		if !e.roleChecker(ctx, allowed) {
-			return e.forbidden(ctx)
-		}
-		return c.Next()
-	}
-}
-
-func filterOutSentinel(chain []string) []string {
-	out := make([]string, 0, len(chain))
-	for _, n := range chain {
-		if n == roleGuardName {
-			continue
-		}
-		out = append(out, n)
+func toPublicChain(chain []mwRef) []MiddlewareRef {
+	out := make([]MiddlewareRef, len(chain))
+	for i, r := range chain {
+		out[i] = MiddlewareRef{Name: r.Name, Args: append([]string(nil), r.Args...)}
 	}
 	return out
 }
@@ -380,9 +389,12 @@ func (e *Engine[T]) Routes() []RouteInfo {
 	out := make([]RouteInfo, len(e.routes))
 	for i, r := range e.routes {
 		out[i] = r
-		out[i].Middleware = append([]string(nil), r.Middleware...)
-		out[i].Roles = append([]string(nil), r.Roles...)
 		out[i].Tags = append([]string(nil), r.Tags...)
+		mw := make([]MiddlewareRef, len(r.Middleware))
+		for j, m := range r.Middleware {
+			mw[j] = MiddlewareRef{Name: m.Name, Args: append([]string(nil), m.Args...)}
+		}
+		out[i].Middleware = mw
 	}
 	return out
 }

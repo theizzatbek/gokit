@@ -54,8 +54,9 @@ func TestParseBytes_NestedGroups(t *testing.T) {
 		t.Fatalf("want 2 routes, got %d", len(v1.Groups[0].Routes))
 	}
 	post := v1.Groups[0].Routes[1]
-	if len(post.Roles) != 1 || post.Roles[0] != "director" {
-		t.Errorf("roles = %v", post.Roles)
+	if len(post.Middleware) != 1 || post.Middleware[0].Name != "require_role" ||
+		len(post.Middleware[0].Args) != 1 || post.Middleware[0].Args[0] != "director" {
+		t.Errorf("middleware = %+v", post.Middleware)
 	}
 }
 
@@ -147,8 +148,77 @@ func TestParseBytes_MiddlewareSets(t *testing.T) {
 	if len(cfg.MiddlewareSets) != 2 {
 		t.Errorf("middleware_sets count = %d, want 2", len(cfg.MiddlewareSets))
 	}
-	if got := cfg.MiddlewareSets["protected"]; len(got) != 3 || got[0] != "base" || got[1] != "auth" || got[2] != "authorized" {
-		t.Errorf("protected set = %v, want [base auth authorized]", got)
+	got := cfg.MiddlewareSets["protected"]
+	want := []string{"base", "auth", "authorized"}
+	if len(got) != len(want) {
+		t.Fatalf("protected set len = %d, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i].Name != w || len(got[i].Args) != 0 {
+			t.Errorf("protected[%d] = %+v, want %s", i, got[i], w)
+		}
+	}
+}
+
+func TestParseBytes_FactoryMiddleware(t *testing.T) {
+	data := []byte(`
+groups:
+  - prefix: /v1
+    routes:
+      - method: POST
+        path: /x
+        handler: x.create
+        middleware:
+          - audit
+          - require_role: [admin, director]
+`)
+	cfg, err := parseBytes(data, "")
+	if err != nil {
+		t.Fatalf("parseBytes: %v", err)
+	}
+	mw := cfg.Groups[0].Routes[0].Middleware
+	if len(mw) != 2 {
+		t.Fatalf("middleware len = %d, want 2", len(mw))
+	}
+	if mw[0].Name != "audit" || len(mw[0].Args) != 0 {
+		t.Errorf("mw[0] = %+v", mw[0])
+	}
+	if mw[1].Name != "require_role" || len(mw[1].Args) != 2 || mw[1].Args[0] != "admin" || mw[1].Args[1] != "director" {
+		t.Errorf("mw[1] = %+v", mw[1])
+	}
+}
+
+func TestParseBytes_FactoryMiddleware_BadShape(t *testing.T) {
+	cases := []string{
+		// two keys in one entry
+		`
+groups:
+  - prefix: /v1
+    routes:
+      - method: GET
+        path: /x
+        handler: h
+        middleware:
+          - { a: [1], b: [2] }
+`,
+		// non-list value
+		`
+groups:
+  - prefix: /v1
+    routes:
+      - method: GET
+        path: /x
+        handler: h
+        middleware:
+          - require_role: admin
+`,
+	}
+	for i, src := range cases {
+		_, err := parseBytes([]byte(src), "")
+		var fe *Error
+		if !errors.As(err, &fe) || fe.Code != CodeInvalidYAML {
+			t.Errorf("case %d: want CodeInvalidYAML, got %v", i, err)
+		}
 	}
 }
 

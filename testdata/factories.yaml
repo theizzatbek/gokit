@@ -1,0 +1,9 @@
+groups:
+  - prefix: /v1
+    middleware: [auth]
+    routes:
+      - method: POST
+        path: /create
+        handler: x.create
+        middleware:
+          - require_role: [admin]
