@@ -131,6 +131,26 @@ func TestMount_AccumulatesErrors(t *testing.T) {
 	}
 }
 
+func TestMount_UnknownMiddlewareSet(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	_ = e.RegisterHandler("x.get", func(c *Context[engCtx]) error { return nil })
+	_ = e.LoadBytes([]byte(`
+groups:
+  - prefix: /v1
+    middleware_set: nope_set
+    routes:
+      - { method: GET, path: /x, handler: x.get }
+`))
+
+	app := fiber.New()
+	err := e.Mount(app)
+
+	if !containsCode(err, CodeUnknownMiddlewareSet) {
+		t.Errorf("want CodeUnknownMiddlewareSet, got %v", err)
+	}
+}
+
 // containsCode returns true if err (possibly errors.Join wrapping multiple
 // *Error values) contains any *Error with the given code.
 func containsCode(err error, code string) bool {

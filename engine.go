@@ -161,12 +161,36 @@ func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 	walk = func(groups []rawGroup, prefix string, ancestors [][]string, path string) {
 		for i, g := range groups {
 			gPath := fmt.Sprintf("%s[%d]", path, i)
+
+			// Fix 1 (group-level): validate that the referenced middleware_set exists.
+			if g.MiddlewareSet != "" {
+				if _, ok := e.cfg.MiddlewareSets[g.MiddlewareSet]; !ok {
+					errs = append(errs, &Error{
+						Stage: "mount", Code: CodeUnknownMiddlewareSet,
+						Message: fmt.Sprintf("middleware_set %q is not defined", g.MiddlewareSet),
+						Path:    gPath + ".middleware_set", File: e.cfgFile,
+					})
+				}
+			}
+
 			combined := combineSetAndList(g.MiddlewareSet, g.Middleware)
 			fullPrefix := prefix + g.Prefix
 			groupAncestors := append(append([][]string{}, ancestors...), combined)
 
 			for j, r := range g.Routes {
 				rPath := fmt.Sprintf("%s.routes[%d]", gPath, j)
+
+				// Fix 1 (route-level): validate that the referenced middleware_set exists.
+				if r.MiddlewareSet != "" {
+					if _, ok := e.cfg.MiddlewareSets[r.MiddlewareSet]; !ok {
+						errs = append(errs, &Error{
+							Stage: "mount", Code: CodeUnknownMiddlewareSet,
+							Message: fmt.Sprintf("middleware_set %q is not defined", r.MiddlewareSet),
+							Path:    rPath + ".middleware_set", File: e.cfgFile,
+						})
+					}
+				}
+
 				routeMW := combineSetAndList(r.MiddlewareSet, r.Middleware)
 
 				chain, _ := resolveChain(e.cfg.MiddlewareSets, groupAncestors, routeMW, len(r.Roles) > 0)
@@ -181,7 +205,7 @@ func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 						errs = append(errs, &Error{
 							Stage: "mount", Code: CodeUnknownMiddleware,
 							Message: fmt.Sprintf("middleware %q referenced from route is not registered", name),
-							Path:    rPath, File: e.cfgFile,
+							Path:    rPath + ".middleware", File: e.cfgFile,
 						})
 					}
 				}
