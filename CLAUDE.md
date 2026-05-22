@@ -42,6 +42,8 @@ The plain/factory split is enforced at `buildPlan` time: a YAML scalar referenci
 
 Every error returned by the library is `*Error` (errors.go) with `Stage` (`parse` / `mount` / `register`) and a `Code*` constant. New error conditions should add a `Code*` constant and use `*Error`, never `fmt.Errorf`. Parse-stage errors come from `yaml.go` (`parseBytes`, `validateGroups`, `detectSetCycles`); mount-stage errors are appended to the `errs` slice inside `buildPlan` so multiple problems surface in one `Mount` call.
 
+Register stage is the one exception that does **not** return an error: `Register{Handler,Middleware,MiddlewareFactory}` panic with `*Error` on duplicate-name conflicts (within or across the plain/factory registries). This is intentional — duplicate registration is a programmer error at startup and the `MustCompile` convention keeps call sites uncluttered. Tests that exercise this use `defer recover()` (see `expectRegisterPanic` in engine_test.go).
+
 ## YAML shape
 
 Defined by the unexported structs in `spec.go` (`rawConfig`, `rawGroup`, `rawRoute`, `mwRef`). Groups nest. Both groups and routes accept a single `middleware_set:` name plus an explicit `middleware:` list — `combineSetAndList` prepends the set name and `resolveChain` expands it. `middleware:` items are heterogeneous: scalar string → `mwRef{Name}` (plain), single-key map `{name: [args...]}` → `mwRef{Name, Args}` (factory). Decoded by `mwRef.UnmarshalYAML` in yaml.go. Only the methods in `validHTTPMethods` (yaml.go) are accepted. `testdata/*.yaml` covers the supported shapes (nested groups, sets, factories, duplicate-route detection, cycle detection).

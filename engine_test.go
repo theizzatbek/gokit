@@ -20,18 +20,38 @@ func newTestEngine() *Engine[engCtx] {
 	return New[engCtx]()
 }
 
+// expectRegisterPanic runs fn and returns the recovered *Error, or fails
+// the test if no panic happened or the panic value wasn't *Error.
+func expectRegisterPanic(t *testing.T, fn func()) *Error {
+	t.Helper()
+	defer func() {}()
+	var got *Error
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				return
+			}
+			fe, ok := r.(*Error)
+			if !ok {
+				t.Fatalf("recovered non-*Error: %T %v", r, r)
+			}
+			got = fe
+		}()
+		fn()
+	}()
+	if got == nil {
+		t.Fatal("expected panic, got none")
+	}
+	return got
+}
+
 func TestEngine_RegisterHandler_Duplicate(t *testing.T) {
 	e := newTestEngine()
 	h := func(c *Context[engCtx]) error { return nil }
 
-	if err := e.RegisterHandler("x", h); err != nil {
-		t.Fatalf("first register: %v", err)
-	}
-	err := e.RegisterHandler("x", h)
-	var fe *Error
-	if !errors.As(err, &fe) {
-		t.Fatalf("want *Error, got %T: %v", err, err)
-	}
+	e.RegisterHandler("x", h)
+	fe := expectRegisterPanic(t, func() { e.RegisterHandler("x", h) })
 	if fe.Code != CodeDuplicateRegistration {
 		t.Errorf("code = %q", fe.Code)
 	}
@@ -41,11 +61,23 @@ func TestEngine_RegisterMiddleware_Duplicate(t *testing.T) {
 	e := newTestEngine()
 	m := func(c *Context[engCtx]) error { return c.Next() }
 
-	if err := e.RegisterMiddleware("auth", m); err != nil {
-		t.Fatal(err)
+	e.RegisterMiddleware("auth", m)
+	fe := expectRegisterPanic(t, func() { e.RegisterMiddleware("auth", m) })
+	if fe.Code != CodeDuplicateRegistration {
+		t.Errorf("code = %q", fe.Code)
 	}
-	if err := e.RegisterMiddleware("auth", m); err == nil {
-		t.Errorf("want duplicate error")
+}
+
+func TestEngine_RegisterMiddleware_ConflictsWithFactory(t *testing.T) {
+	e := newTestEngine()
+	e.RegisterMiddlewareFactory("require_role", func(args []string) (MiddlewareFunc[engCtx], error) {
+		return func(c *Context[engCtx]) error { return c.Next() }, nil
+	})
+	fe := expectRegisterPanic(t, func() {
+		e.RegisterMiddleware("require_role", func(c *Context[engCtx]) error { return c.Next() })
+	})
+	if fe.Code != CodeDuplicateRegistration {
+		t.Errorf("code = %q", fe.Code)
 	}
 }
 
@@ -94,8 +126,8 @@ func TestMount_UnknownHandler(t *testing.T) {
 func TestMount_DuplicateRoute(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
-	_ = e.RegisterHandler("a.get", func(c *Context[engCtx]) error { return nil })
-	_ = e.RegisterHandler("b.get", func(c *Context[engCtx]) error { return nil })
+	e.RegisterHandler("a.get", func(c *Context[engCtx]) error { return nil })
+	e.RegisterHandler("b.get", func(c *Context[engCtx]) error { return nil })
 	_ = e.LoadFile(filepath.Join("testdata", "duplicate_routes.yaml"))
 
 	app := fiber.New()
@@ -122,7 +154,7 @@ func TestMount_AccumulatesErrors(t *testing.T) {
 func TestMount_UnknownMiddlewareSet(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
-	_ = e.RegisterHandler("x.get", func(c *Context[engCtx]) error { return nil })
+	e.RegisterHandler("x.get", func(c *Context[engCtx]) error { return nil })
 	_ = e.LoadBytes([]byte(`
 groups:
   - prefix: /v1
@@ -166,7 +198,7 @@ func TestEngine_EndToEnd_BasicRoute(t *testing.T) {
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) {
 		return engCtx{UserID: "u1", Role: "doctor"}, nil
 	})
-	_ = e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error {
+	e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error {
 		return c.Status(200).SendString("pong " + c.Data.UserID)
 	})
 	_ = e.LoadFile(filepath.Join("testdata", "basic.yaml"))
@@ -193,19 +225,19 @@ func TestEngine_EndToEnd_MiddlewareOrder(t *testing.T) {
 		calls = append(calls, "ctx")
 		return engCtx{Role: "admin"}, nil
 	})
-	_ = e.RegisterMiddleware("logger", func(c *Context[engCtx]) error {
+	e.RegisterMiddleware("logger", func(c *Context[engCtx]) error {
 		calls = append(calls, "logger")
 		return c.Next()
 	})
-	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error {
+	e.RegisterMiddleware("auth", func(c *Context[engCtx]) error {
 		calls = append(calls, "auth")
 		return c.Next()
 	})
-	_ = e.RegisterMiddleware("authorized", func(c *Context[engCtx]) error {
+	e.RegisterMiddleware("authorized", func(c *Context[engCtx]) error {
 		calls = append(calls, "authorized")
 		return c.Next()
 	})
-	_ = e.RegisterHandler("user.me", func(c *Context[engCtx]) error {
+	e.RegisterHandler("user.me", func(c *Context[engCtx]) error {
 		calls = append(calls, "handler")
 		return c.SendString("ok")
 	})
@@ -228,7 +260,7 @@ func TestEngine_EndToEnd_MiddlewareOrder(t *testing.T) {
 }
 
 func registerRoleFactory(e *Engine[engCtx]) {
-	_ = e.RegisterMiddlewareFactory("require_role", func(args []string) (MiddlewareFunc[engCtx], error) {
+	e.RegisterMiddlewareFactory("require_role", func(args []string) (MiddlewareFunc[engCtx], error) {
 		allowed := append([]string(nil), args...)
 		return func(c *Context[engCtx]) error {
 			for _, a := range allowed {
@@ -247,8 +279,8 @@ func TestEngine_EndToEnd_FactoryAllowed(t *testing.T) {
 		return engCtx{Role: "admin"}, nil
 	})
 	registerRoleFactory(e)
-	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
-	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return c.SendString("created") })
+	e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return c.SendString("created") })
 	_ = e.LoadFile(filepath.Join("testdata", "factories.yaml"))
 
 	app := fiber.New()
@@ -268,8 +300,8 @@ func TestEngine_EndToEnd_FactoryDenied(t *testing.T) {
 		return engCtx{Role: "doctor"}, nil
 	})
 	registerRoleFactory(e)
-	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
-	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error {
+	e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	e.RegisterHandler("x.create", func(c *Context[engCtx]) error {
 		t.Fatal("handler should not be reached")
 		return nil
 	})
@@ -289,14 +321,14 @@ func TestEngine_EndToEnd_FactoryDenied(t *testing.T) {
 func TestEngine_FactoryArgsRejected(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
-	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
-	_ = e.RegisterMiddlewareFactory("require_role", func(args []string) (MiddlewareFunc[engCtx], error) {
+	e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	e.RegisterMiddlewareFactory("require_role", func(args []string) (MiddlewareFunc[engCtx], error) {
 		if len(args) == 0 {
 			return nil, errors.New("at least one role required")
 		}
 		return func(c *Context[engCtx]) error { return c.Next() }, nil
 	})
-	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
+	e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
 	_ = e.LoadBytes([]byte(`
 groups:
   - prefix: /v1
@@ -320,8 +352,8 @@ func TestEngine_FactoryRegisteredAsPlain_MountError(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
 	registerRoleFactory(e)
-	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
-	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
+	e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
 	_ = e.LoadBytes([]byte(`
 groups:
   - prefix: /v1
@@ -342,7 +374,7 @@ func TestEngine_EndToEnd_ContextBuilderError(t *testing.T) {
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) {
 		return engCtx{}, errors.New("no locals")
 	})
-	_ = e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error {
+	e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error {
 		t.Fatal("handler should not be reached")
 		return nil
 	})
@@ -362,7 +394,7 @@ func TestEngine_EndToEnd_ContextBuilderError(t *testing.T) {
 func TestEngine_MountTwice(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
-	_ = e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error { return nil })
+	e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error { return nil })
 	_ = e.LoadFile(filepath.Join("testdata", "basic.yaml"))
 
 	app := fiber.New()
@@ -379,8 +411,8 @@ func TestEngine_Routes_AfterMount(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
 	registerRoleFactory(e)
-	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
-	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
+	e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
 	_ = e.LoadFile(filepath.Join("testdata", "factories.yaml"))
 
 	app := fiber.New()
@@ -418,8 +450,8 @@ func TestEngine_Routes_IsDefensiveCopy(t *testing.T) {
 	e := newTestEngine()
 	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
 	registerRoleFactory(e)
-	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
-	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
+	e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
 	_ = e.LoadFile(filepath.Join("testdata", "factories.yaml"))
 
 	app := fiber.New()

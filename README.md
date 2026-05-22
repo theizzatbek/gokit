@@ -75,9 +75,9 @@ eng.SetContextBuilder(func(c *fiber.Ctx) (AppCtx, error) {
     }, nil
 })
 
-_ = eng.RegisterMiddleware("auth", authMW)
-_ = eng.RegisterMiddleware("audit", auditMW)
-_ = eng.RegisterMiddlewareFactory("require_role",
+eng.RegisterMiddleware("auth", authMW)
+eng.RegisterMiddleware("audit", auditMW)
+eng.RegisterMiddlewareFactory("require_role",
     func(args []string) (fibermap.MiddlewareFunc[AppCtx], error) {
         allowed := append([]string(nil), args...)
         return func(ctx *fibermap.Context[AppCtx]) error {
@@ -87,7 +87,7 @@ _ = eng.RegisterMiddlewareFactory("require_role",
             return ctx.Status(403).JSON(fiber.Map{"error": "forbidden"})
         }, nil
     })
-_ = eng.RegisterHandler("patient.create", patient.Create)
+eng.RegisterHandler("patient.create", patient.Create)
 
 if err := eng.LoadFile("routes.yaml"); err != nil { panic(err) }
 if err := eng.Mount(app); err != nil { panic(err) }
@@ -235,6 +235,10 @@ OpenAPI/docs or printing a route table at boot.
 
 ## Error handling
 
+- Register-time (programmer error, before mount): a duplicate name within
+  or across the plain/factory registries panics with `*Error` /
+  `CodeDuplicateRegistration`. There is no return value to check —
+  registration follows the `MustCompile` convention.
 - Parse-time errors (bad YAML, missing fields, invalid HTTP method, cycles in
   `middleware_sets`, malformed `middleware:` entry) — returned by
   `LoadFile`/`LoadBytes`.

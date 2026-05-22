@@ -34,16 +34,16 @@ func main() {
 		}, nil
 	})
 
-	must(eng.RegisterMiddleware("logger", func(c *fibermap.Context[AppCtx]) error {
+	eng.RegisterMiddleware("logger", func(c *fibermap.Context[AppCtx]) error {
 		log.Printf("→ %s %s  user=%s role=%s", c.Method(), c.Path(), c.Data.UserID, c.Data.Role)
 		return c.Next()
-	}))
-	must(eng.RegisterMiddleware("audit", func(c *fibermap.Context[AppCtx]) error {
+	})
+	eng.RegisterMiddleware("audit", func(c *fibermap.Context[AppCtx]) error {
 		log.Printf("audit: %s %s by %s", c.Method(), c.Path(), c.Data.UserID)
 		return c.Next()
-	}))
+	})
 
-	must(eng.RegisterMiddlewareFactory("require_role",
+	eng.RegisterMiddlewareFactory("require_role",
 		func(args []string) (fibermap.MiddlewareFunc[AppCtx], error) {
 			if len(args) == 0 {
 				return nil, fmt.Errorf("require_role: at least one role required")
@@ -57,17 +57,17 @@ func main() {
 				}
 				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "forbidden"})
 			}, nil
-		}))
+		})
 
-	must(eng.RegisterHandler("patient.list", func(c *fibermap.Context[AppCtx]) error {
+	eng.RegisterHandler("patient.list", func(c *fibermap.Context[AppCtx]) error {
 		return c.JSON(fiber.Map{"patients": []string{"Alice", "Bob"}, "by": c.Data.UserID})
-	}))
-	must(eng.RegisterHandler("patient.create", func(c *fibermap.Context[AppCtx]) error {
+	})
+	eng.RegisterHandler("patient.create", func(c *fibermap.Context[AppCtx]) error {
 		return c.Status(201).JSON(fiber.Map{"created": true, "by": c.Data.UserID})
-	}))
-	must(eng.RegisterHandler("patient.update", func(c *fibermap.Context[AppCtx]) error {
+	})
+	eng.RegisterHandler("patient.update", func(c *fibermap.Context[AppCtx]) error {
 		return c.JSON(fiber.Map{"updated": c.Params("id"), "by": c.Data.UserID})
-	}))
+	})
 
 	if err := eng.LoadFile("routes.yaml"); err != nil {
 		log.Fatal(err)
@@ -90,10 +90,4 @@ func main() {
 	fmt.Println()
 
 	log.Fatal(app.Listen(":3000"))
-}
-
-func must(err error) {
-	if err != nil {
-		log.Fatal(err)
-	}
 }
