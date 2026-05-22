@@ -169,8 +169,8 @@ func TestLoadFileToConfig_FileNotFound(t *testing.T) {
 	if !errors.As(err, &fe) {
 		t.Fatalf("want *Error, got %T: %v", err, err)
 	}
-	if fe.Code != CodeInvalidYAML {
-		t.Errorf("code = %q", fe.Code)
+	if fe.Code != CodeFileNotFound {
+		t.Errorf("code = %q, want %q", fe.Code, CodeFileNotFound)
 	}
 	if fe.File == "" {
 		t.Errorf("File should be populated")

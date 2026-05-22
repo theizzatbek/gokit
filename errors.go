@@ -36,6 +36,7 @@ func (e *Error) Error() string {
 const (
 	// parse stage
 	CodeInvalidYAML       = "invalid_yaml"
+	CodeFileNotFound      = "file_not_found"
 	CodeMissingField      = "missing_field"
 	CodeInvalidHTTPMethod = "invalid_http_method"
 	CodeMiddlewareCycle   = "middleware_cycle"

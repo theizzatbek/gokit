@@ -374,3 +374,29 @@ func TestEngine_Routes_BeforeMount(t *testing.T) {
 		t.Errorf("routes before mount = %d, want 0", len(rs))
 	}
 }
+
+func TestEngine_Routes_IsDefensiveCopy(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.SetRoleChecker(func(c *Context[engCtx], allowed []string) bool { return true })
+	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return nil })
+	_ = e.LoadFile(filepath.Join("testdata", "roles.yaml"))
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	rs1 := e.Routes()
+	rs1[0].Middleware[0] = "MUTATED"
+	rs1[0].Roles[0] = "MUTATED"
+
+	rs2 := e.Routes()
+	if rs2[0].Middleware[0] != "auth" {
+		t.Errorf("Middleware was mutated through Routes() snapshot: %v", rs2[0].Middleware)
+	}
+	if rs2[0].Roles[0] != "admin" {
+		t.Errorf("Roles was mutated through Routes() snapshot: %v", rs2[0].Roles)
+	}
+}

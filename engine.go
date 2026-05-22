@@ -193,7 +193,7 @@ func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 
 				routeMW := combineSetAndList(r.MiddlewareSet, r.Middleware)
 
-				chain, _ := resolveChain(e.cfg.MiddlewareSets, groupAncestors, routeMW, len(r.Roles) > 0)
+				chain := resolveChain(e.cfg.MiddlewareSets, groupAncestors, routeMW, len(r.Roles) > 0)
 
 				// validate every chain entry exists (set names get expanded; only
 				// concrete middleware names should remain — roleGuardName is allowed).
@@ -373,9 +373,16 @@ func filterOutSentinel(chain []string) []string {
 }
 
 // Routes returns a snapshot of all routes registered during Mount.
-// Returns an empty slice if called before Mount.
+// Returns an empty slice if called before Mount. The returned slice and
+// each RouteInfo's slice fields are independent copies — mutating them
+// will not affect engine state.
 func (e *Engine[T]) Routes() []RouteInfo {
 	out := make([]RouteInfo, len(e.routes))
-	copy(out, e.routes)
+	for i, r := range e.routes {
+		out[i] = r
+		out[i].Middleware = append([]string(nil), r.Middleware...)
+		out[i].Roles = append([]string(nil), r.Roles...)
+		out[i].Tags = append([]string(nil), r.Tags...)
+	}
 	return out
 }

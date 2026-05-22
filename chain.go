@@ -16,7 +16,7 @@ const roleGuardName = "__role_guard__"
 //
 // Each name that matches a key in `sets` is recursively expanded.
 // Duplicates are removed, keeping the first occurrence.
-func resolveChain(sets map[string][]string, ancestors [][]string, routeMW []string, hasRoles bool) ([]string, error) {
+func resolveChain(sets map[string][]string, ancestors [][]string, routeMW []string, hasRoles bool) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, 8)
 
@@ -51,5 +51,5 @@ func resolveChain(sets map[string][]string, ancestors [][]string, routeMW []stri
 		add(roleGuardName)
 	}
 
-	return out, nil
+	return out
 }
