@@ -172,3 +172,27 @@ func loadFileToConfig(path string) (*rawConfig, error) {
 	}
 	return parseBytes(data, path)
 }
+
+// Lint runs schema-level validation on a routes.yaml document: required
+// fields, valid HTTP methods, middleware_set cycle detection, and
+// middleware-entry shape. It does NOT verify that referenced handler,
+// middleware, or factory names are registered — for that, use
+// Engine.Validate() after registering everything.
+//
+// Intended for CI tools and pre-commit hooks that want to flag bad YAML
+// without instantiating an Engine.
+func Lint(data []byte) error {
+	_, err := parseBytes(data, "")
+	return err
+}
+
+// LintFile is Lint over the contents of a file. File-not-found is
+// surfaced as *Error / CodeFileNotFound.
+func LintFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return &Error{Stage: "parse", Code: CodeFileNotFound, Message: err.Error(), File: path}
+	}
+	_, err = parseBytes(data, path)
+	return err
+}

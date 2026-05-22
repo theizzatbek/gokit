@@ -7,13 +7,14 @@ import (
 
 // Error is the typed error returned by all fibermap operations.
 // Stage is one of "parse", "mount", or "register". Code is one of the Code* constants.
+// JSON tags allow structured logging or admin-endpoint exposure.
 type Error struct {
-	Stage   string
-	Code    string
-	Message string
-	File    string
-	Line    int
-	Path    string
+	Stage   string `json:"stage"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	File    string `json:"file,omitempty"`
+	Line    int    `json:"line,omitempty"`
+	Path    string `json:"path,omitempty"`
 }
 
 // Error implements the error interface.
@@ -52,4 +53,5 @@ const (
 
 	// register stage
 	CodeDuplicateRegistration = "duplicate_registration"
+	CodeRegisterAfterMount    = "register_after_mount"
 )

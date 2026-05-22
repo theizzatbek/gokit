@@ -9,6 +9,32 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `Engine.Walk(fn)` and `Engine.Lookup(method, path)` for
+  introspection. `Walk` visits routes in Mount order; returning
+  `ErrStopWalk` ends iteration without surfacing an error. `Lookup`
+  returns a `RouteInfo` for an exact (method, path) match. Both return
+  defensive copies. These are the building blocks for OpenAPI
+  generators and test helpers.
+- Subpackage `fibermap/fibermaptest` — `AssertRoute`, `AssertNoRoute`,
+  `AssertRouteCount` work off `RouteFinder` (`Lookup`+`Walk`) without
+  spinning up a Fiber app or making HTTP requests. Includes
+  `WithHandler`, `WithMiddleware` (in-order subsequence),
+  `WithTags` options.
+- JSON Schema (draft-07) for `routes.yaml` shipped at
+  `schema/routes.schema.json`. Add the `# yaml-language-server:
+  $schema=…` modeline to your YAML for editor autocomplete + inline
+  diagnostics. Schema is also embedded into the library; access via
+  `fibermap.Schema()`.
+- CLI binary `cmd/fibermap` with `validate <path>` (schema-lint;
+  non-zero exit) and `dump-schema` (write embedded JSON Schema to
+  stdout). Install via `go install
+  github.com/theizzatbek/fibermap/cmd/fibermap@latest`.
+- Public `fibermap.Lint(data)` and `fibermap.LintFile(path)` for
+  schema-only validation (no registrations needed). Used by the CLI;
+  also handy for admin endpoints or pre-commit hooks.
+- JSON struct tags on `RouteInfo`, `MiddlewareRef`, and `Error` so
+  consumers can expose introspection / structured-log errors without
+  wrapping.
 - `Engine.Validate()` — run mount-time validation without installing
   any routes. For CI scripts / unit tests that check a `routes.yaml`
   is consistent with the registered handlers/middleware/factories.
@@ -38,7 +64,9 @@ This is the bootstrap entry; prior history lives in `git log`.
   "Parameterized middleware".
 - `Register{Handler,Middleware,MiddlewareFactory}` no longer return
   `error` — they panic with `*Error` on duplicate registration
-  (MustCompile convention).
+  (MustCompile convention). They also now panic with
+  `CodeRegisterAfterMount` if called after `Mount`, where the
+  registration would have been silently useless.
 - `RouteInfo.Middleware` changes from `[]string` to `[]MiddlewareRef`.
 - YAML `middleware:` items are now a heterogeneous list: scalar string
   (plain) or single-key map `{name: [args...]}` (factory). The same

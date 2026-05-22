@@ -545,3 +545,113 @@ func TestEngine_LoadFS_FileNotFound(t *testing.T) {
 		t.Errorf("want CodeFileNotFound, got %v", err)
 	}
 }
+
+func TestEngine_RegisterAfterMount_Panics(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error { return nil })
+	if err := e.LoadFile(filepath.Join("testdata", "basic.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		fn   func()
+	}{
+		{"handler", func() {
+			e.RegisterHandler("late.handler", func(c *Context[engCtx]) error { return nil })
+		}},
+		{"middleware", func() {
+			e.RegisterMiddleware("late.mw", func(c *Context[engCtx]) error { return c.Next() })
+		}},
+		{"factory", func() {
+			e.RegisterMiddlewareFactory("late.factory", func(args []string) (MiddlewareFunc[engCtx], error) {
+				return func(c *Context[engCtx]) error { return c.Next() }, nil
+			})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fe := expectRegisterPanic(t, tc.fn)
+			if fe.Code != CodeRegisterAfterMount {
+				t.Errorf("code = %q, want %q", fe.Code, CodeRegisterAfterMount)
+			}
+		})
+	}
+}
+
+func TestEngine_Walk(t *testing.T) {
+	e := buildEngineWithTwoRoutes(t)
+
+	var seen []string
+	if err := e.Walk(func(r RouteInfo) error {
+		seen = append(seen, r.Method+" "+r.Path)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"GET /v1/a", "GET /v1/b"}
+	if !reflect.DeepEqual(seen, want) {
+		t.Errorf("seen = %v, want %v", seen, want)
+	}
+}
+
+func TestEngine_Walk_StopWalk(t *testing.T) {
+	e := buildEngineWithTwoRoutes(t)
+	var seen int
+	err := e.Walk(func(r RouteInfo) error {
+		seen++
+		return ErrStopWalk
+	})
+	if err != nil {
+		t.Errorf("ErrStopWalk should be swallowed, got %v", err)
+	}
+	if seen != 1 {
+		t.Errorf("walked %d routes, want 1 (stopped after first)", seen)
+	}
+}
+
+func TestEngine_Walk_PropagatesError(t *testing.T) {
+	e := buildEngineWithTwoRoutes(t)
+	boom := errors.New("boom")
+	err := e.Walk(func(r RouteInfo) error { return boom })
+	if err != boom {
+		t.Errorf("err = %v, want %v", err, boom)
+	}
+}
+
+func TestEngine_Lookup(t *testing.T) {
+	e := buildEngineWithTwoRoutes(t)
+	if r, ok := e.Lookup("GET", "/v1/a"); !ok || r.Handler != "h.a" {
+		t.Errorf("lookup /v1/a: %+v ok=%v", r, ok)
+	}
+	if r, ok := e.Lookup("GET", "/missing"); ok {
+		t.Errorf("lookup missing: should be false, got %+v", r)
+	}
+	if _, ok := e.Lookup("POST", "/v1/a"); ok {
+		t.Error("lookup wrong method: should be false")
+	}
+}
+
+func buildEngineWithTwoRoutes(t *testing.T) *Engine[engCtx] {
+	t.Helper()
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("h.a", func(c *Context[engCtx]) error { return nil })
+	e.RegisterHandler("h.b", func(c *Context[engCtx]) error { return nil })
+	if err := e.LoadBytes([]byte(`
+groups:
+  - prefix: /v1
+    routes:
+      - { method: GET, path: /a, handler: h.a }
+      - { method: GET, path: /b, handler: h.b }
+`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}

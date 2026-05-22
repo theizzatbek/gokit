@@ -1,6 +1,7 @@
 package fibermap
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -252,5 +253,48 @@ func TestLoadFileToConfig_FileNotFound(t *testing.T) {
 	}
 	if fe.File == "" {
 		t.Errorf("File should be populated")
+	}
+}
+
+func TestLint_OK(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "basic.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Lint(data); err != nil {
+		t.Errorf("Lint on basic.yaml: %v", err)
+	}
+}
+
+func TestLint_BadMethod(t *testing.T) {
+	err := Lint([]byte(`
+groups:
+  - routes:
+      - { method: FLY, path: /x, handler: x }
+`))
+	var fe *Error
+	if !errors.As(err, &fe) || fe.Code != CodeInvalidHTTPMethod {
+		t.Errorf("want CodeInvalidHTTPMethod, got %v", err)
+	}
+}
+
+func TestLintFile_NotFound(t *testing.T) {
+	err := LintFile(filepath.Join("testdata", "nope.yaml"))
+	var fe *Error
+	if !errors.As(err, &fe) || fe.Code != CodeFileNotFound {
+		t.Errorf("want CodeFileNotFound, got %v", err)
+	}
+}
+
+func TestSchema_IsValidJSON(t *testing.T) {
+	var m map[string]any
+	if err := json.Unmarshal(Schema(), &m); err != nil {
+		t.Fatalf("Schema() is not valid JSON: %v", err)
+	}
+	if m["$schema"] == nil {
+		t.Errorf("schema missing $schema field")
+	}
+	if m["definitions"] == nil {
+		t.Errorf("schema missing definitions")
 	}
 }

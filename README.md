@@ -12,9 +12,40 @@ Status: **0.x — API unstable.**
 
 ```bash
 go get github.com/theizzatbek/fibermap
+
+# optional: standalone CLI for routes.yaml linting and schema export
+go install github.com/theizzatbek/fibermap/cmd/fibermap@latest
 ```
 
 Requires Go 1.23+ and Fiber v2.
+
+## Editor support for `routes.yaml`
+
+Add this single line to the top of your `routes.yaml`:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/fibermap/main/schema/routes.schema.json
+```
+
+VS Code (with [redhat.vscode-yaml]), GoLand, and Vim with `coc-yaml`
+then give you autocomplete for `method`/`middleware_sets`/etc, hover
+documentation, and inline diagnostics — typos in `middleware:` get
+highlighted before you ever run `go test`.
+
+[redhat.vscode-yaml]: https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml
+
+## CLI
+
+```bash
+fibermap validate routes.yaml    # schema-lint; non-zero exit on issues
+fibermap dump-schema             # print the bundled JSON Schema
+```
+
+`validate` runs only the schema-level checks (required fields, valid
+HTTP methods, middleware_set cycles, middleware shape). It does NOT
+verify that handler/middleware/factory names are registered — your Go
+binary is the only place those live. For full validation (including
+registrations), use `Engine.Validate()` in a Go test or boot script.
 
 ## Run the example
 
@@ -245,16 +276,67 @@ for _, r := range eng.Routes() {
 `RouteInfo` carries `Method`, `Path`, `Handler`, `Name`, `Description`,
 `Tags`, and `Middleware` — a `[]MiddlewareRef` where each entry holds the
 middleware `Name` and its `Args` (nil for plain, the YAML list for factory
-calls). The returned slice and each entry's slice fields are independent
-copies — mutating them does not affect engine state. Useful for generating
-OpenAPI/docs or printing a route table at boot.
+calls). All fields have `json:` tags so you can expose the slice over an
+admin endpoint without an extra wrapper. The returned slice and each
+entry's slice fields are independent copies — mutating them does not
+affect engine state.
+
+For walks with early-stop semantics or single-lookup queries:
+
+```go
+eng.Walk(func(r fibermap.RouteInfo) error {
+    if strings.HasPrefix(r.Path, "/internal/") { return fibermap.ErrStopWalk }
+    return nil
+})
+
+if r, ok := eng.Lookup("POST", "/v1/users"); ok {
+    fmt.Println("handler:", r.Handler)
+}
+```
+
+## Testing
+
+Subpackage `fibermap/fibermaptest` ships assertion helpers that work
+off the introspection API — **no `fiber.App` or HTTP roundtrip
+required**:
+
+```go
+import "github.com/theizzatbek/fibermap/fibermaptest"
+
+func TestRoutes(t *testing.T) {
+    eng := buildEngineForTests(t)  // your Load* + Mount on a throwaway router
+
+    fibermaptest.AssertRoute(t, eng, "POST", "/v1/things",
+        fibermaptest.WithHandler("things.create"),
+        fibermaptest.WithMiddleware("auth", "audit"),  // in-order subsequence
+        fibermaptest.WithTags("things", "write"),
+    )
+    fibermaptest.AssertNoRoute(t, eng, "DELETE", "/v1/things")
+    fibermaptest.AssertRouteCount(t, eng, 12)
+}
+```
+
+Helpers call `Errorf` (not `Fatal`), so multiple assertions surface
+all failures in one run.
+
+## Mount caveat
+
+`Mount(router)` installs a single root middleware on `router` via
+`router.Use(...)` that builds your `Context[T]` once per request. This
+means **every** route on that router — including routes added later
+outside fibermap — will run the context builder. Usually fine; if you
+need a router whose contextInit doesn't leak, mount fibermap on a
+dedicated `app.Group("/api", ...)` sub-router.
 
 ## Error handling
 
-- Register-time (programmer error, before mount): a duplicate name within
-  or across the plain/factory registries panics with `*Error` /
-  `CodeDuplicateRegistration`. There is no return value to check —
-  registration follows the `MustCompile` convention.
+- Register-time (programmer error): a duplicate name within or across
+  the plain/factory registries panics with `*Error` /
+  `CodeDuplicateRegistration`. Calling `Register*` after `Mount` panics
+  with `CodeRegisterAfterMount` (registration after mount is silently
+  useless otherwise — the map is consulted only during `buildPlan`).
+  Registration follows the `MustCompile` convention; there is no return
+  value to check.
 - Parse-time errors (bad YAML, missing fields, invalid HTTP method, cycles in
   `middleware_sets`, malformed `middleware:` entry) — returned by
   `LoadFile`/`LoadBytes`.
