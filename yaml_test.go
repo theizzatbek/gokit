@@ -79,6 +79,11 @@ groups:
 	if !strings.HasSuffix(fe.Path, ".method") {
 		t.Errorf("Path = %q, want suffix .method", fe.Path)
 	}
+	// Route flow-mapping is on source line 5 (line 1 = blank from \n,
+	// line 5 = the `- { ... }` item).
+	if fe.Line != 5 {
+		t.Errorf("Line = %d, want 5", fe.Line)
+	}
 }
 
 func TestParseBytes_InvalidMethod(t *testing.T) {
@@ -99,6 +104,9 @@ groups:
 	}
 	if !strings.HasSuffix(fe.Path, ".method") {
 		t.Errorf("Path = %q, want suffix .method", fe.Path)
+	}
+	if fe.Line != 5 {
+		t.Errorf("Line = %d, want 5", fe.Line)
 	}
 }
 

@@ -57,6 +57,35 @@ func (m *mwRef) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
+// rawGroupAlias and rawRouteAlias break the recursive UnmarshalYAML call
+// (alias trick: aliases drop the method set, so node.Decode hits the
+// default reflection path).
+type rawGroupAlias rawGroup
+type rawRouteAlias rawRoute
+
+// UnmarshalYAML captures the source line for rawGroup so parse/mount
+// errors can point the user at the offending YAML row.
+func (g *rawGroup) UnmarshalYAML(node *yaml.Node) error {
+	var a rawGroupAlias
+	if err := node.Decode(&a); err != nil {
+		return err
+	}
+	*g = rawGroup(a)
+	g.Line = node.Line
+	return nil
+}
+
+// UnmarshalYAML — same as rawGroup, for routes.
+func (r *rawRoute) UnmarshalYAML(node *yaml.Node) error {
+	var a rawRouteAlias
+	if err := node.Decode(&a); err != nil {
+		return err
+	}
+	*r = rawRoute(a)
+	r.Line = node.Line
+	return nil
+}
+
 // parseBytes parses YAML data into rawConfig and runs syntactic validation:
 // required fields, valid HTTP methods, middleware_set cycle detection.
 // `file` is used only for error reporting; pass "" if loading from memory.
@@ -82,13 +111,13 @@ func validateGroups(groups []rawGroup, path, file string) error {
 		for j, r := range g.Routes {
 			rPath := fmt.Sprintf("%s.routes[%d]", gPath, j)
 			if r.Method == "" {
-				return &Error{Stage: "parse", Code: CodeMissingField, Message: "method is required", File: file, Path: rPath + ".method"}
+				return &Error{Stage: "parse", Code: CodeMissingField, Message: "method is required", File: file, Path: rPath + ".method", Line: r.Line}
 			}
 			if r.Handler == "" {
-				return &Error{Stage: "parse", Code: CodeMissingField, Message: "handler is required", File: file, Path: rPath + ".handler"}
+				return &Error{Stage: "parse", Code: CodeMissingField, Message: "handler is required", File: file, Path: rPath + ".handler", Line: r.Line}
 			}
 			if _, ok := validHTTPMethods[r.Method]; !ok {
-				return &Error{Stage: "parse", Code: CodeInvalidHTTPMethod, Message: fmt.Sprintf("unknown HTTP method %q", r.Method), File: file, Path: rPath + ".method"}
+				return &Error{Stage: "parse", Code: CodeInvalidHTTPMethod, Message: fmt.Sprintf("unknown HTTP method %q", r.Method), File: file, Path: rPath + ".method", Line: r.Line}
 			}
 		}
 		if err := validateGroups(g.Groups, gPath+".groups", file); err != nil {

@@ -7,15 +7,18 @@ type rawConfig struct {
 }
 
 // rawGroup is one entry under `groups:`. Groups can nest via `Groups`.
+// Line is the 1-based source-file line where this entry starts; populated
+// by UnmarshalYAML and used to annotate parse/mount errors.
 type rawGroup struct {
 	Prefix        string     `yaml:"prefix"`
 	Middleware    []mwRef    `yaml:"middleware"`
 	MiddlewareSet string     `yaml:"middleware_set"`
 	Routes        []rawRoute `yaml:"routes"`
 	Groups        []rawGroup `yaml:"groups"`
+	Line          int        `yaml:"-"`
 }
 
-// rawRoute is one entry under `routes:`.
+// rawRoute is one entry under `routes:`. Line: see rawGroup.
 type rawRoute struct {
 	Method        string   `yaml:"method"`
 	Path          string   `yaml:"path"`
@@ -25,6 +28,7 @@ type rawRoute struct {
 	Name          string   `yaml:"name"`
 	Tags          []string `yaml:"tags"`
 	Description   string   `yaml:"description"`
+	Line          int      `yaml:"-"`
 }
 
 // mwRef is a reference to a middleware in YAML. It is either a scalar string
