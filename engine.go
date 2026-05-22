@@ -1,6 +1,11 @@
 package fibermap
 
-import "github.com/gofiber/fiber/v2"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/gofiber/fiber/v2"
+)
 
 type (
 	HandlerFunc[T any]    func(c *Context[T]) error
@@ -103,4 +108,158 @@ func defaultForbidden[T any](c *Context[T]) error {
 
 func defaultContextError(c *fiber.Ctx, err error) error {
 	return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "context build failed"})
+}
+
+// Mount validates the loaded YAML against registered handlers/middleware and
+// installs routes on `router`. If validation produces any errors they are all
+// returned (errors.Join) and no routes are installed.
+//
+// Calling Mount twice on the same engine returns an *Error with
+// CodeAlreadyMounted.
+func (e *Engine[T]) Mount(router fiber.Router) error {
+	if e.mounted {
+		return &Error{Stage: "mount", Code: CodeAlreadyMounted, Message: "engine already mounted"}
+	}
+	if e.cfg == nil {
+		return &Error{Stage: "mount", Code: CodeInvalidYAML, Message: "no YAML loaded — call LoadFile or LoadBytes first"}
+	}
+
+	plan, errs := e.buildPlan()
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	if err := e.installPlan(router, plan); err != nil {
+		return err
+	}
+
+	e.mounted = true
+	return nil
+}
+
+// plannedRoute is the fully resolved description of one route ready to be
+// installed on Fiber.
+type plannedRoute struct {
+	Method, Path, Handler, Name, Description string
+	Chain       []string // resolved middleware names (may include roleGuardName)
+	Roles       []string
+	Tags        []string
+}
+
+// buildPlan walks the parsed YAML tree, resolves chains, and returns either a
+// flat list of plannedRoute or a slice of accumulated *Error values.
+func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
+	var errs []error
+	var routes []plannedRoute
+	seenRoute := map[string]string{} // "METHOD path" -> handler name (for diagnostics)
+
+	if e.builder == nil {
+		errs = append(errs, &Error{Stage: "mount", Code: CodeMissingContextBuilder, Message: "ContextBuilder is required"})
+	}
+
+	var walk func(groups []rawGroup, prefix string, ancestors [][]string, path string)
+	walk = func(groups []rawGroup, prefix string, ancestors [][]string, path string) {
+		for i, g := range groups {
+			gPath := fmt.Sprintf("%s[%d]", path, i)
+			combined := combineSetAndList(g.MiddlewareSet, g.Middleware)
+			fullPrefix := prefix + g.Prefix
+			groupAncestors := append(append([][]string{}, ancestors...), combined)
+
+			for j, r := range g.Routes {
+				rPath := fmt.Sprintf("%s.routes[%d]", gPath, j)
+				routeMW := combineSetAndList(r.MiddlewareSet, r.Middleware)
+
+				chain, _ := resolveChain(e.cfg.MiddlewareSets, groupAncestors, routeMW, len(r.Roles) > 0)
+
+				// validate every chain entry exists (set names get expanded; only
+				// concrete middleware names should remain — roleGuardName is allowed).
+				for _, name := range chain {
+					if name == roleGuardName {
+						continue
+					}
+					if _, ok := e.middlewares[name]; !ok {
+						errs = append(errs, &Error{
+							Stage: "mount", Code: CodeUnknownMiddleware,
+							Message: fmt.Sprintf("middleware %q referenced from route is not registered", name),
+							Path:    rPath, File: e.cfgFile,
+						})
+					}
+				}
+
+				if _, ok := e.handlers[r.Handler]; !ok {
+					errs = append(errs, &Error{
+						Stage: "mount", Code: CodeUnknownHandler,
+						Message: fmt.Sprintf("handler %q is not registered", r.Handler),
+						Path:    rPath + ".handler", File: e.cfgFile,
+					})
+				}
+
+				if len(r.Roles) > 0 && e.roleChecker == nil {
+					errs = append(errs, &Error{
+						Stage: "mount", Code: CodeMissingRoleChecker,
+						Message: fmt.Sprintf("route uses roles %v but RoleChecker is not set", r.Roles),
+						Path:    rPath + ".roles", File: e.cfgFile,
+					})
+				}
+
+				routePath := joinPath(fullPrefix, r.Path)
+				key := r.Method + " " + routePath
+				if prev, dup := seenRoute[key]; dup {
+					errs = append(errs, &Error{
+						Stage: "mount", Code: CodeDuplicateRoute,
+						Message: fmt.Sprintf("route %s already defined (handler %s vs %s)", key, prev, r.Handler),
+						Path:    rPath, File: e.cfgFile,
+					})
+					continue
+				}
+				seenRoute[key] = r.Handler
+
+				routes = append(routes, plannedRoute{
+					Method:      r.Method,
+					Path:        routePath,
+					Handler:     r.Handler,
+					Name:        r.Name,
+					Description: r.Description,
+					Chain:       chain,
+					Roles:       r.Roles,
+					Tags:        r.Tags,
+				})
+			}
+
+			walk(g.Groups, fullPrefix, groupAncestors, gPath+".groups")
+		}
+	}
+	walk(e.cfg.Groups, "", nil, "groups")
+	return routes, errs
+}
+
+// combineSetAndList returns set name (if any) prepended to the explicit list.
+// resolveChain expands set names later.
+func combineSetAndList(set string, list []string) []string {
+	if set == "" {
+		return list
+	}
+	out := make([]string, 0, 1+len(list))
+	out = append(out, set)
+	out = append(out, list...)
+	return out
+}
+
+func joinPath(prefix, path string) string {
+	if path == "" {
+		return prefix
+	}
+	if prefix == "" {
+		return path
+	}
+	// don't double up slashes
+	if prefix[len(prefix)-1] == '/' && path[0] == '/' {
+		return prefix + path[1:]
+	}
+	return prefix + path
+}
+
+// installPlan is implemented in Task 9. For now, do nothing.
+func (e *Engine[T]) installPlan(router fiber.Router, plan []plannedRoute) error {
+	return nil
 }

@@ -1,0 +1,5 @@
+groups:
+  - prefix: /v1
+    routes:
+      - { method: GET, path: /x, handler: a.get }
+      - { method: GET, path: /x, handler: b.get }
