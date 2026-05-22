@@ -3,6 +3,7 @@ package fibermap
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -111,6 +112,43 @@ func (e *Engine[T]) LoadBytes(data []byte) error {
 	return nil
 }
 
+// LoadFS reads and parses a YAML file from an fs.FS — typically an
+// embed.FS so the route definitions ship inside the binary.
+//
+//	//go:embed routes.yaml
+//	var routesFS embed.FS
+//	eng.LoadFS(routesFS, "routes.yaml")
+func (e *Engine[T]) LoadFS(fsys fs.FS, path string) error {
+	data, err := fs.ReadFile(fsys, path)
+	if err != nil {
+		return &Error{Stage: "parse", Code: CodeFileNotFound, Message: err.Error(), File: path}
+	}
+	cfg, err := parseBytes(data, path)
+	if err != nil {
+		return err
+	}
+	e.cfg = cfg
+	e.cfgFile = path
+	return nil
+}
+
+// Validate runs the same checks as Mount without installing any route
+// on a Fiber router. Use it from CI scripts or tests to verify that a
+// routes.yaml is consistent with the registered handlers, middleware,
+// and factories. Returns the joined *Error values (errors.Join) or nil
+// on success. Safe to call multiple times and at any point after a
+// successful Load*.
+func (e *Engine[T]) Validate() error {
+	if e.cfg == nil {
+		return &Error{Stage: "mount", Code: CodeInvalidYAML, Message: "no YAML loaded — call LoadFile, LoadBytes, or LoadFS first"}
+	}
+	_, errs := e.buildPlan()
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
 func defaultContextError(c *fiber.Ctx, err error) error {
 	return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "context build failed"})
 }
@@ -126,7 +164,7 @@ func (e *Engine[T]) Mount(router fiber.Router) error {
 		return &Error{Stage: "mount", Code: CodeAlreadyMounted, Message: "engine already mounted"}
 	}
 	if e.cfg == nil {
-		return &Error{Stage: "mount", Code: CodeInvalidYAML, Message: "no YAML loaded — call LoadFile or LoadBytes first"}
+		return &Error{Stage: "mount", Code: CodeInvalidYAML, Message: "no YAML loaded — call LoadFile, LoadBytes, or LoadFS first"}
 	}
 
 	plan, errs := e.buildPlan()

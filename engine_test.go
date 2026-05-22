@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"testing/fstest"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -469,5 +470,78 @@ func TestEngine_Routes_IsDefensiveCopy(t *testing.T) {
 	}
 	if rs2[0].Middleware[1].Args[0] != "admin" {
 		t.Errorf("Middleware.Args was mutated through Routes() snapshot")
+	}
+}
+
+func TestEngine_Validate_NoYAML(t *testing.T) {
+	e := newTestEngine()
+	err := e.Validate()
+	if !containsCode(err, CodeInvalidYAML) {
+		t.Errorf("want CodeInvalidYAML, got %v", err)
+	}
+}
+
+func TestEngine_Validate_AccumulatesErrors(t *testing.T) {
+	e := newTestEngine()
+	// no ContextBuilder, no handler — Validate should surface both.
+	if err := e.LoadFile(filepath.Join("testdata", "basic.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	err := e.Validate()
+	if !containsCode(err, CodeMissingContextBuilder) || !containsCode(err, CodeUnknownHandler) {
+		t.Errorf("want both errors, got %v", err)
+	}
+}
+
+func TestEngine_Validate_DoesNotMount(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error { return nil })
+	if err := e.LoadFile(filepath.Join("testdata", "basic.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	// engine was not mounted; Mount must still succeed afterwards.
+	if e.mounted {
+		t.Fatal("Validate must not flip the mounted flag")
+	}
+	if len(e.routes) != 0 {
+		t.Fatalf("Validate must not populate routes; got %d", len(e.routes))
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Errorf("Mount after Validate failed: %v", err)
+	}
+}
+
+func TestEngine_LoadFS(t *testing.T) {
+	fsys := fstest.MapFS{
+		"routes.yaml": &fstest.MapFile{Data: []byte(`
+groups:
+  - prefix: /v1
+    routes:
+      - { method: GET, path: /ping, handler: ping.handle }
+`)},
+	}
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error { return c.SendString("pong") })
+	if err := e.LoadFS(fsys, "routes.yaml"); err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Fatalf("Mount: %v", err)
+	}
+	if len(e.Routes()) != 1 {
+		t.Errorf("routes = %d, want 1", len(e.Routes()))
+	}
+}
+
+func TestEngine_LoadFS_FileNotFound(t *testing.T) {
+	e := newTestEngine()
+	err := e.LoadFS(fstest.MapFS{}, "missing.yaml")
+	if !containsCode(err, CodeFileNotFound) {
+		t.Errorf("want CodeFileNotFound, got %v", err)
 	}
 }

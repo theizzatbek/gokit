@@ -39,15 +39,26 @@ to exercise from curl.
 
 ```
 New → SetContextBuilder
-    → RegisterHandler / RegisterMiddleware
-    → SetRoleChecker            (required iff any route declares roles:)
-    → LoadFile / LoadBytes
+    → RegisterHandler / RegisterMiddleware / RegisterMiddlewareFactory
+    → LoadFile / LoadBytes / LoadFS
+    → Validate                  (optional dry-run, no router needed)
     → Mount                     (one-shot; subsequent calls error)
 ```
 
 `Mount` validates everything against registered names and returns *all*
 problems at once via `errors.Join`. No routes are installed if validation
-fails.
+fails. `Validate()` runs the same checks but doesn't touch any Fiber
+router — handy for CI scripts or unit tests of `routes.yaml`.
+
+`LoadFS(fs.FS, path)` accepts an `embed.FS` so the route definitions
+can ship inside the binary:
+
+```go
+//go:embed routes.yaml
+var routesFS embed.FS
+
+eng.LoadFS(routesFS, "routes.yaml")
+```
 
 ## Why
 
