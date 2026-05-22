@@ -2,7 +2,10 @@ package fibermap
 
 import (
 	"errors"
+	"io"
+	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -171,4 +174,167 @@ func containsCode(err error, code string) bool {
 		return true
 	}
 	return false
+}
+
+func TestEngine_EndToEnd_BasicRoute(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) {
+		return engCtx{UserID: "u1", Role: "doctor"}, nil
+	})
+	_ = e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error {
+		return c.Status(200).SendString("pong " + c.Data.UserID)
+	})
+	_ = e.LoadFile(filepath.Join("testdata", "basic.yaml"))
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/v1/ping", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || string(body) != "pong u1" {
+		t.Errorf("status=%d body=%q", resp.StatusCode, string(body))
+	}
+}
+
+func TestEngine_EndToEnd_MiddlewareOrder(t *testing.T) {
+	e := newTestEngine()
+	var calls []string
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) {
+		calls = append(calls, "ctx")
+		return engCtx{Role: "admin"}, nil
+	})
+	_ = e.RegisterMiddleware("logger", func(c *Context[engCtx]) error {
+		calls = append(calls, "logger")
+		return c.Next()
+	})
+	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error {
+		calls = append(calls, "auth")
+		return c.Next()
+	})
+	_ = e.RegisterMiddleware("authorized", func(c *Context[engCtx]) error {
+		calls = append(calls, "authorized")
+		return c.Next()
+	})
+	_ = e.RegisterHandler("user.me", func(c *Context[engCtx]) error {
+		calls = append(calls, "handler")
+		return c.SendString("ok")
+	})
+	_ = e.LoadFile(filepath.Join("testdata", "middleware_sets.yaml"))
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := app.Test(httptest.NewRequest("GET", "/v1/me", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"ctx", "logger", "auth", "authorized", "handler"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Errorf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestEngine_EndToEnd_RoleGuard_Allowed(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) {
+		return engCtx{Role: "admin"}, nil
+	})
+	e.SetRoleChecker(func(c *Context[engCtx], allowed []string) bool {
+		for _, r := range allowed {
+			if r == c.Data.Role {
+				return true
+			}
+		}
+		return false
+	})
+	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error { return c.SendString("created") })
+	_ = e.LoadFile(filepath.Join("testdata", "roles.yaml"))
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, _ := app.Test(httptest.NewRequest("POST", "/v1/create", nil))
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestEngine_EndToEnd_RoleGuard_Denied(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) {
+		return engCtx{Role: "doctor"}, nil
+	})
+	e.SetRoleChecker(func(c *Context[engCtx], allowed []string) bool {
+		for _, r := range allowed {
+			if r == c.Data.Role {
+				return true
+			}
+		}
+		return false
+	})
+	_ = e.RegisterMiddleware("auth", func(c *Context[engCtx]) error { return c.Next() })
+	_ = e.RegisterHandler("x.create", func(c *Context[engCtx]) error {
+		t.Fatal("handler should not be reached")
+		return nil
+	})
+	_ = e.LoadFile(filepath.Join("testdata", "roles.yaml"))
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, _ := app.Test(httptest.NewRequest("POST", "/v1/create", nil))
+	if resp.StatusCode != fiber.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestEngine_EndToEnd_ContextBuilderError(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) {
+		return engCtx{}, errors.New("no locals")
+	})
+	_ = e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error {
+		t.Fatal("handler should not be reached")
+		return nil
+	})
+	_ = e.LoadFile(filepath.Join("testdata", "basic.yaml"))
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, _ := app.Test(httptest.NewRequest("GET", "/v1/ping", nil))
+	if resp.StatusCode != fiber.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", resp.StatusCode)
+	}
+}
+
+func TestEngine_MountTwice(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	_ = e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error { return nil })
+	_ = e.LoadFile(filepath.Join("testdata", "basic.yaml"))
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+	err := e.Mount(app)
+	if !containsCode(err, CodeAlreadyMounted) {
+		t.Errorf("want CodeAlreadyMounted, got %v", err)
+	}
 }

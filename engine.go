@@ -283,7 +283,91 @@ func joinPath(prefix, path string) string {
 	return prefix + path
 }
 
-// installPlan is implemented in Task 9. For now, do nothing.
+const ctxKey = "__fibermap_ctx__"
+
 func (e *Engine[T]) installPlan(router fiber.Router, plan []plannedRoute) error {
+	// Root middleware that builds the Context[T] and stashes it in locals.
+	contextInit := func(c *fiber.Ctx) error {
+		data, err := e.builder(c)
+		if err != nil {
+			return e.ctxError(c, err)
+		}
+		c.Locals(ctxKey, &Context[T]{Ctx: c, Data: data})
+		return c.Next()
+	}
+
+	router.Use(contextInit)
+
+	for _, r := range plan {
+		handlers := make([]fiber.Handler, 0, len(r.Chain)+1)
+		for _, name := range r.Chain {
+			if name == roleGuardName {
+				roles := append([]string{}, r.Roles...) // capture
+				handlers = append(handlers, e.wrapRoleGuard(roles))
+				continue
+			}
+			mw := e.middlewares[name]
+			handlers = append(handlers, e.wrapMW(mw))
+		}
+		handlers = append(handlers, e.wrapHandler(e.handlers[r.Handler]))
+
+		router.Add(r.Method, r.Path, handlers...)
+
+		e.routes = append(e.routes, RouteInfo{
+			Method:      r.Method,
+			Path:        r.Path,
+			Handler:     r.Handler,
+			Name:        r.Name,
+			Description: r.Description,
+			Middleware:  filterOutSentinel(r.Chain),
+			Roles:       r.Roles,
+			Tags:        r.Tags,
+		})
+	}
 	return nil
+}
+
+func (e *Engine[T]) wrapMW(mw MiddlewareFunc[T]) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		ctx, ok := c.Locals(ctxKey).(*Context[T])
+		if !ok {
+			// contextInit didn't run (e.g. error path) — should not happen.
+			return c.Next()
+		}
+		return mw(ctx)
+	}
+}
+
+func (e *Engine[T]) wrapHandler(h HandlerFunc[T]) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		ctx, ok := c.Locals(ctxKey).(*Context[T])
+		if !ok {
+			return c.SendStatus(fiber.StatusInternalServerError)
+		}
+		return h(ctx)
+	}
+}
+
+func (e *Engine[T]) wrapRoleGuard(allowed []string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		ctx, ok := c.Locals(ctxKey).(*Context[T])
+		if !ok {
+			return c.SendStatus(fiber.StatusInternalServerError)
+		}
+		if !e.roleChecker(ctx, allowed) {
+			return e.forbidden(ctx)
+		}
+		return c.Next()
+	}
+}
+
+func filterOutSentinel(chain []string) []string {
+	out := make([]string, 0, len(chain))
+	for _, n := range chain {
+		if n == roleGuardName {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
