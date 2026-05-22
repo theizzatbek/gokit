@@ -5,4 +5,5 @@ groups:
       - method: POST
         path: /create
         handler: x.create
-        roles: [admin]
+        middleware:
+          - require_role: [admin]

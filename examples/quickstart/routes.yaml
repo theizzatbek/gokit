@@ -1,0 +1,27 @@
+middleware_sets:
+  protected: [logger]
+
+groups:
+  - prefix: /v1
+    middleware_set: protected
+    groups:
+      - prefix: /patients
+        routes:
+          - method: GET
+            path: ""
+            handler: patient.list
+            description: List all patients
+            tags: [patients, read]
+
+          - method: POST
+            path: ""
+            handler: patient.create
+            middleware:
+              - require_role: [director, receptionist]
+
+          - method: PUT
+            path: /:id
+            handler: patient.update
+            middleware:
+              - require_role: [director]
+              - audit

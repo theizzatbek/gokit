@@ -10,4 +10,5 @@ groups:
           - method: POST
             path: ""
             handler: patient.create
-            roles: [director]
+            middleware:
+              - require_role: [director]

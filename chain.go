@@ -1,9 +1,6 @@
 package fibermap
 
-// roleGuardName is the sentinel name appended to a route's chain when the
-// route has `roles:` in YAML. It is replaced by an actual middleware at Mount
-// time (see engine.go).
-const roleGuardName = "__role_guard__"
+import "strings"
 
 // resolveChain flattens a route's effective middleware chain.
 //
@@ -12,44 +9,47 @@ const roleGuardName = "__role_guard__"
 //                 Each entry is a group's combined `middleware_set` + `middleware`
 //                 (already concatenated by the caller — see engine.go Mount).
 //   - routeMW:    the route's own middleware (set expansion happens here too).
-//   - hasRoles:   if true, append roleGuardName as the last element.
 //
-// Each name that matches a key in `sets` is recursively expanded.
-// Duplicates are removed, keeping the first occurrence.
-func resolveChain(sets map[string][]string, ancestors [][]string, routeMW []string, hasRoles bool) []string {
+// Each ref whose Name matches a key in `sets` is recursively expanded.
+// Duplicates are removed using (Name, Args) identity, keeping first occurrence.
+func resolveChain(sets map[string][]mwRef, ancestors [][]mwRef, routeMW []mwRef) []mwRef {
 	seen := map[string]struct{}{}
-	out := make([]string, 0, 8)
+	out := make([]mwRef, 0, 8)
 
-	add := func(name string) {
-		if _, dup := seen[name]; dup {
+	add := func(r mwRef) {
+		key := dedupKey(r)
+		if _, dup := seen[key]; dup {
 			return
 		}
-		seen[name] = struct{}{}
-		out = append(out, name)
+		seen[key] = struct{}{}
+		out = append(out, r)
 	}
 
-	var expand func(name string)
-	expand = func(name string) {
-		if children, isSet := sets[name]; isSet {
+	var expand func(r mwRef)
+	expand = func(r mwRef) {
+		if children, isSet := sets[r.Name]; isSet {
 			for _, c := range children {
 				expand(c)
 			}
 			return
 		}
-		add(name)
+		add(r)
 	}
 
 	for _, lvl := range ancestors {
-		for _, n := range lvl {
-			expand(n)
+		for _, r := range lvl {
+			expand(r)
 		}
 	}
-	for _, n := range routeMW {
-		expand(n)
+	for _, r := range routeMW {
+		expand(r)
 	}
-	if hasRoles {
-		add(roleGuardName)
-	}
-
 	return out
+}
+
+func dedupKey(r mwRef) string {
+	if r.Args == nil {
+		return r.Name
+	}
+	return r.Name + "\x00" + strings.Join(r.Args, "\x01")
 }

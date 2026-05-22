@@ -47,7 +47,7 @@ const (
 	CodeUnknownMiddlewareSet  = "unknown_middleware_set"
 	CodeDuplicateRoute        = "duplicate_route"
 	CodeMissingContextBuilder = "missing_context_builder"
-	CodeMissingRoleChecker    = "missing_role_checker"
+	CodeInvalidFactoryArgs    = "invalid_factory_args"
 	CodeAlreadyMounted        = "already_mounted"
 
 	// register stage
