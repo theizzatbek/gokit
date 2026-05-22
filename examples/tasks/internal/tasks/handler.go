@@ -86,8 +86,7 @@ func (h *Handler) Update(c *appctx.Ctx) error {
 		return badRequest(c, "at least one of title, done must be present")
 	}
 	if req.Title != nil {
-		title := strings.TrimSpace(*req.Title)
-		req.Title = &title
+		req.Title = new(strings.TrimSpace(*req.Title))
 	}
 
 	t, err := h.Store.Update(c.Data.UserID, c.Params("id"), req.Title, req.Done)

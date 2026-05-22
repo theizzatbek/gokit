@@ -8,8 +8,33 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [v0.1.0] - 2026-05-22
+
+First tagged release. Includes everything between the original
+`Engine[T]`/YAML-routing prototype and a polished DX surface:
+parameterized middleware, panic-on-misuse registration, runnable
+examples, JSON Schema + CLI, OpenAPI-ready introspection,
+test helpers, body binding helper, and a realistic starting template
+under `examples/tasks`.
+
 ### Added
+- Subpackage `fibermap/bind` with `Body[T any](c BodyParser, v Validator) (T, error)`
+  — one-liner request-body parse + validate. Talks through minimal
+  `BodyParser` / `Validator` interfaces so fibermap itself does NOT
+  depend on `go-playground/validator` (or fiber, in the bind tests).
+  Sentinel errors `ErrParseBody` / `ErrValidateBody` for branching.
+- Realistic starting template at `examples/tasks` — Bearer auth,
+  `embed.FS` routes, `slog` logger, in-memory store behind a `Store`
+  interface, role-guarded admin endpoints, request-id, graceful
+  shutdown, `/admin/routes` introspection over HTTP, and
+  `fibermaptest.AssertRoute` covering the live `routes.yaml`. Designed
+  to be COPIED, not just read.
 - `Engine.Walk(fn)` and `Engine.Lookup(method, path)` for
+  introspection. `Walk` visits routes in Mount order; returning
+  `ErrStopWalk` ends iteration without surfacing an error. `Lookup`
+  returns a `RouteInfo` for an exact (method, path) match. Both return
   introspection. `Walk` visits routes in Mount order; returning
   `ErrStopWalk` ends iteration without surfacing an error. `Lookup`
   returns a `RouteInfo` for an exact (method, path) match. Both return
