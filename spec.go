@@ -41,18 +41,22 @@ type mwRef struct {
 }
 
 // MiddlewareRef is the public form of mwRef surfaced via RouteInfo.
+// Args is nil for plain (scalar) middleware, non-nil for factory calls
+// (even if the factory was invoked with zero args).
 type MiddlewareRef struct {
-	Name string
-	Args []string
+	Name string   `json:"name"`
+	Args []string `json:"args,omitempty"`
 }
 
 // RouteInfo is the public introspection record returned by Engine.Routes().
+// JSON tags are provided so users can expose Routes() over an admin
+// endpoint or dump it for tooling without an extra wrapper struct.
 type RouteInfo struct {
-	Method      string
-	Path        string
-	Handler     string
-	Name        string
-	Description string
-	Middleware  []MiddlewareRef
-	Tags        []string
+	Method      string          `json:"method"`
+	Path        string          `json:"path"`
+	Handler     string          `json:"handler"`
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Middleware  []MiddlewareRef `json:"middleware,omitempty"`
+	Tags        []string        `json:"tags,omitempty"`
 }

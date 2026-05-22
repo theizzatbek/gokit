@@ -52,10 +52,21 @@ func (e *Engine[T]) SetContextBuilder(fn ContextBuilder[T]) { e.builder = fn }
 // returns an error.
 func (e *Engine[T]) SetContextErrorHandler(h ContextErrorFunc) { e.ctxError = h }
 
+// panicIfMounted is called by every Register* method. Registering after
+// Mount is silently useless — the registration map is consulted only
+// during buildPlan/installPlan, both run by Mount — so we fail loud.
+func (e *Engine[T]) panicIfMounted(kind, name string) {
+	if e.mounted {
+		panic(&Error{Stage: "register", Code: CodeRegisterAfterMount,
+			Message: "cannot register " + kind + " " + name + " after Mount"})
+	}
+}
+
 // RegisterHandler registers a handler under a name referenced from YAML.
 // Panics with *Error / CodeDuplicateRegistration if the name is already
-// taken — this is a programmer error at startup.
+// taken, or CodeRegisterAfterMount if called after Mount.
 func (e *Engine[T]) RegisterHandler(name string, h HandlerFunc[T]) {
+	e.panicIfMounted("handler", name)
 	if _, ok := e.handlers[name]; ok {
 		panic(&Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "handler " + name + " already registered"})
 	}
@@ -64,8 +75,10 @@ func (e *Engine[T]) RegisterHandler(name string, h HandlerFunc[T]) {
 
 // RegisterMiddleware registers a plain (no-args) middleware. YAML references
 // it as a scalar string. Panics with *Error / CodeDuplicateRegistration if
-// the name is already taken in either the plain or factory registry.
+// the name is already taken in either the plain or factory registry, or
+// CodeRegisterAfterMount if called after Mount.
 func (e *Engine[T]) RegisterMiddleware(name string, m MiddlewareFunc[T]) {
+	e.panicIfMounted("middleware", name)
 	if _, ok := e.middlewares[name]; ok {
 		panic(&Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "middleware " + name + " already registered"})
 	}
@@ -79,8 +92,10 @@ func (e *Engine[T]) RegisterMiddleware(name string, m MiddlewareFunc[T]) {
 // references it as a single-key mapping {name: [args...]}. The factory is
 // invoked once per (name, args) pair at Mount time; the returned
 // MiddlewareFunc is cached for the lifetime of the engine. Panics with
-// *Error / CodeDuplicateRegistration on name conflict.
+// *Error / CodeDuplicateRegistration on name conflict, or
+// CodeRegisterAfterMount if called after Mount.
 func (e *Engine[T]) RegisterMiddlewareFactory(name string, f MiddlewareFactoryFunc[T]) {
+	e.panicIfMounted("middleware factory", name)
 	if _, ok := e.factories[name]; ok {
 		panic(&Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "middleware factory " + name + " already registered"})
 	}
@@ -425,13 +440,56 @@ func toPublicChain(chain []mwRef) []MiddlewareRef {
 func (e *Engine[T]) Routes() []RouteInfo {
 	out := make([]RouteInfo, len(e.routes))
 	for i, r := range e.routes {
-		out[i] = r
-		out[i].Tags = append([]string(nil), r.Tags...)
-		mw := make([]MiddlewareRef, len(r.Middleware))
-		for j, m := range r.Middleware {
-			mw[j] = MiddlewareRef{Name: m.Name, Args: append([]string(nil), m.Args...)}
-		}
-		out[i].Middleware = mw
+		out[i] = copyRouteInfo(r)
 	}
+	return out
+}
+
+// Walk invokes fn for every route registered during Mount, in Mount
+// order. Returning ErrStopWalk from fn ends the walk without propagating
+// an error; any other non-nil error from fn is returned to the caller.
+// Each RouteInfo passed to fn is a defensive copy — safe to mutate.
+//
+// Walk is the building block for introspection consumers (OpenAPI
+// generators, route-table CLIs, test helpers); use it instead of
+// iterating Routes() when you might want to early-stop or filter.
+func (e *Engine[T]) Walk(fn func(r RouteInfo) error) error {
+	for _, r := range e.routes {
+		if err := fn(copyRouteInfo(r)); err != nil {
+			if err == ErrStopWalk {
+				return nil
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// Lookup returns the RouteInfo for a given (method, path) pair, or
+// (zero, false) if no such route was registered. method is matched
+// exactly (case-sensitive); path matches the resolved path (including
+// any inherited prefix) exactly. The returned RouteInfo is a defensive
+// copy.
+func (e *Engine[T]) Lookup(method, path string) (RouteInfo, bool) {
+	for _, r := range e.routes {
+		if r.Method == method && r.Path == path {
+			return copyRouteInfo(r), true
+		}
+	}
+	return RouteInfo{}, false
+}
+
+// ErrStopWalk may be returned by the function passed to Engine.Walk to
+// stop iteration without surfacing an error to the caller.
+var ErrStopWalk = errors.New("fibermap: stop walk")
+
+func copyRouteInfo(r RouteInfo) RouteInfo {
+	out := r
+	out.Tags = append([]string(nil), r.Tags...)
+	mw := make([]MiddlewareRef, len(r.Middleware))
+	for j, m := range r.Middleware {
+		mw[j] = MiddlewareRef{Name: m.Name, Args: append([]string(nil), m.Args...)}
+	}
+	out.Middleware = mw
 	return out
 }
