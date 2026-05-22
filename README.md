@@ -262,6 +262,45 @@ cannot be referenced as the other; the YAML form must match the
 registration. If a factory returns an error from its setup, it surfaces as
 `CodeInvalidFactoryArgs` in the joined `Mount` error.
 
+## Body binding & validation
+
+Subpackage `fibermap/bind` ships a generic helper that combines
+`BodyParser` with a validator pass — typical request entry-point
+boilerplate, but typed and one-liner:
+
+```go
+import (
+    "github.com/go-playground/validator/v10"
+    "github.com/theizzatbek/fibermap/bind"
+)
+
+var v = validator.New()
+
+type CreateTaskReq struct {
+    Title string `json:"title" validate:"required,min=1,max=200"`
+}
+
+func (h *H) Create(c *Ctx) error {
+    req, err := bind.Body[CreateTaskReq](c.Ctx, v)
+    if err != nil {
+        return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+    }
+    // req is populated and validated; go.
+    ...
+}
+```
+
+The validator is injected via a one-method `Validator` interface
+(`Struct(any) error`) — **fibermap does not depend on
+`go-playground/validator`**. `*validator.Validate` satisfies the
+interface as-is, but any custom validator (JSON Schema, hand-rolled,
+...) works too. Pass `nil` to skip validation when you trust the
+body shape.
+
+Errors are wrapped via `errors.Is`: `bind.ErrParseBody` on JSON
+failure, `bind.ErrValidateBody` on validation failure — so the
+caller can distinguish them if it needs different HTTP responses.
+
 ## Introspection
 
 After `Mount`, `Engine.Routes()` returns a snapshot of every installed route:
