@@ -331,8 +331,8 @@ func (e *Engine[T]) wrapMW(mw MiddlewareFunc[T]) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		ctx, ok := c.Locals(ctxKey).(*Context[T])
 		if !ok {
-			// contextInit didn't run (e.g. error path) — should not happen.
-			return c.Next()
+			// contextInit didn't run — fail loudly rather than silently bypass.
+			return c.SendStatus(fiber.StatusInternalServerError)
 		}
 		return mw(ctx)
 	}
