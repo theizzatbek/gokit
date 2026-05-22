@@ -34,15 +34,6 @@ func main() {
 		}, nil
 	})
 
-	eng.SetRoleChecker(func(c *fibermap.Context[AppCtx], allowed []string) bool {
-		for _, r := range allowed {
-			if r == c.Data.Role {
-				return true
-			}
-		}
-		return false
-	})
-
 	must(eng.RegisterMiddleware("logger", func(c *fibermap.Context[AppCtx]) error {
 		log.Printf("→ %s %s  user=%s role=%s", c.Method(), c.Path(), c.Data.UserID, c.Data.Role)
 		return c.Next()
@@ -51,6 +42,22 @@ func main() {
 		log.Printf("audit: %s %s by %s", c.Method(), c.Path(), c.Data.UserID)
 		return c.Next()
 	}))
+
+	must(eng.RegisterMiddlewareFactory("require_role",
+		func(args []string) (fibermap.MiddlewareFunc[AppCtx], error) {
+			if len(args) == 0 {
+				return nil, fmt.Errorf("require_role: at least one role required")
+			}
+			allowed := append([]string(nil), args...)
+			return func(c *fibermap.Context[AppCtx]) error {
+				for _, r := range allowed {
+					if r == c.Data.Role {
+						return c.Next()
+					}
+				}
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "forbidden"})
+			}, nil
+		}))
 
 	must(eng.RegisterHandler("patient.list", func(c *fibermap.Context[AppCtx]) error {
 		return c.JSON(fiber.Map{"patients": []string{"Alice", "Bob"}, "by": c.Data.UserID})
@@ -71,15 +78,15 @@ func main() {
 
 	fmt.Println("Registered routes:")
 	for _, r := range eng.Routes() {
-		fmt.Printf("  %-6s %-25s -> %-20s roles=%v middleware=%v\n",
-			r.Method, r.Path, r.Handler, r.Roles, r.Middleware)
+		fmt.Printf("  %-6s %-25s -> %-20s middleware=%v\n",
+			r.Method, r.Path, r.Handler, r.Middleware)
 	}
 	fmt.Println()
 	fmt.Println("Try:")
 	fmt.Println("  curl                 'http://localhost:3000/v1/patients'")
 	fmt.Println("  curl -X POST         'http://localhost:3000/v1/patients?role=director'")
 	fmt.Println("  curl -X POST         'http://localhost:3000/v1/patients?role=guest'      # 403")
-	fmt.Println("  curl -X PUT -i       'http://localhost:3000/v1/patients/7?role=director'")
+	fmt.Println("  curl -X PUT          'http://localhost:3000/v1/patients/7?role=director'")
 	fmt.Println()
 
 	log.Fatal(app.Listen(":3000"))

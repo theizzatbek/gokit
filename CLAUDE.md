@@ -24,15 +24,19 @@ The whole library is a build-once-mount-once configurator (`Engine[T]`) paramete
 
 ### 1. The lifecycle is strict and enforced at Mount time
 
-`doc.go` documents it: `New → SetContextBuilder → RegisterHandler/RegisterMiddleware → SetRoleChecker (if YAML uses roles) → LoadFile/LoadBytes → Mount`. `Mount` validates everything together and returns an `errors.Join` of all problems — it does not install any route if validation produces even one error. `Mount` may only be called once per engine (`CodeAlreadyMounted`). Adding new constraints belongs in `Engine.buildPlan` (engine.go), which already accumulates `*Error` values into a slice.
+`doc.go` documents it: `New → SetContextBuilder → RegisterHandler / RegisterMiddleware / RegisterMiddlewareFactory → LoadFile/LoadBytes → Mount`. `Mount` validates everything together and returns an `errors.Join` of all problems — it does not install any route if validation produces even one error. `Mount` may only be called once per engine (`CodeAlreadyMounted`). Adding new constraints belongs in `Engine.buildPlan` (engine.go), which already accumulates `*Error` values into a slice.
 
 ### 2. The per-request `Context[T]` is built exactly once and propagated through Fiber's `Locals`
 
-`installPlan` (engine.go) installs a single root middleware (`contextInit`) via `router.Use` that calls `e.builder`, wraps the result in `&Context[T]{Ctx: c, Data: data}`, and stores it under the unexported `ctxKey` constant. Every per-route wrapper (`wrapMW`, `wrapHandler`, `wrapRoleGuard`) reads it back from `Locals`. If the cast fails, all three wrappers return **500** rather than silently bypassing — this is intentional (see commit `74c6569`). Any new wrapper added to the chain must follow the same "missing context = 500" convention.
+`installPlan` (engine.go) installs a single root middleware (`contextInit`) via `router.Use` that calls `e.builder`, wraps the result in `&Context[T]{Ctx: c, Data: data}`, and stores it under the unexported `ctxKey` constant. Every per-route wrapper (`wrapMW`, `wrapHandler`) reads it back from `Locals`. If the cast fails, both wrappers return **500** rather than silently bypassing — this is intentional (see commit `74c6569`). Any new wrapper added to the chain must follow the same "missing context = 500" convention.
 
-### 3. Middleware-chain resolution lives in `chain.go` and uses a sentinel
+### 3. Middleware-chain resolution lives in `chain.go`
 
-`resolveChain` flattens: outermost-ancestor groups first, then route-level middleware, then — if the route has `roles:` — the sentinel name `roleGuardName` (`"__role_guard__"`). `engine.installPlan` looks for that sentinel and substitutes `wrapRoleGuard(route.Roles)`; everything else looks up `e.middlewares[name]`. Sets named in `middleware_sets` are recursively expanded inside `resolveChain`; duplicate names are deduped keeping first occurrence. `Engine.Routes()` returns introspection records with the sentinel filtered out (`filterOutSentinel`).
+`resolveChain` flattens: outermost-ancestor groups first, then route-level middleware. Each entry is an `mwRef` (`{Name, Args}`); plain middleware has nil Args, factory middleware carries the YAML args. Sets named in `middleware_sets` are recursively expanded; duplicates are deduped by `(Name, Args)` via `dedupKey` — same factory with different args coexists in the chain.
+
+At `installPlan` time the engine builds a `dedupKey → fiber.Handler` cache from registered factories. Plain middleware (`ref.Args == nil`) bypasses the cache; factory middleware (any non-nil Args, even empty) calls `e.factories[Name](args)` once per unique `dedupKey` and caches the result. A factory returning an error aborts mount with `CodeInvalidFactoryArgs`.
+
+The plain/factory split is enforced at `buildPlan` time: a YAML scalar referencing a factory name (or a YAML map referencing a plain name) surfaces as `CodeUnknownMiddleware` with a guiding message rather than silently invoking the wrong code path.
 
 ### Errors are typed, not strings
 
@@ -40,7 +44,7 @@ Every error returned by the library is `*Error` (errors.go) with `Stage` (`parse
 
 ## YAML shape
 
-Defined by the unexported structs in `spec.go` (`rawConfig`, `rawGroup`, `rawRoute`). Groups nest. Both groups and routes accept a single `middleware_set:` name plus an explicit `middleware:` list — `combineSetAndList` prepends the set name and `resolveChain` expands it. Only the methods in `validHTTPMethods` (yaml.go) are accepted. `testdata/*.yaml` covers the supported shapes (nested groups, sets, roles, duplicate-route detection, cycle detection).
+Defined by the unexported structs in `spec.go` (`rawConfig`, `rawGroup`, `rawRoute`, `mwRef`). Groups nest. Both groups and routes accept a single `middleware_set:` name plus an explicit `middleware:` list — `combineSetAndList` prepends the set name and `resolveChain` expands it. `middleware:` items are heterogeneous: scalar string → `mwRef{Name}` (plain), single-key map `{name: [args...]}` → `mwRef{Name, Args}` (factory). Decoded by `mwRef.UnmarshalYAML` in yaml.go. Only the methods in `validHTTPMethods` (yaml.go) are accepted. `testdata/*.yaml` covers the supported shapes (nested groups, sets, factories, duplicate-route detection, cycle detection).
 
 ## Status
 

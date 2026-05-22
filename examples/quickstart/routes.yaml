@@ -16,10 +16,12 @@ groups:
           - method: POST
             path: ""
             handler: patient.create
-            roles: [director, receptionist]
+            middleware:
+              - require_role: [director, receptionist]
 
           - method: PUT
             path: /:id
             handler: patient.update
-            roles: [director]
-            middleware: [audit]
+            middleware:
+              - require_role: [director]
+              - audit
