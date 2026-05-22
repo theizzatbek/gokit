@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/theizzatbek/fibermap"
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/admin"
@@ -29,7 +30,7 @@ func buildEngine(t *testing.T) *fibermap.Engine[appctx.AppCtx] {
 	})
 	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
 
-	taskH := tasks.New(store)
+	taskH := tasks.New(store, validator.New())
 	eng.RegisterHandler("tasks.list", taskH.List)
 	eng.RegisterHandler("tasks.get", taskH.Get)
 	eng.RegisterHandler("tasks.create", taskH.Create)
@@ -92,7 +93,7 @@ func TestCreateThenList(t *testing.T) {
 		return appctx.AppCtx{UserID: uid, Role: role, Log: logger}, nil
 	})
 	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
-	taskH := tasks.New(store)
+	taskH := tasks.New(store, validator.New())
 	eng.RegisterHandler("tasks.list", taskH.List)
 	eng.RegisterHandler("tasks.get", taskH.Get)
 	eng.RegisterHandler("tasks.create", taskH.Create)
