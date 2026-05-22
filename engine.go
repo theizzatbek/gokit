@@ -52,42 +52,41 @@ func (e *Engine[T]) SetContextBuilder(fn ContextBuilder[T]) { e.builder = fn }
 func (e *Engine[T]) SetContextErrorHandler(h ContextErrorFunc) { e.ctxError = h }
 
 // RegisterHandler registers a handler under a name referenced from YAML.
-// Returns *Error with CodeDuplicateRegistration if the name is already taken.
-func (e *Engine[T]) RegisterHandler(name string, h HandlerFunc[T]) error {
+// Panics with *Error / CodeDuplicateRegistration if the name is already
+// taken — this is a programmer error at startup.
+func (e *Engine[T]) RegisterHandler(name string, h HandlerFunc[T]) {
 	if _, ok := e.handlers[name]; ok {
-		return &Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "handler " + name + " already registered"}
+		panic(&Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "handler " + name + " already registered"})
 	}
 	e.handlers[name] = h
-	return nil
 }
 
 // RegisterMiddleware registers a plain (no-args) middleware. YAML references
-// it as a scalar string. Returns *Error with CodeDuplicateRegistration if
-// the name is already taken (in either the plain or factory registry).
-func (e *Engine[T]) RegisterMiddleware(name string, m MiddlewareFunc[T]) error {
+// it as a scalar string. Panics with *Error / CodeDuplicateRegistration if
+// the name is already taken in either the plain or factory registry.
+func (e *Engine[T]) RegisterMiddleware(name string, m MiddlewareFunc[T]) {
 	if _, ok := e.middlewares[name]; ok {
-		return &Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "middleware " + name + " already registered"}
+		panic(&Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "middleware " + name + " already registered"})
 	}
 	if _, ok := e.factories[name]; ok {
-		return &Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "name " + name + " already registered as a middleware factory"}
+		panic(&Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "name " + name + " already registered as a middleware factory"})
 	}
 	e.middlewares[name] = m
-	return nil
 }
 
 // RegisterMiddlewareFactory registers a parameterized middleware. YAML
 // references it as a single-key mapping {name: [args...]}. The factory is
 // invoked once per (name, args) pair at Mount time; the returned
-// MiddlewareFunc is cached for the lifetime of the engine.
-func (e *Engine[T]) RegisterMiddlewareFactory(name string, f MiddlewareFactoryFunc[T]) error {
+// MiddlewareFunc is cached for the lifetime of the engine. Panics with
+// *Error / CodeDuplicateRegistration on name conflict.
+func (e *Engine[T]) RegisterMiddlewareFactory(name string, f MiddlewareFactoryFunc[T]) {
 	if _, ok := e.factories[name]; ok {
-		return &Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "middleware factory " + name + " already registered"}
+		panic(&Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "middleware factory " + name + " already registered"})
 	}
 	if _, ok := e.middlewares[name]; ok {
-		return &Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "name " + name + " already registered as a plain middleware"}
+		panic(&Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "name " + name + " already registered as a plain middleware"})
 	}
 	e.factories[name] = f
-	return nil
 }
 
 // LoadFile reads and parses a YAML file.
