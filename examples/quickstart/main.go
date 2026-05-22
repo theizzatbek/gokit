@@ -14,6 +14,13 @@ type AppCtx struct {
 	Role   string
 }
 
+// Ctx aliases fibermap.Context[AppCtx] so handler/middleware signatures
+// read as `func(c *Ctx) error` instead of carrying the generic parameter.
+type Ctx = fibermap.Context[AppCtx]
+
+// MW aliases fibermap.MiddlewareFunc[AppCtx] for the factory return type.
+type MW = fibermap.MiddlewareFunc[AppCtx]
+
 func main() {
 	app := fiber.New()
 
@@ -34,22 +41,22 @@ func main() {
 		}, nil
 	})
 
-	eng.RegisterMiddleware("logger", func(c *fibermap.Context[AppCtx]) error {
+	eng.RegisterMiddleware("logger", func(c *Ctx) error {
 		log.Printf("→ %s %s  user=%s role=%s", c.Method(), c.Path(), c.Data.UserID, c.Data.Role)
 		return c.Next()
 	})
-	eng.RegisterMiddleware("audit", func(c *fibermap.Context[AppCtx]) error {
+	eng.RegisterMiddleware("audit", func(c *Ctx) error {
 		log.Printf("audit: %s %s by %s", c.Method(), c.Path(), c.Data.UserID)
 		return c.Next()
 	})
 
 	eng.RegisterMiddlewareFactory("require_role",
-		func(args []string) (fibermap.MiddlewareFunc[AppCtx], error) {
+		func(args []string) (MW, error) {
 			if len(args) == 0 {
 				return nil, fmt.Errorf("require_role: at least one role required")
 			}
 			allowed := append([]string(nil), args...)
-			return func(c *fibermap.Context[AppCtx]) error {
+			return func(c *Ctx) error {
 				for _, r := range allowed {
 					if r == c.Data.Role {
 						return c.Next()
@@ -59,13 +66,13 @@ func main() {
 			}, nil
 		})
 
-	eng.RegisterHandler("patient.list", func(c *fibermap.Context[AppCtx]) error {
+	eng.RegisterHandler("patient.list", func(c *Ctx) error {
 		return c.JSON(fiber.Map{"patients": []string{"Alice", "Bob"}, "by": c.Data.UserID})
 	})
-	eng.RegisterHandler("patient.create", func(c *fibermap.Context[AppCtx]) error {
+	eng.RegisterHandler("patient.create", func(c *Ctx) error {
 		return c.Status(201).JSON(fiber.Map{"created": true, "by": c.Data.UserID})
 	})
-	eng.RegisterHandler("patient.update", func(c *fibermap.Context[AppCtx]) error {
+	eng.RegisterHandler("patient.update", func(c *Ctx) error {
 		return c.JSON(fiber.Map{"updated": c.Params("id"), "by": c.Data.UserID})
 	})
 
