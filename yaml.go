@@ -3,6 +3,7 @@ package fibermap
 import (
 	"fmt"
 	"net/http"
+	"os"
 
 	"gopkg.in/yaml.v3"
 )
@@ -94,4 +95,12 @@ func detectSetCycles(sets map[string][]string, file string) error {
 		}
 	}
 	return nil
+}
+
+func loadFileToConfig(path string) (*rawConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, &Error{Stage: "parse", Code: CodeInvalidYAML, Message: err.Error(), File: path}
+	}
+	return parseBytes(data, path)
 }

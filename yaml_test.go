@@ -151,3 +151,28 @@ func TestParseBytes_MiddlewareSets(t *testing.T) {
 		t.Errorf("protected set = %v, want [base auth authorized]", got)
 	}
 }
+
+func TestLoadFileToConfig_Success(t *testing.T) {
+	cfg, err := loadFileToConfig(filepath.Join("testdata", "basic.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Groups) != 1 {
+		t.Errorf("groups = %d, want 1", len(cfg.Groups))
+	}
+}
+
+func TestLoadFileToConfig_FileNotFound(t *testing.T) {
+	_, err := loadFileToConfig(filepath.Join("testdata", "nope.yaml"))
+
+	var fe *Error
+	if !errors.As(err, &fe) {
+		t.Fatalf("want *Error, got %T: %v", err, err)
+	}
+	if fe.Code != CodeInvalidYAML {
+		t.Errorf("code = %q", fe.Code)
+	}
+	if fe.File == "" {
+		t.Errorf("File should be populated")
+	}
+}
