@@ -118,7 +118,7 @@ func main() {
 	// fibermap.RegisterHandler — same shape, just no typed body.
 	taskH := tasks.New(store, valid)
 	fibermap.RegisterHandler(eng, "tasks.list", taskH.List,
-		fibermap.WithResponse(fiber.StatusOK, fiber.Map{"tasks": []tasks.Task{}}))
+		fibermap.WithResponse(fiber.StatusOK, tasks.ListResponse{}))
 	fibermap.RegisterHandler(eng, "tasks.get", taskH.Get,
 		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
 	fibermap.RegisterHandlerWithBody(eng, "tasks.create", taskH.Create,
@@ -136,7 +136,7 @@ func main() {
 	// `{"error": "..."}` object. Declared once on the generator so
 	// every operation in the spec advertises the same error contract
 	// without per-handler boilerplate.
-	errBody := fiber.Map{"error": ""}
+	// (errBody removed — typed tasks.ErrorResponse passed directly below)
 	gen := openapi.NewGenerator(eng,
 		openapi.WithInfo(openapi.Info{
 			Title:       "Tasks API",
@@ -144,11 +144,11 @@ func main() {
 			Description: "Per-user task lists — demo for the fibermap library.",
 		}),
 		// Universal error responses — applied to every operation.
-		openapi.WithDefaultResponse(fiber.StatusBadRequest, errBody),
-		openapi.WithDefaultResponse(fiber.StatusUnauthorized, errBody),
-		openapi.WithDefaultResponse(fiber.StatusForbidden, errBody),
-		openapi.WithDefaultResponse(fiber.StatusNotFound, errBody),
-		openapi.WithDefaultResponse(fiber.StatusInternalServerError, errBody),
+		openapi.WithDefaultResponse(fiber.StatusBadRequest, tasks.ErrorResponse{}),
+		openapi.WithDefaultResponse(fiber.StatusUnauthorized, tasks.ErrorResponse{}),
+		openapi.WithDefaultResponse(fiber.StatusForbidden, tasks.ErrorResponse{}),
+		openapi.WithDefaultResponse(fiber.StatusNotFound, tasks.ErrorResponse{}),
+		openapi.WithDefaultResponse(fiber.StatusInternalServerError, tasks.ErrorResponse{}),
 		// `auth` is the fibermap-middleware name. Bearer OR Basic both
 		// satisfy it (see auth.BearerOrBasic in WithUse below) — the
 		// spec lists both schemes; clients pick either.
