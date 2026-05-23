@@ -34,10 +34,11 @@
 //	curl http://localhost:3000/metrics       # Prometheus text format
 //
 //	# OpenAPI 3.0 spec generated from routes.yaml + typed handler
-//	# schemas (see Engine.Add(...) wiring below).
-//	curl -H "Authorization: Bearer alice-token" http://localhost:3000/openapi.json
+//	# schemas. Public — no auth required.
+//	curl http://localhost:3000/openapi.json
 //
 //	# Browsable HTML docs (Scalar API Reference, loaded from CDN).
+//	# Public — open in browser.
 //	open http://localhost:3000/docs
 package main
 
@@ -186,7 +187,10 @@ func main() {
 		}),
 		fibermap.WithRecover(logger),
 		fibermap.WithRequestLogger(logger, "/healthz", "/metrics"),
-		fibermap.WithUse(auth.BearerOrBasic()),
+		// `/docs` and `/openapi.json` are public observability endpoints
+		// — same convention as `/healthz` and `/metrics`. Auth would
+		// just make the docs unbrowsable from a plain browser.
+		fibermap.WithUse(auth.BearerOrBasic("/docs", "/openapi.json")),
 		fibermap.WithRoutesFS(routesFS),
 	)
 	if err != nil {

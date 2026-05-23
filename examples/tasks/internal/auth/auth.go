@@ -88,12 +88,26 @@ func Basic() fiber.Handler {
 // corresponding scheme. Used in the demo so /docs can show both
 // auth options in the OpenAPI spec.
 //
-// Order: inspect the Authorization header prefix. No prefix → 401
-// without consulting either scheme (cheap fail-fast).
-func BearerOrBasic() fiber.Handler {
+// `publicPaths` opt certain paths out of authentication entirely
+// (the middleware calls c.Next without consulting any scheme). Pass
+// the OpenAPI spec/docs paths here so they're browsable from a
+// vanilla browser without credentials. Typical:
+//
+//	auth.BearerOrBasic("/docs", "/openapi.json")
+//
+// Order: skip-list first, then inspect the Authorization header
+// prefix. No prefix → 401 without consulting either scheme.
+func BearerOrBasic(publicPaths ...string) fiber.Handler {
+	skip := make(map[string]struct{}, len(publicPaths))
+	for _, p := range publicPaths {
+		skip[p] = struct{}{}
+	}
 	bearer := Bearer()
 	basic := Basic()
 	return func(c *fiber.Ctx) error {
+		if _, public := skip[c.Path()]; public {
+			return c.Next()
+		}
 		h := c.Get("Authorization")
 		switch {
 		case strings.HasPrefix(h, "Bearer "):
