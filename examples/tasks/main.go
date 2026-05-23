@@ -43,7 +43,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"sync"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -147,42 +146,14 @@ func main() {
 		Response(204, nil).
 		Response(403, fiber.Map{"error": ""})
 
-	var (
-		specOnce sync.Once
-		specJSON []byte
-		specErr  error
-	)
-	eng.Add("GET", "/openapi.json", "openapi.spec",
-		func(c *fibermap.Context[appctx.AppCtx]) error {
-			specOnce.Do(func() { specJSON, specErr = gen.Generate() })
-			if specErr != nil {
-				c.Data.Log.Error("openapi generation failed", "err", specErr)
-				return c.Status(http.StatusInternalServerError).
-					JSON(fiber.Map{"error": "spec generation failed"})
-			}
-			c.Set("Content-Type", "application/json")
-			return c.Send(specJSON)
-		},
-		fibermap.AddOpts{
-			Description: "OpenAPI 3.0 specification for this API",
-			Tags:        []string{"meta"},
-		},
-	)
-	// Browsable docs at /docs — Scalar API Reference, loaded from a
-	// CDN. The HTML is generated once and served as a static byte
-	// slice. Try `curl http://localhost:3000/docs` (or open in a
-	// browser) to see the spec rendered.
-	docsHTML := openapi.Scalar("/openapi.json", "Tasks API — Docs")
-	eng.Add("GET", "/docs", "openapi.docs",
-		func(c *fibermap.Context[appctx.AppCtx]) error {
-			c.Set("Content-Type", "text/html; charset=utf-8")
-			return c.SendString(docsHTML)
-		},
-		fibermap.AddOpts{
-			Description: "Browsable API documentation (Scalar UI)",
-			Tags:        []string{"meta"},
-		},
-	)
+	// Mount installs /openapi.json (sync.Once-cached spec) and /docs
+	// (Scalar UI viewer) — both as programmatic routes on the
+	// engine. Pass MountOpts to override paths or pick a different
+	// viewer (openapi.SwaggerUI / openapi.Redoc).
+	if err := gen.Mount(); err != nil {
+		logger.Error("openapi.Mount failed", "err", err)
+		os.Exit(1)
+	}
 
 	// Run covers everything a production service typically needs.
 	// The ops bundle (Recover, RequestID, RequestLogger, HealthCheck)

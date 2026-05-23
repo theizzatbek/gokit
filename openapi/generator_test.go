@@ -314,3 +314,88 @@ groups:
 		t.Errorf("default version = %v", info["version"])
 	}
 }
+
+func TestMount_DefaultsInstallBothRoutes(t *testing.T) {
+	e := fibermap.New[appCtx]()
+	e.SetContextBuilder(func(c *fiber.Ctx) (appCtx, error) { return appCtx{}, nil })
+	e.RegisterHandler("ping", func(c *fibermap.Context[appCtx]) error { return c.SendString("pong") })
+
+	if err := e.LoadBytes([]byte(`
+groups:
+  - prefix: /v1
+    routes:
+      - { method: GET, path: /ping, handler: ping, name: ping }
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	gen := openapi.NewGenerator(e,
+		openapi.WithInfo(openapi.Info{Title: "T", Version: "1"}),
+	)
+	if err := gen.Mount(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Fatal(err)
+	}
+
+	var sawSpec, sawDocs bool
+	for r := range e.All() {
+		switch r.Path {
+		case "/openapi.json":
+			sawSpec = true
+			if r.Source != fibermap.SourceProgrammatic {
+				t.Errorf("/openapi.json source = %q", r.Source)
+			}
+		case "/docs":
+			sawDocs = true
+		}
+	}
+	if !sawSpec {
+		t.Error("/openapi.json not installed by Mount()")
+	}
+	if !sawDocs {
+		t.Error("/docs not installed by Mount()")
+	}
+}
+
+func TestMount_CustomPathsAndViewer(t *testing.T) {
+	e := fibermap.New[appCtx]()
+	e.SetContextBuilder(func(c *fiber.Ctx) (appCtx, error) { return appCtx{}, nil })
+	e.RegisterHandler("ping", func(c *fibermap.Context[appCtx]) error { return c.SendString("pong") })
+	if err := e.LoadBytes([]byte(`
+groups:
+  - routes:
+      - { method: GET, path: /x, handler: ping, name: ping }
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	gen := openapi.NewGenerator(e, openapi.WithInfo(openapi.Info{Title: "T", Version: "1"}))
+	err := gen.Mount(openapi.MountOpts{
+		SpecPath:   "/api/openapi",
+		DocsPath:   "/api/docs",
+		DocsTitle:  "Custom Title",
+		DocsViewer: openapi.SwaggerUI,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := e.Lookup("GET", "/api/openapi"); !ok {
+		t.Error("/api/openapi missing")
+	}
+	if _, ok := e.Lookup("GET", "/api/docs"); !ok {
+		t.Error("/api/docs missing")
+	}
+	// Defaults must NOT be installed.
+	if _, ok := e.Lookup("GET", "/openapi.json"); ok {
+		t.Error("default /openapi.json leaked")
+	}
+	if _, ok := e.Lookup("GET", "/docs"); ok {
+		t.Error("default /docs leaked")
+	}
+}

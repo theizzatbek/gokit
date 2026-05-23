@@ -5,10 +5,108 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/invopop/jsonschema"
 	"github.com/theizzatbek/fibermap"
 )
+
+// MountOpts configures [Generator.Mount]. The zero value yields
+// sensible defaults:
+//
+//   - SpecPath:    "/openapi.json"
+//   - DocsPath:    "/docs"
+//   - DocsViewer:  Scalar
+//   - DocsTitle:   the generator's Info.Title (or "API Documentation")
+//
+// Pass an empty string in SpecPath or DocsPath to disable that route.
+// (Disabling SpecPath also disables DocsPath, since the docs page
+// needs a spec URL to load.)
+type MountOpts struct {
+	SpecPath   string
+	DocsPath   string
+	DocsTitle  string
+	DocsViewer func(specURL, title string) string
+}
+
+// Mount installs two programmatic routes on the generator's engine:
+//
+//   - GET SpecPath — the OpenAPI 3.0 JSON spec (sync.Once-cached)
+//   - GET DocsPath — an HTML viewer pointing at SpecPath
+//
+// Both routes are registered via [fibermap.Engine.Add], so they MUST
+// be wired BEFORE the engine is mounted (i.e. before Engine.Run or
+// Engine.Mount). Adding after Mount panics with
+// CodeRegisterAfterMount.
+//
+// The spec is generated lazily on the first GET to SpecPath and
+// cached for subsequent requests — generation errors surface as a
+// 500 on the first request. The docs HTML is generated upfront
+// (only needs SpecPath + title — no engine state) and served as a
+// static byte slice on every request.
+//
+// Typical use replaces ~25 lines of Engine.Add + sync.Once
+// boilerplate:
+//
+//	gen := openapi.NewGenerator(eng, ...)
+//	gen.OnHandler("tasks.create").Body(...).Response(...)
+//	if err := gen.Mount(); err != nil { log.Fatal(err) }
+func (g *Generator[T]) Mount(opts ...MountOpts) error {
+	var cfg MountOpts
+	if len(opts) > 0 {
+		cfg = opts[0]
+	}
+	if cfg.SpecPath == "" {
+		cfg.SpecPath = "/openapi.json"
+	}
+	if cfg.DocsPath == "" {
+		cfg.DocsPath = "/docs"
+	}
+	if cfg.DocsTitle == "" {
+		cfg.DocsTitle = g.cfg.info.Title
+	}
+	if cfg.DocsViewer == nil {
+		cfg.DocsViewer = Scalar
+	}
+
+	var (
+		specOnce sync.Once
+		specJSON []byte
+		specErr  error
+	)
+	g.eng.Add("GET", cfg.SpecPath, "openapi.spec",
+		func(c *fibermap.Context[T]) error {
+			specOnce.Do(func() { specJSON, specErr = g.Generate() })
+			if specErr != nil {
+				return c.Status(500).JSON(map[string]string{"error": "openapi: " + specErr.Error()})
+			}
+			c.Set("Content-Type", "application/json")
+			return c.Send(specJSON)
+		},
+		fibermap.AddOpts{
+			Description: "OpenAPI 3.0 specification for this API",
+			Tags:        []string{"meta"},
+		},
+	)
+
+	if cfg.DocsPath == "-" {
+		// Sentinel: callers who want spec-only pass "-" to suppress
+		// the docs route. Empty string falls through to the default.
+		return nil
+	}
+	docsHTML := cfg.DocsViewer(cfg.SpecPath, cfg.DocsTitle)
+	g.eng.Add("GET", cfg.DocsPath, "openapi.docs",
+		func(c *fibermap.Context[T]) error {
+			c.Set("Content-Type", "text/html; charset=utf-8")
+			return c.SendString(docsHTML)
+		},
+		fibermap.AddOpts{
+			Description: "Browsable API documentation",
+			Tags:        []string{"meta"},
+		},
+	)
+	return nil
+}
 
 // Generator builds an OpenAPI 3.0 spec from a fibermap engine.
 // Construct via [NewGenerator]; attach per-handler request/response

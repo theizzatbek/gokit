@@ -13,20 +13,32 @@ _Nothing yet._
 ## [v0.7.0] - 2026-05-23
 
 OpenAPI docs viewers — three HTML helpers that render the generated
-spec in a browser. One-liner wiring via `Engine.Add`; the HTML is
-static so first-page latency is whatever the user's browser takes to
-fetch the JS bundle from a CDN.
+spec in a browser — plus a one-line `Generator.Mount()` that wires
+both the spec endpoint AND the docs viewer with sensible defaults.
+Replaces ~25 lines of `Engine.Add` + `sync.Once` boilerplate with one
+call.
 
 ### Added
+- `Generator.Mount(opts ...MountOpts) error` — installs two
+  programmatic routes on the generator's engine:
+    - `GET /openapi.json` — spec, generated lazily on first request,
+      cached for subsequent requests.
+    - `GET /docs` — HTML viewer pointing at the spec.
+  Both paths and the docs viewer are overridable via `MountOpts`
+  (zero value uses sensible defaults — Scalar viewer, the
+  generator's Info.Title as the docs title).
+- `openapi.MountOpts` — config struct for `Mount` with `SpecPath`,
+  `DocsPath`, `DocsTitle`, `DocsViewer` fields.
 - `openapi.SwaggerUI(specURL, title)` — Swagger UI 5.x via unpkg.
 - `openapi.Redoc(specURL, title)` — Redoc 2.x via unpkg.
 - `openapi.Scalar(specURL, title)` — Scalar API Reference via
   jsdelivr (modern UI, dark-mode default, built-in API client).
-- All three return a self-contained HTML string with user input
-  HTML-escaped (`html.EscapeString`) — safe to pass title/url from
-  config or environment.
-- `examples/tasks` now mounts Scalar at `/docs` alongside the
-  existing `/openapi.json`.
+  Default viewer for `Mount`.
+- All three viewer helpers return a self-contained HTML string with
+  user input HTML-escaped (`html.EscapeString`) — safe to pass
+  title/url from config or environment.
+- `examples/tasks/main.go` now calls `gen.Mount()` instead of the
+  hand-rolled spec + docs wiring it had in v0.6.0.
 
 ## [v0.6.0] - 2026-05-23
 

@@ -662,23 +662,44 @@ struct fields' `json:`, `validate:`, and `description` tags are
 honoured. Reflected types are hoisted into
 `components.schemas` and referenced via `$ref`.
 
-To serve the spec at `/openapi.json`, combine with `Engine.Add`:
+### `gen.Mount()` — one-line wiring
+
+To expose the spec at `/openapi.json` AND a docs viewer at `/docs`:
 
 ```go
-var (
-    once     sync.Once
-    cached   []byte
-    cacheErr error
-)
-eng.Add("GET", "/openapi.json", "openapi.spec",
-    func(c *fibermap.Context[AppCtx]) error {
-        once.Do(func() { cached, cacheErr = gen.Generate() })
-        if cacheErr != nil { /* ... */ }
-        c.Set("Content-Type", "application/json")
-        return c.Send(cached)
-    },
-)
+gen := openapi.NewGenerator(eng, opts...)
+gen.OnHandler("tasks.create").Body(CreateReq{}).Response(201, Task{})
+// ...
+
+if err := gen.Mount(); err != nil {
+    log.Fatal(err)
+}
 ```
+
+That's it. `Mount` installs two programmatic routes on the engine via
+`Engine.Add`:
+
+- `GET /openapi.json` — spec (lazy-generated on first request, cached
+  via `sync.Once`).
+- `GET /docs` — Scalar HTML viewer pointing at `/openapi.json`.
+
+Customize via `MountOpts` (zero value uses defaults shown above):
+
+```go
+gen.Mount(openapi.MountOpts{
+    SpecPath:   "/api/openapi",
+    DocsPath:   "/api/docs",
+    DocsTitle:  "Tasks API",                // defaults to gen Info.Title
+    DocsViewer: openapi.SwaggerUI,          // or .Redoc, or .Scalar
+})
+```
+
+`Mount` must be called BEFORE `Engine.Run` / `Engine.Mount` — same
+constraint as any `Engine.Add`.
+
+If you need finer control (different caching, auth-gated docs,
+multiple viewer mounts), skip `Mount` and call `gen.Generate()` /
+`openapi.Scalar(...)` directly inside your own `Engine.Add` handlers.
 
 ### Browsable docs at `/docs`
 
