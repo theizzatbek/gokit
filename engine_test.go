@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -654,4 +655,331 @@ groups:
 		t.Fatal(err)
 	}
 	return e
+}
+
+func TestTimeout_InvalidDuration(t *testing.T) {
+	e := newTestEngine()
+	err := e.LoadFile(filepath.Join("testdata", "invalid_timeout.yaml"))
+	if !containsCode(err, CodeInvalidTimeout) {
+		t.Errorf("want CodeInvalidTimeout, got %v", err)
+	}
+}
+
+func TestTimeout_ZeroNotAllowed(t *testing.T) {
+	e := newTestEngine()
+	err := e.LoadBytes([]byte(`
+groups:
+  - routes:
+      - { method: GET, path: /x, handler: x, timeout: 0s }
+`))
+	if !containsCode(err, CodeInvalidTimeout) {
+		t.Errorf("want CodeInvalidTimeout, got %v", err)
+	}
+}
+
+func TestTimeout_RouteInfoSurfacesSpec(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("fast", func(c *Context[engCtx]) error { return c.SendString("ok") })
+	e.RegisterHandler("slow", func(c *Context[engCtx]) error { return c.SendString("ok") })
+	e.RegisterHandler("upload", func(c *Context[engCtx]) error { return c.SendString("ok") })
+	if err := e.LoadFile(filepath.Join("testdata", "timeout.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Fatal(err)
+	}
+
+	if r, _ := e.Lookup("GET", "/v1/fast"); r.Timeout != "" {
+		t.Errorf("fast.Timeout = %q, want empty", r.Timeout)
+	}
+	if r, _ := e.Lookup("GET", "/v1/slow"); r.Timeout != "50ms" {
+		t.Errorf("slow.Timeout = %q, want 50ms", r.Timeout)
+	}
+	if r, _ := e.Lookup("POST", "/v1/upload"); r.Timeout != "1m30s" {
+		t.Errorf("upload.Timeout = %q, want 1m30s", r.Timeout)
+	}
+}
+
+func TestTimeout_FiresOnSlowHandler(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("slow", func(c *Context[engCtx]) error {
+		// Wait for deadline; NewWithContext surfaces context.DeadlineExceeded
+		// as 408 Request Timeout.
+		<-c.UserContext().Done()
+		return c.UserContext().Err()
+	})
+	if err := e.LoadBytes([]byte(`
+groups:
+  - routes:
+      - { method: GET, path: /slow, handler: slow, timeout: 50ms }
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	resp, err := app.Test(httptest.NewRequest("GET", "/slow", nil), int(time.Second/time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != fiber.StatusRequestTimeout {
+		t.Errorf("status = %d, want %d", resp.StatusCode, fiber.StatusRequestTimeout)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("request took %v, expected to abort near the 50ms deadline", elapsed)
+	}
+}
+
+func TestTimeout_PassesThroughFastHandler(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("fast", func(c *Context[engCtx]) error {
+		return c.SendString("ok")
+	})
+	if err := e.LoadBytes([]byte(`
+groups:
+  - routes:
+      - { method: GET, path: /fast, handler: fast, timeout: 1s }
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/fast", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestCache_InvalidTTL_FailsLoad(t *testing.T) {
+	cases := []struct {
+		name, ttl string
+	}{
+		{"empty", ""},
+		{"garbage", "nope"},
+		{"zero", "0s"},
+		{"negative", "-1s"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEngine()
+			yaml := "groups:\n  - routes:\n      - { method: GET, path: /x, handler: x, cache: {ttl: \"" + tc.ttl + "\"} }\n"
+			err := e.LoadBytes([]byte(yaml))
+			if !containsCode(err, CodeInvalidCache) {
+				t.Errorf("want CodeInvalidCache, got %v", err)
+			}
+		})
+	}
+}
+
+func TestCache_ScalarForm(t *testing.T) {
+	var hits int32
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("counter", func(c *Context[engCtx]) error {
+		hits++
+		return c.SendString("ok")
+	})
+	if err := e.LoadBytes([]byte(`
+groups:
+  - routes:
+      - { method: GET, path: /x, handler: counter, cache: 1m }
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if _, err := app.Test(httptest.NewRequest("GET", "/x", nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hits != 1 {
+		t.Errorf("handler invoked %d times, want 1 (cached)", hits)
+	}
+}
+
+func TestCache_KeyByIsolatesByData(t *testing.T) {
+	var hits int32
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) {
+		return engCtx{UserID: c.Get("X-User")}, nil
+	})
+	e.SetCacheDefaults(CacheDefaults[engCtx]{
+		KeyBy: func(c *Context[engCtx]) string { return c.Data.UserID },
+	})
+	e.RegisterHandler("counter", func(c *Context[engCtx]) error {
+		hits++
+		return c.SendString("ok " + c.Data.UserID)
+	})
+	if err := e.LoadBytes([]byte(`
+groups:
+  - routes:
+      - { method: GET, path: /x, handler: counter, cache: 1m }
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	mk := func(user string) {
+		req := httptest.NewRequest("GET", "/x", nil)
+		req.Header.Set("X-User", user)
+		if _, err := app.Test(req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("alice")
+	mk("alice")
+	mk("bob")
+	mk("bob")
+	if hits != 2 {
+		t.Errorf("handler invoked %d times, want 2 (one per user)", hits)
+	}
+}
+
+func TestCache_VaryHeaderIsolatesByHeader(t *testing.T) {
+	var hits int32
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("counter", func(c *Context[engCtx]) error {
+		hits++
+		return c.SendString("ok")
+	})
+	if err := e.LoadBytes([]byte(`
+groups:
+  - routes:
+      - method: GET
+        path: /x
+        handler: counter
+        cache:
+          ttl: 1m
+          vary_header: [Accept-Language]
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	mk := func(lang string) {
+		req := httptest.NewRequest("GET", "/x", nil)
+		req.Header.Set("Accept-Language", lang)
+		if _, err := app.Test(req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("en")
+	mk("en")
+	mk("ru")
+	mk("ru")
+	if hits != 2 {
+		t.Errorf("handler invoked %d times, want 2 (one per language)", hits)
+	}
+}
+
+func TestCache_ControlFlag_BypassesOnNoStore(t *testing.T) {
+	var hits int32
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("counter", func(c *Context[engCtx]) error {
+		hits++
+		return c.SendString("ok")
+	})
+	if err := e.LoadBytes([]byte(`
+groups:
+  - routes:
+      - method: GET
+        path: /x
+        handler: counter
+        cache: {ttl: 1m, control: true}
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := app.Test(httptest.NewRequest("GET", "/x", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Test(httptest.NewRequest("GET", "/x", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 {
+		t.Fatalf("after 2 vanilla requests, hits = %d, want 1 (cached)", hits)
+	}
+	bypass := httptest.NewRequest("GET", "/x", nil)
+	bypass.Header.Set("Cache-Control", "no-store")
+	if _, err := app.Test(bypass); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 2 {
+		t.Errorf("no-store hit count = %d, want 2", hits)
+	}
+}
+
+func TestCache_RouteInfoSurfacesSpec(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("h", func(c *Context[engCtx]) error { return c.SendString("ok") })
+	if err := e.LoadBytes([]byte(`
+groups:
+  - routes:
+      - method: GET
+        path: /scalar
+        handler: h
+        cache: 30s
+      - method: GET
+        path: /full
+        handler: h
+        cache:
+          ttl: 5m
+          control: true
+          headers: true
+          vary_header: [Accept-Language, Accept-Encoding]
+`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Fatal(err)
+	}
+
+	if r, _ := e.Lookup("GET", "/scalar"); r.Cache == nil || r.Cache.TTL != "30s" {
+		t.Errorf("scalar Cache = %+v, want TTL=30s", r.Cache)
+	}
+	r, _ := e.Lookup("GET", "/full")
+	if r.Cache == nil {
+		t.Fatal("full Cache = nil")
+	}
+	if r.Cache.TTL != "5m" || !r.Cache.Control || !r.Cache.Headers {
+		t.Errorf("full Cache = %+v", r.Cache)
+	}
+	if len(r.Cache.VaryHeader) != 2 || r.Cache.VaryHeader[0] != "Accept-Language" {
+		t.Errorf("vary_header = %v", r.Cache.VaryHeader)
+	}
 }

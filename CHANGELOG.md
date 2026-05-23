@@ -10,6 +10,94 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 _Nothing yet._
 
+## [v0.2.0] - 2026-05-23
+
+A "less boilerplate" release. Headline features: a one-call `Engine.Run`
+launcher that hides `fiber.New`/`LoadFile`/`Mount`/`Listen`/graceful
+shutdown; first-class `cache:` and `timeout:` YAML fields; the
+`fibermap/factory` subpackage of ready-made role/scope guards and
+Fiber-handler adapters; query + path-param binding helpers symmetric
+to `bind.Body[T]`; and a built-in `fibermap.RequestID()` middleware
+so projects stop copying the same eight lines.
+
+### Added
+- `fibermap.RequestID()` — built-in Fiber middleware that ensures
+  every request carries `X-Request-ID`: reads incoming, generates a
+  16-hex-char identifier from `crypto/rand` if missing, stashes the
+  value on `c.Locals(fibermap.LocalsRequestID)` for the
+  ContextBuilder, and echoes it back in the response header. Wire
+  via `WithUse(fibermap.RequestID(), …)` or `app.Use(fibermap.RequestID())`.
+  Exposes constants `LocalsRequestID = "request_id"` and
+  `HeaderRequestID = "X-Request-ID"`.
+- `Engine[T].Run(opts ...RunOption)` — one-call launcher that wraps
+  `fiber.New` + `LoadFile("routes.yaml")` + `Mount` +
+  `app.Listen(":3000")` plus SIGINT/SIGTERM graceful shutdown (10s
+  drain). Defaults are all overridable via options:
+  - `WithAddr(addr)` — change the listen address.
+  - `WithRoutesPath(path)` — change the YAML filename.
+  - `WithRoutesFS(fs.FS)` — load from `embed.FS`.
+  - `WithFiberConfig(fiber.Config)` — custom `fiber.New` config.
+  - `WithUse(handlers...)` — Fiber-level middlewares installed before
+    Mount (run before `ContextBuilder`).
+  - `WithConfigureApp(fn)` — escape hatch with raw `*fiber.App`.
+  - `WithShutdownTimeout(d)` — drain budget on signal.
+  - `WithoutSignalHandling()` — disable Run's signal trap entirely.
+  Run skips loading if the engine already has a YAML document
+  preloaded. Manual `LoadFile`/`Mount`/`Listen` continues to work.
+  Demonstrated in `examples/quickstart`.
+- `bind.Query[T]` and `bind.Params[T]` — symmetric to `bind.Body[T]`,
+  wrap Fiber's `QueryParser` / `ParamsParser` and run the same
+  `Validator` interface. Own sentinel errors: `ErrParseQuery` /
+  `ErrValidateQuery`, `ErrParseParams` / `ErrValidateParams`.
+- Per-route `timeout:` field in `routes.yaml`. Accepts Go duration
+  strings (`"5s"`, `"300ms"`, `"1m30s"`). When set, the handler is
+  wrapped with `timeout.NewWithContext` from Fiber: `c.UserContext()`
+  gets the deadline, and `context.DeadlineExceeded` surfaces as
+  408 Request Timeout. Bad / zero / negative values fail at parse with
+  `CodeInvalidTimeout`. Verbatim YAML value surfaced on
+  `RouteInfo.Timeout` for introspection. JSON Schema updated.
+- New subpackage `fibermap/factory` — ready-made middleware factories
+  and Fiber-handler adapters:
+  - `RequireRole[T](accessor, opts...)` — role guard.
+  - `RequireAnyScope[T](accessor, opts...)` — OAuth-any-of scope guard.
+  - `Adapter[T](fiber.Handler)` — bridge a plain Fiber handler into
+    `MiddlewareFunc[T]`.
+  - `AdapterFactory[T](func(args []string) (fiber.Handler, error))` —
+    bridge a parameterized producer into `MiddlewareFactoryFunc[T]`.
+  - `WithDenyHandler(h)` — customize the guards' 403 response.
+- Built-in **response cache** as a first-class route field — no
+  middleware-factory registration required. YAML accepts a scalar
+  duration string or a mapping with `ttl`, `control`, `headers`,
+  `vary_header`:
+  ```yaml
+  - method: GET
+    path: /reports
+    handler: reports.list
+    cache: 30s
+  - method: GET
+    path: /products
+    handler: products.list
+    cache:
+      ttl: 30s
+      control: true
+      headers: true
+      vary_header: [Accept-Language]
+  ```
+  Engine-wide knobs (`Storage`, `KeyBy`, `MaxBytes`) live on
+  `Engine.SetCacheDefaults(CacheDefaults[T]{...})`. Defaults: Fiber's
+  in-process map, no `KeyBy` — set `KeyBy` whenever the cached
+  response depends on the authenticated user, or you will serve one
+  user's body to another. Surfaced on `RouteInfo.Cache` for
+  introspection. Bad / zero / negative TTL or empty `vary_header`
+  entries fail at parse with `CodeInvalidCache`.
+- `fibermap.ContextFrom[T](c *fiber.Ctx) (*Context[T], bool)` — typed
+  accessor for the per-request `Context[T]` stashed by fibermap's
+  root middleware. Lets factories and adapters that take a plain
+  `*fiber.Ctx` (such as cache key generators) read `Data` without
+  re-running `ContextBuilder`.
+- Indirect dep: `github.com/tinylib/msgp` (pulled by
+  `fiber/middleware/cache`).
+
 ## [v0.1.0] - 2026-05-22
 
 First tagged release. Includes everything between the original

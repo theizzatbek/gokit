@@ -79,9 +79,10 @@ Two runnable examples — pick the one matching how you intend to use the lib:
 ```
 New → SetContextBuilder
     → RegisterHandler / RegisterMiddleware / RegisterMiddlewareFactory
-    → LoadFile / LoadBytes / LoadFS
-    → Validate                  (optional dry-run, no router needed)
-    → Mount                     (one-shot; subsequent calls error)
+    → LoadFile / LoadBytes / LoadFS       (optional with Run — see below)
+    → Validate                            (optional dry-run, no router needed)
+    → Mount                               (one-shot; subsequent calls error)
+    → app.Listen(":3000")
 ```
 
 `Mount` validates everything against registered names and returns *all*
@@ -98,6 +99,68 @@ var routesFS embed.FS
 
 eng.LoadFS(routesFS, "routes.yaml")
 ```
+
+### Built-in `RequestID()` middleware
+
+`fibermap.RequestID()` is a Fiber-level middleware (install via
+`WithUse` or `app.Use`) that ensures every request carries an
+`X-Request-ID`: it reads the incoming header, generates a fresh
+16-hex-character identifier when missing, stashes the value on
+`c.Locals(fibermap.LocalsRequestID)`, and echoes it back to the
+response. Wire it before any auth middleware so 401s also carry the
+ID:
+
+```go
+eng.Run(fibermap.WithUse(fibermap.RequestID(), auth.Bearer()))
+```
+
+The ContextBuilder then reads from the same locals key:
+
+```go
+rid, _ := c.Locals(fibermap.LocalsRequestID).(string)
+```
+
+### One-call launch via `Engine.Run`
+
+For services that don't need anything special, `Engine.Run` wraps
+`fiber.New` + `LoadFile("routes.yaml")` + `Mount` + `app.Listen(":3000")`
+plus graceful shutdown on SIGINT/SIGTERM:
+
+```go
+eng := fibermap.New[AppCtx]()
+eng.SetContextBuilder(...)
+eng.RegisterHandler(...)
+// no LoadFile, no Mount, no app.Listen — Run does it all.
+if err := eng.Run(); err != nil {
+    log.Fatal(err)
+}
+```
+
+Defaults (all overridable via options):
+
+| Default                          | Override                                                |
+| -------------------------------- | ------------------------------------------------------- |
+| Listen on `:3000`                | `WithAddr(":8080")`                                     |
+| Load `routes.yaml` from disk     | `WithRoutesPath("api.yaml")` / `WithRoutesFS(embedFS)`  |
+| `fiber.New()` with no config     | `WithFiberConfig(fiber.Config{ErrorHandler: ...})`      |
+| No Fiber-level middleware        | `WithUse(authBearer, requestID)` (run BEFORE ContextBuilder) |
+| 10s graceful drain on signal     | `WithShutdownTimeout(30*time.Second)` / `WithoutSignalHandling()` |
+| Escape hatch: groups, sub-routes | `WithConfigureApp(func(app *fiber.App) { ... })`        |
+
+Run skips loading if the engine already has a YAML document loaded —
+useful when you preload from `LoadBytes` for tests or unusual layouts.
+
+Mount errors, parse errors, and listen errors all surface as the
+return value of `Run`. SIGINT/SIGTERM during normal operation
+returns `nil` after a clean drain.
+
+If you need anything Run can't express (multiple servers, custom
+signal sets, hot-reload), stick with the manual `LoadFile → Mount →
+app.Listen` flow — they remain fully supported. Both
+[`examples/quickstart`](./examples/quickstart) and
+[`examples/tasks`](./examples/tasks) use `Run`; the tasks example
+shows how `WithFiberConfig`, `WithUse`, and `WithRoutesFS` cover a
+realistic production wire-up.
 
 ## Why
 
@@ -214,6 +277,8 @@ Route:
 | `name`           | string      | Free-form identifier; surfaced via `Routes()`.        |
 | `tags`           | `[]string`  | Free-form; surfaced via `Routes()`.                   |
 | `description`    | string      | Free-form; surfaced via `Routes()`.                   |
+| `timeout`        | duration    | Go duration string (`"5s"`, `"300ms"`). When set, the route is wrapped with Fiber's `timeout.NewWithContext`: the handler's `UserContext()` deadline is set to this duration; on deadline a `context.DeadlineExceeded` returned from the handler surfaces as **408 Request Timeout**. Empty (default) means no per-route timeout. |
+| `cache`          | duration / map | Enables built-in response caching. See "Response cache" below. |
 
 `name`, `tags`, and `description` are not interpreted — they exist for
 introspection tooling (see below).
@@ -270,11 +335,37 @@ cannot be referenced as the other; the YAML form must match the
 registration. If a factory returns an error from its setup, it surfaces as
 `CodeInvalidFactoryArgs` in the joined `Mount` error.
 
-## Body binding & validation
+## Per-route timeout
 
-Subpackage `fibermap/bind` ships a generic helper that combines
-`BodyParser` with a validator pass — typical request entry-point
-boilerplate, but typed and one-liner:
+Add `timeout: 5s` to any route and fibermap wraps its handler with
+Fiber's `timeout.NewWithContext`:
+
+```yaml
+routes:
+  - method: GET
+    path: /report
+    handler: report.generate
+    timeout: 30s
+```
+
+At request time, the handler's `c.UserContext()` is given a deadline
+of `30s`. If the handler returns `context.DeadlineExceeded`, fibermap
+surfaces it as **HTTP 408 Request Timeout**. Other errors pass through
+unchanged. This is cooperative: handlers must respect `UserContext()`
+(stdlib `net/http` and `database/sql` already do; long CPU loops won't
+be interrupted).
+
+Bad duration strings fail at `LoadFile`/`LoadBytes` with
+`CodeInvalidTimeout`; zero or negative durations are rejected. The
+verbatim YAML value is surfaced on `RouteInfo.Timeout` for
+introspection.
+
+## Request binding & validation
+
+Subpackage `fibermap/bind` ships three generic helpers — `Body[T]`,
+`Query[T]`, `Params[T]` — that combine Fiber's parser pass with a
+validator pass. Typical request entry-point boilerplate, but typed
+and one-liner:
 
 ```go
 import (
@@ -287,13 +378,29 @@ var v = validator.New()
 type CreateTaskReq struct {
     Title string `json:"title" validate:"required,min=1,max=200"`
 }
+type ListQuery struct {
+    Limit  int    `query:"limit"  validate:"min=1,max=200"`
+    Cursor string `query:"cursor"`
+}
+type TaskIDParams struct {
+    ID string `params:"id" validate:"uuid"`
+}
 
 func (h *H) Create(c *Ctx) error {
     req, err := bind.Body[CreateTaskReq](c.Ctx, v)
     if err != nil {
         return c.Status(400).JSON(fiber.Map{"error": err.Error()})
     }
-    // req is populated and validated; go.
+    ...
+}
+
+func (h *H) List(c *Ctx) error {
+    q, err := bind.Query[ListQuery](c.Ctx, v)
+    ...
+}
+
+func (h *H) Get(c *Ctx) error {
+    p, err := bind.Params[TaskIDParams](c.Ctx, v)
     ...
 }
 ```
@@ -303,11 +410,128 @@ The validator is injected via a one-method `Validator` interface
 `go-playground/validator`**. `*validator.Validate` satisfies the
 interface as-is, but any custom validator (JSON Schema, hand-rolled,
 ...) works too. Pass `nil` to skip validation when you trust the
-body shape.
+input shape.
 
-Errors are wrapped via `errors.Is`: `bind.ErrParseBody` on JSON
-failure, `bind.ErrValidateBody` on validation failure — so the
-caller can distinguish them if it needs different HTTP responses.
+Each helper has its own pair of sentinel errors so callers can branch
+with `errors.Is`:
+
+| Helper          | Parse error          | Validation error         |
+| --------------- | -------------------- | ------------------------ |
+| `bind.Body[T]`   | `bind.ErrParseBody`   | `bind.ErrValidateBody`   |
+| `bind.Query[T]`  | `bind.ErrParseQuery`  | `bind.ErrValidateQuery`  |
+| `bind.Params[T]` | `bind.ErrParseParams` | `bind.ErrValidateParams` |
+
+## Response cache
+
+`cache` is a first-class route-level field — declare a TTL in YAML
+and fibermap wraps the handler with Fiber's `cache` middleware
+using engine-wide defaults you set once.
+
+Two YAML shapes:
+
+```yaml
+# Scalar — TTL only.
+- method: GET
+  path: /reports
+  handler: reports.list
+  cache: 30s
+
+# Mapping — full config.
+- method: GET
+  path: /products
+  handler: products.list
+  cache:
+    ttl: 30s
+    control: true                       # honour Cache-Control: no-store on requests
+    headers: true                       # cache & replay response headers (ETag, X-Request-ID)
+    vary_header: [Accept-Language]      # partition the cache by these request headers
+```
+
+Engine-wide defaults (storage backend, per-request key partitioning,
+default in-memory cap) are set once on the engine:
+
+```go
+import (
+    "github.com/gofiber/storage/redis/v3"
+    "github.com/theizzatbek/fibermap"
+)
+
+store := redis.New(redis.Config{URL: "redis://localhost:6379"})
+
+eng.SetCacheDefaults(fibermap.CacheDefaults[AppCtx]{
+    Storage: store,
+    KeyBy: func(c *fibermap.Context[AppCtx]) string {
+        // SECURITY-critical for user-specific responses: without
+        // KeyBy, two users sharing /tasks would share a cache entry.
+        return c.Data.OrgID + ":" + c.Data.UserID
+    },
+})
+```
+
+`SetCacheDefaults` is optional — call it before `Mount`. Defaults:
+Fiber's in-process map, no `KeyBy` (key is method + URL + vary
+headers). The in-process map is fine for dev / single-instance;
+production deployments should plug a shared `fiber.Storage` (Redis,
+memcached, …) so replicas share one cache and restarts don't wipe
+it.
+
+**SECURITY:** if your handler returns user-specific data (e.g.
+`/me`, `/v1/orders`) and you don't set `KeyBy`, one user's response
+will be served to another. Always set `KeyBy` when caching anything
+that depends on the authenticated user.
+
+Cache key shape: `METHOD ORIGINAL_URL` + `|h:Name=value` for each
+`vary_header` + `|d:fragment` for whatever `KeyBy` returns. Bad /
+zero / negative `ttl` or empty `vary_header` entries fail at
+`LoadFile`/`LoadBytes` with `CodeInvalidCache`.
+
+The cache config is surfaced on `RouteInfo.Cache` for introspection
+(JSON-friendly).
+
+## Ready-made middleware factories
+
+Subpackage `fibermap/factory` ships the factories every project ends
+up writing by hand:
+
+```go
+import (
+    "github.com/gofiber/fiber/v2/middleware/requestid"
+    "github.com/theizzatbek/fibermap"
+    "github.com/theizzatbek/fibermap/factory"
+)
+
+eng.RegisterMiddlewareFactory("require_role",
+    factory.RequireRole(func(c *fibermap.Context[AppCtx]) string {
+        return c.Data.Role
+    }),
+)
+
+eng.RegisterMiddlewareFactory("require_scope",
+    factory.RequireAnyScope(func(c *fibermap.Context[AppCtx]) []string {
+        return c.Data.Scopes
+    }),
+)
+
+// Bridge any plain fiber.Handler into the fibermap signature.
+eng.RegisterMiddleware("request_id",
+    factory.Adapter[AppCtx](requestid.New()),
+)
+```
+
+| Helper              | What it does                                                                              |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| `RequireRole`        | Allows when the accessor's role is in the YAML args. Empty args rejected at Mount.        |
+| `RequireAnyScope`    | Allows when the accessor's scopes intersect the YAML args (OAuth-any-of semantics).        |
+| `Adapter`            | Wraps `fiber.Handler` into `MiddlewareFunc[T]`.                                            |
+| `AdapterFactory`     | Wraps `func(args []string) (fiber.Handler, error)` into `MiddlewareFactoryFunc[T]`.        |
+
+Both guards accept `factory.WithDenyHandler(h)` to override the default
+`403 {"error":"forbidden"}` response.
+
+The `fibermap.ContextFrom[T](c *fiber.Ctx)` helper exposed by the
+core package gives you typed `Context[T]` access from inside any
+`fiber.Handler` — use it when you write your own adapter that needs
+to read `Data`.
 
 ## Introspection
 

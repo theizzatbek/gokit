@@ -41,6 +41,8 @@ const (
 	CodeMissingField      = "missing_field"
 	CodeInvalidHTTPMethod = "invalid_http_method"
 	CodeMiddlewareCycle   = "middleware_cycle"
+	CodeInvalidTimeout    = "invalid_timeout"
+	CodeInvalidCache      = "invalid_cache"
 
 	// mount stage
 	CodeUnknownHandler        = "unknown_handler"

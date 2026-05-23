@@ -16,6 +16,18 @@ groups:
             handler: tasks.list
             tags: [tasks, read]
             description: List the caller's tasks
+            # Built-in response cache. Scoped per-user via the
+            # KeyBy(c.Data.UserID) wired up in main.go via
+            # SetCacheDefaults — otherwise Alice's list would be served
+            # to Bob. Extra knobs:
+            #   control     → respect `Cache-Control: no-store` so
+            #                 callers can bypass on demand.
+            #   headers     → also cache and replay response headers
+            #                 (ETag / X-Request-ID stay consistent on hit).
+            cache:
+              ttl: 10s
+              control: true
+              headers: true
           - method: POST
             path: ""
             handler: tasks.create
@@ -26,6 +38,8 @@ groups:
             handler: tasks.get
             tags: [tasks, read]
             description: Get one of the caller's tasks
+            # Scalar form: just TTL, no extra knobs.
+            cache: 10s
           - method: PATCH
             path: /:id
             handler: tasks.update

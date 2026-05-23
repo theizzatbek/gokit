@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http/httptest"
 	"strings"
@@ -29,6 +31,9 @@ func buildEngine(t *testing.T) *fibermap.Engine[appctx.AppCtx] {
 		return appctx.AppCtx{Log: logger}, nil
 	})
 	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
+	eng.SetCacheDefaults(fibermap.CacheDefaults[appctx.AppCtx]{
+		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
+	})
 
 	taskH := tasks.New(store, validator.New())
 	eng.RegisterHandler("tasks.list", taskH.List)
@@ -93,6 +98,9 @@ func TestCreateThenList(t *testing.T) {
 		return appctx.AppCtx{UserID: uid, Role: role, Log: logger}, nil
 	})
 	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
+	eng.SetCacheDefaults(fibermap.CacheDefaults[appctx.AppCtx]{
+		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
+	})
 	taskH := tasks.New(store, validator.New())
 	eng.RegisterHandler("tasks.list", taskH.List)
 	eng.RegisterHandler("tasks.get", taskH.Get)
@@ -137,6 +145,94 @@ func TestCreateThenList(t *testing.T) {
 	resp, _ = app.Test(req)
 	if resp.StatusCode != 403 {
 		t.Errorf("user delete: status = %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestCacheIsolatesByUser proves the cache wired up in routes.yaml
+// + main.go (KeyBy=UserID) does its job: a subsequent identical GET
+// from the SAME user is served from cache (handler not invoked),
+// while a GET from a DIFFERENT user gets a fresh handler invocation.
+func TestCacheIsolatesByUser(t *testing.T) {
+	app := fiber.New()
+	app.Use(auth.Bearer())
+
+	store := tasks.NewMemStore()
+	logger := slog.New(slog.NewTextHandler(testWriter{t}, nil))
+	eng := fibermap.New[appctx.AppCtx]()
+	eng.SetContextBuilder(func(c *fiber.Ctx) (appctx.AppCtx, error) {
+		uid, _ := c.Locals("user_id").(string)
+		role, _ := c.Locals("role").(string)
+		return appctx.AppCtx{UserID: uid, Role: role, Log: logger}, nil
+	})
+	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
+	eng.SetCacheDefaults(fibermap.CacheDefaults[appctx.AppCtx]{
+		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
+	})
+	taskH := tasks.New(store, validator.New())
+	eng.RegisterHandler("tasks.list", taskH.List)
+	eng.RegisterHandler("tasks.get", taskH.Get)
+	eng.RegisterHandler("tasks.create", taskH.Create)
+	eng.RegisterHandler("tasks.update", taskH.Update)
+	eng.RegisterHandler("tasks.delete", taskH.Delete)
+	eng.RegisterHandler("admin.routes", admin.Routes(eng))
+	if err := eng.LoadFS(routesFS, "routes.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	type listResp struct {
+		Tasks []map[string]any `json:"tasks"`
+	}
+
+	// 1. Alice lists — empty.
+	aliceList := func() []map[string]any {
+		req := httptest.NewRequest("GET", "/api/v1/tasks", nil)
+		req.Header.Set("Authorization", "Bearer alice-token")
+		resp, _ := app.Test(req)
+		body, _ := io.ReadAll(resp.Body)
+		var v listResp
+		if err := json.Unmarshal(body, &v); err != nil {
+			t.Fatalf("alice decode: %v (raw=%q)", err, string(body))
+		}
+		return v.Tasks
+	}
+	if got := aliceList(); len(got) != 0 {
+		t.Fatalf("alice initial list = %v, want []", got)
+	}
+
+	// 2. Alice creates a task.
+	req := httptest.NewRequest("POST", "/api/v1/tasks", strings.NewReader(`{"title":"buy milk"}`))
+	req.Header.Set("Authorization", "Bearer alice-token")
+	req.Header.Set("Content-Type", "application/json")
+	if resp, _ := app.Test(req); resp.StatusCode != 201 {
+		t.Fatalf("create: status = %d", resp.StatusCode)
+	}
+
+	// 3. Alice lists again — should still return [] because her PREVIOUS
+	//    GET is cached. This proves the cache is hot.
+	if got := aliceList(); len(got) != 0 {
+		t.Errorf("alice second list = %v, want [] (cached); KeyBy probably not wired", got)
+	}
+
+	// 4. Bob lists — separate KeyBy bucket, so handler runs, sees alice's
+	//    task is owned by alice (not bob), and returns []. The point of
+	//    this assertion is that bob's response is NOT alice's cached one;
+	//    we exercised the handler for bob's KeyBy.
+	bobReq := httptest.NewRequest("GET", "/api/v1/tasks", nil)
+	bobReq.Header.Set("Authorization", "Bearer bob-token")
+	bobResp, _ := app.Test(bobReq)
+	if bobResp.StatusCode != 200 {
+		t.Fatalf("bob: status = %d", bobResp.StatusCode)
+	}
+	bobBody, _ := io.ReadAll(bobResp.Body)
+	var bobResult listResp
+	if err := json.Unmarshal(bobBody, &bobResult); err != nil {
+		t.Fatalf("bob body decode: %v (raw=%q)", err, string(bobBody))
+	}
+	if len(bobResult.Tasks) != 0 {
+		t.Errorf("bob list = %v, want []", bobResult.Tasks)
 	}
 }
 

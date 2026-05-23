@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -86,6 +87,33 @@ func (r *rawRoute) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
+// UnmarshalYAML for rawCache accepts two shapes:
+//
+//	cache: 30s                          # scalar string → TTL only
+//	cache:                              # mapping → full config
+//	  ttl: 30s
+//	  control: true
+//	  headers: true
+//	  vary_header: [Accept-Language]
+func (rc *rawCache) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		rc.TTL = node.Value
+		return nil
+	case yaml.MappingNode:
+		type rawCacheAlias rawCache
+		var a rawCacheAlias
+		if err := node.Decode(&a); err != nil {
+			return err
+		}
+		*rc = rawCache(a)
+		return nil
+	default:
+		return &Error{Stage: "parse", Code: CodeInvalidYAML,
+			Message: "cache must be a duration string or a mapping", Line: node.Line}
+	}
+}
+
 // parseBytes parses YAML data into rawConfig and runs syntactic validation:
 // required fields, valid HTTP methods, middleware_set cycle detection.
 // `file` is used only for error reporting; pass "" if loading from memory.
@@ -118,6 +146,32 @@ func validateGroups(groups []rawGroup, path, file string) error {
 			}
 			if _, ok := validHTTPMethods[r.Method]; !ok {
 				return &Error{Stage: "parse", Code: CodeInvalidHTTPMethod, Message: fmt.Sprintf("unknown HTTP method %q", r.Method), File: file, Path: rPath + ".method", Line: r.Line}
+			}
+			if r.Timeout != "" {
+				d, err := time.ParseDuration(r.Timeout)
+				if err != nil {
+					return &Error{Stage: "parse", Code: CodeInvalidTimeout, Message: fmt.Sprintf("timeout %q: %s", r.Timeout, err.Error()), File: file, Path: rPath + ".timeout", Line: r.Line}
+				}
+				if d <= 0 {
+					return &Error{Stage: "parse", Code: CodeInvalidTimeout, Message: fmt.Sprintf("timeout %q must be > 0", r.Timeout), File: file, Path: rPath + ".timeout", Line: r.Line}
+				}
+			}
+			if r.Cache != nil {
+				if r.Cache.TTL == "" {
+					return &Error{Stage: "parse", Code: CodeInvalidCache, Message: "cache.ttl is required", File: file, Path: rPath + ".cache", Line: r.Line}
+				}
+				d, err := time.ParseDuration(r.Cache.TTL)
+				if err != nil {
+					return &Error{Stage: "parse", Code: CodeInvalidCache, Message: fmt.Sprintf("cache.ttl %q: %s", r.Cache.TTL, err.Error()), File: file, Path: rPath + ".cache.ttl", Line: r.Line}
+				}
+				if d <= 0 {
+					return &Error{Stage: "parse", Code: CodeInvalidCache, Message: fmt.Sprintf("cache.ttl %q must be > 0", r.Cache.TTL), File: file, Path: rPath + ".cache.ttl", Line: r.Line}
+				}
+				for i, h := range r.Cache.VaryHeader {
+					if h == "" {
+						return &Error{Stage: "parse", Code: CodeInvalidCache, Message: fmt.Sprintf("cache.vary_header[%d] is empty", i), File: file, Path: rPath + ".cache.vary_header", Line: r.Line}
+					}
+				}
 			}
 		}
 		if err := validateGroups(g.Groups, gPath+".groups", file); err != nil {
