@@ -153,11 +153,10 @@ func main() {
 	// OpenAPI 3.0 spec — generated from Engine.Routes() + the handler
 	// schemas attached above. The generator reads from the engine,
 	// so the spec is always in sync with the live route table.
-	// errBody is the shape of every 4xx/5xx response — a single
-	// `{"error": "..."}` object. Declared once on the generator so
-	// every operation in the spec advertises the same error contract
-	// without per-handler boilerplate.
-	// (errBody removed — typed tasks.ErrorResponse passed directly below)
+	// Every 4xx/5xx response is `tasks.ErrorResponse` (typed
+	// `{"error": "..."}`), declared once on the generator so each
+	// operation advertises the same error contract without per-handler
+	// boilerplate.
 	genOpts := []openapi.Option{
 		openapi.WithInfo(openapi.Info{
 			Title:       "Tasks API",
