@@ -93,6 +93,10 @@ func main() {
 
 	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
 
+	// Engine-wide validator — fibermap.RegisterBody and friends pass
+	// the parsed struct through it before calling the handler.
+	eng.SetValidator(valid)
+
 	// Engine-wide cache defaults. The built-in cache (declared per-route
 	// in routes.yaml via `cache: ...`) uses these for storage + key
 	// partitioning. Default storage is Fiber's in-process map — fine
@@ -107,20 +111,18 @@ func main() {
 		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
 	})
 
-	// Handlers carry their typed request/response schemas at
-	// registration. Routes only declare HAPPY paths and unusual
-	// status codes — the universal errors (400/401/403/404/500) are
-	// declared once on the generator via WithDefaultResponse below.
+	// Body-binding handlers use fibermap.RegisterBody — the request
+	// type appears once (in the handler signature) and is auto-parsed
+	// + validated before the handler runs. The body schema is also
+	// auto-attached for OpenAPI.
 	taskH := tasks.New(store, valid)
 	eng.RegisterHandler("tasks.list", taskH.List,
 		fibermap.WithResponse(fiber.StatusOK, fiber.Map{"tasks": []tasks.Task{}}))
 	eng.RegisterHandler("tasks.get", taskH.Get,
 		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
-	eng.RegisterHandler("tasks.create", taskH.Create,
-		fibermap.WithBody(tasks.CreateReq{}),
+	fibermap.RegisterBody(eng, "tasks.create", taskH.Create,
 		fibermap.WithResponse(fiber.StatusCreated, tasks.Task{}))
-	eng.RegisterHandler("tasks.update", taskH.Update,
-		fibermap.WithBody(tasks.UpdateReq{}),
+	fibermap.RegisterBody(eng, "tasks.update", taskH.Update,
 		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
 	eng.RegisterHandler("tasks.delete", taskH.Delete,
 		fibermap.WithResponse(fiber.StatusNoContent, nil))

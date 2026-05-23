@@ -6,7 +6,6 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap/bind"
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/appctx"
 )
 
@@ -52,14 +51,11 @@ type CreateReq struct {
 	Title string `json:"title" validate:"required,min=1,max=200"`
 }
 
-// Create handles POST /tasks.
-func (h *Handler) Create(c *appctx.Ctx) error {
-	req, err := bind.Body[CreateReq](c.Ctx, h.Validator)
-	if err != nil {
-		return badBody(c, err)
-	}
+// Create handles POST /tasks. Wired with fibermap.RegisterBody, so
+// `req` arrives already parsed + validated; bind.Body call and
+// per-handler error branching live in fibermap, not here.
+func (h *Handler) Create(c *appctx.Ctx, req CreateReq) error {
 	req.Title = strings.TrimSpace(req.Title)
-
 	t := h.Store.Create(c.Data.UserID, req.Title)
 	c.Data.Log.Info("task created", "task_id", t.ID, "title", t.Title)
 	return c.Status(fiber.StatusCreated).JSON(t)
@@ -74,20 +70,18 @@ type UpdateReq struct {
 	Done  *bool   `json:"done,omitempty"`
 }
 
-// Update handles PATCH /tasks/:id.
-func (h *Handler) Update(c *appctx.Ctx) error {
-	req, err := bind.Body[UpdateReq](c.Ctx, h.Validator)
-	if err != nil {
-		return badBody(c, err)
-	}
+// Update handles PATCH /tasks/:id. Same wiring as Create — fibermap
+// fills `req` before calling.
+func (h *Handler) Update(c *appctx.Ctx, req UpdateReq) error {
 	if req.Title == nil && req.Done == nil {
 		// Cross-field rule that doesn't fit a struct tag — keep the
-		// hand-rolled check here. bind.Body covers the per-field rules;
-		// "at least one of" stays in code.
+		// hand-rolled check here. fibermap.RegisterBody covers
+		// per-field validate; "at least one of" stays in code.
 		return badRequest(c, "at least one of title, done must be present")
 	}
 	if req.Title != nil {
-		req.Title = new(strings.TrimSpace(*req.Title))
+		trimmed := strings.TrimSpace(*req.Title)
+		req.Title = &trimmed
 	}
 
 	t, err := h.Store.Update(c.Data.UserID, c.Params("id"), req.Title, req.Done)
@@ -114,20 +108,6 @@ func (h *Handler) Delete(c *appctx.Ctx) error {
 	}
 	c.Data.Log.Info("task deleted by admin", "task_id", id, "admin", c.Data.UserID)
 	return c.SendStatus(fiber.StatusNoContent)
-}
-
-// badBody picks a user-facing message based on whether the failure
-// was JSON parsing or struct-tag validation, then strips the
-// `bind: ...:` prefix so clients get a clean message.
-func badBody(c *appctx.Ctx, err error) error {
-	msg := err.Error()
-	switch {
-	case errors.Is(err, bind.ErrParseBody):
-		msg = "invalid JSON body"
-	case errors.Is(err, bind.ErrValidateBody):
-		msg = strings.TrimPrefix(msg, "bind: validate body: ")
-	}
-	return badRequest(c, msg)
 }
 
 func notFound(c *appctx.Ctx) error {

@@ -35,11 +35,13 @@ func buildEngine(t *testing.T) *fibermap.Engine[appctx.AppCtx] {
 		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
 	})
 
-	taskH := tasks.New(store, validator.New())
+	valid := validator.New(validator.WithRequiredStructEnabled())
+	eng.SetValidator(valid)
+	taskH := tasks.New(store, valid)
 	eng.RegisterHandler("tasks.list", taskH.List)
 	eng.RegisterHandler("tasks.get", taskH.Get)
-	eng.RegisterHandler("tasks.create", taskH.Create)
-	eng.RegisterHandler("tasks.update", taskH.Update)
+	fibermap.RegisterBody(eng, "tasks.create", taskH.Create)
+	fibermap.RegisterBody(eng, "tasks.update", taskH.Update)
 	eng.RegisterHandler("tasks.delete", taskH.Delete)
 	eng.RegisterHandler("admin.routes", admin.Routes(eng))
 
@@ -101,11 +103,13 @@ func TestCreateThenList(t *testing.T) {
 	eng.SetCacheDefaults(fibermap.CacheDefaults[appctx.AppCtx]{
 		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
 	})
-	taskH := tasks.New(store, validator.New())
+	valid := validator.New(validator.WithRequiredStructEnabled())
+	eng.SetValidator(valid)
+	taskH := tasks.New(store, valid)
 	eng.RegisterHandler("tasks.list", taskH.List)
 	eng.RegisterHandler("tasks.get", taskH.Get)
-	eng.RegisterHandler("tasks.create", taskH.Create)
-	eng.RegisterHandler("tasks.update", taskH.Update)
+	fibermap.RegisterBody(eng, "tasks.create", taskH.Create)
+	fibermap.RegisterBody(eng, "tasks.update", taskH.Update)
 	eng.RegisterHandler("tasks.delete", taskH.Delete)
 	eng.RegisterHandler("admin.routes", admin.Routes(eng))
 	if err := eng.LoadFS(routesFS, "routes.yaml"); err != nil {
@@ -168,11 +172,13 @@ func TestCacheIsolatesByUser(t *testing.T) {
 	eng.SetCacheDefaults(fibermap.CacheDefaults[appctx.AppCtx]{
 		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
 	})
-	taskH := tasks.New(store, validator.New())
+	valid := validator.New(validator.WithRequiredStructEnabled())
+	eng.SetValidator(valid)
+	taskH := tasks.New(store, valid)
 	eng.RegisterHandler("tasks.list", taskH.List)
 	eng.RegisterHandler("tasks.get", taskH.Get)
-	eng.RegisterHandler("tasks.create", taskH.Create)
-	eng.RegisterHandler("tasks.update", taskH.Update)
+	fibermap.RegisterBody(eng, "tasks.create", taskH.Create)
+	fibermap.RegisterBody(eng, "tasks.update", taskH.Update)
 	eng.RegisterHandler("tasks.delete", taskH.Delete)
 	eng.RegisterHandler("admin.routes", admin.Routes(eng))
 	if err := eng.LoadFS(routesFS, "routes.yaml"); err != nil {

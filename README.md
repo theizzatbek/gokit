@@ -455,11 +455,56 @@ Bad duration strings fail at `LoadFile`/`LoadBytes` with
 verbatim YAML value is surfaced on `RouteInfo.Timeout` for
 introspection.
 
-## Request binding & validation
+## Auto-binding handlers via `RegisterBody`
 
-Subpackage `fibermap/bind` ships three generic helpers — `Body[T]`,
-`Query[T]`, `Params[T]` — that combine Fiber's parser pass with a
-validator pass. Typical request entry-point boilerplate, but typed
+For the common case — POST/PUT/PATCH where the handler takes a typed
+JSON body — `fibermap.RegisterBody` removes the boilerplate. The
+request type appears once (in the handler signature), and fibermap
+auto-parses + validates + attaches the OpenAPI schema:
+
+```go
+type CreateTaskReq struct {
+    Title string `json:"title" validate:"required,min=1,max=200"`
+}
+
+// Handler takes a typed body. fibermap fills `req` before calling.
+func (h *Handler) Create(c *Ctx, req CreateTaskReq) error {
+    // req is already parsed + validated.
+    return c.Status(201).JSON(...)
+}
+
+eng.SetValidator(validator.New())                       // once, engine-wide
+fibermap.RegisterBody(eng, "tasks.create", h.Create,
+    fibermap.WithResponse(201, Task{}),
+)
+```
+
+Parse / validate failures route through `Engine.SetBindErrorHandler`
+(default returns 400 with `{"error": "..."}`). Inspect with
+`errors.Is(err, bind.ErrParseBody)` etc to customize.
+
+Companions for the other input locations:
+
+| Helper                   | Reads from       | Tag         |
+| ------------------------ | ---------------- | ----------- |
+| `fibermap.RegisterBody`   | JSON body        | `json:`      |
+| `fibermap.RegisterQuery`  | Query string     | `query:`     |
+| `fibermap.RegisterParams` | Route params     | `params:`    |
+| `fibermap.RegisterHeaders`| Request headers  | `reqHeader:` |
+
+Handler signature is `func(c *Context[T], req Req) error` for all
+four — the typed parameter slot is auto-filled.
+
+For handlers that need MULTIPLE input locations (body + path param,
+query + header) — register via `RegisterHandler` and call
+`bind.Body[T]` / `bind.Query[T]` / `bind.Params[T]` /
+`bind.Header[T]` manually.
+
+## Lower-level: request binding via `bind`
+
+Subpackage `fibermap/bind` ships four generic helpers — `Body[T]`,
+`Query[T]`, `Params[T]`, `Header[T]` — that combine Fiber's parser
+pass with a validator pass. Typical request entry-point boilerplate, but typed
 and one-liner:
 
 ```go
