@@ -10,6 +10,51 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 _Nothing yet._
 
+## [v0.3.0] - 2026-05-23
+
+A "production defaults" release. Five new `Engine.Run` options
+collapse the boilerplate every service was re-writing — `$PORT`
+auto-detection for cloud platforms, panic recovery, k8s health
+checks, structured access logging, and Prometheus metrics.
+
+### Added
+- `Engine.Run` now reads `$PORT` env var when `WithAddr` is not set
+  (falls back to `:3000`). Cloud-platform convention (Heroku, Cloud
+  Run, fly.io, Railway). `WithAddr` always wins.
+- `fibermap.Recover(logger)` + `WithRecover(logger)` — wraps Fiber's
+  recover middleware with slog-aware panic logging (method, path,
+  request_id, full stack trace) and a 500 response. Installed FIRST
+  in the Use chain so panics in any later middleware are caught.
+- `WithHealthCheck(path)` — registers a `GET` handler at `path` (e.g.
+  `/healthz`) returning 200 OK. Registered BEFORE any middleware so
+  it bypasses Recover, RequestID, the user's WithUse chain, and the
+  ContextBuilder — exactly what k8s probes need. Default path
+  `/healthz`; empty disables. Not surfaced on `Engine.Routes()`.
+- `fibermap.RequestLogger(logger, skipPaths...)` +
+  `WithRequestLogger(logger, skipPaths...)` — one structured
+  access-log line per request: method, path, status, latency_ms,
+  response bytes, client IP, request_id. INFO when status < 500,
+  ERROR otherwise. `skipPaths` is typically `/healthz` + `/metrics`
+  to keep the log clean.
+- `fibermap.Metrics()` + `fibermap.MetricsHandler(reg)` +
+  `WithMetrics(path)` — Prometheus middleware + scrape endpoint.
+  Exposes `fibermap_http_requests_total{method,route,status}` counter,
+  `fibermap_http_request_duration_seconds{method,route,status}`
+  histogram, and `fibermap_http_requests_in_flight` gauge. The `route`
+  label is the Fiber route template (`/v1/tasks/:id`), not the
+  concrete path — bounded cardinality. Default path `/metrics`; empty
+  disables. Adds `github.com/prometheus/client_golang` to the
+  dependency graph.
+- `examples/tasks` adopts the full ops bundle: Recover, HealthCheck,
+  RequestLogger, Metrics on top of the existing RequestID + Bearer +
+  embedded YAML + Cache wiring.
+
+### Changed
+- Internal: `ctxKey` switched from `string` ("`__fibermap_ctx__`") to
+  a `*byte` sentinel. Cheaper pointer-equality on every `c.Locals`
+  call and removes the chance of a user-provided string colliding
+  with fibermap's key. No public API change.
+
 ## [v0.2.0] - 2026-05-23
 
 A "less boilerplate" release. Headline features: a one-call `Engine.Run`
