@@ -13,6 +13,7 @@ type config struct {
 	servers            []Server
 	securitySchemes    map[string]SecurityScheme
 	middlewareSecurity map[string][]string // middleware name → list of security scheme names (OR semantics)
+	defaultResponses   map[int]any         // applied to every operation; per-route schemas override per-status
 }
 
 func newConfig() *config {
@@ -20,6 +21,7 @@ func newConfig() *config {
 		info:               Info{Title: "fibermap API", Version: "0.0.0"},
 		securitySchemes:    map[string]SecurityScheme{},
 		middlewareSecurity: map[string][]string{},
+		defaultResponses:   map[int]any{},
 	}
 }
 
@@ -66,6 +68,40 @@ func WithSecurity(name string, scheme SecurityScheme) Option {
 func MapMiddlewareToSecurity(middleware, schemeName string) Option {
 	return func(c *config) {
 		c.middlewareSecurity[middleware] = append(c.middlewareSecurity[middleware], schemeName)
+	}
+}
+
+// WithDefaultResponse adds a response schema applied to every
+// operation in the generated spec, unless the operation declared
+// its own schema for that status code (via [fibermap.WithResponse]
+// at RegisterHandler time, which wins).
+//
+// Typical use is to declare the boring universal errors — 400 / 401
+// / 403 / 404 / 500 — once instead of repeating them on every
+// handler:
+//
+//	type ErrorResponse struct {
+//	    Error string `json:"error"`
+//	}
+//
+//	gen := openapi.NewGenerator(eng,
+//	    openapi.WithDefaultResponse(400, ErrorResponse{}),
+//	    openapi.WithDefaultResponse(401, ErrorResponse{}),
+//	    openapi.WithDefaultResponse(403, ErrorResponse{}),
+//	    openapi.WithDefaultResponse(404, ErrorResponse{}),
+//	    openapi.WithDefaultResponse(500, ErrorResponse{}),
+//	)
+//
+// Routes still declare their HAPPY-path responses (`201 Task{}`,
+// `200 ListResp{}`, …) and any non-universal statuses (`422`) via
+// [fibermap.WithResponse]. Pass nil model for an empty-body default
+// (e.g. `WithDefaultResponse(204, nil)`).
+//
+// Multiple calls accumulate; later calls for the same status code
+// overwrite earlier ones.
+func WithDefaultResponse(status int, model any) Option {
+	return func(c *config) {
+		c.defaultResponses[status] = model
 	}
 }
 

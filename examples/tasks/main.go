@@ -108,39 +108,44 @@ func main() {
 	})
 
 	// Handlers carry their typed request/response schemas at
-	// registration. fibermap.WithBody / WithResponse / etc. attach
-	// opaque schema models that fibermap/openapi reflects on. The
-	// runtime ignores them.
-	errBody := fiber.Map{"error": ""}
+	// registration. Routes only declare HAPPY paths and unusual
+	// status codes — the universal errors (400/401/403/404/500) are
+	// declared once on the generator via WithDefaultResponse below.
 	taskH := tasks.New(store, valid)
 	eng.RegisterHandler("tasks.list", taskH.List,
 		fibermap.WithResponse(fiber.StatusOK, fiber.Map{"tasks": []tasks.Task{}}))
 	eng.RegisterHandler("tasks.get", taskH.Get,
-		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}),
-		fibermap.WithResponse(fiber.StatusNotFound, errBody))
+		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
 	eng.RegisterHandler("tasks.create", taskH.Create,
 		fibermap.WithBody(tasks.CreateReq{}),
-		fibermap.WithResponse(fiber.StatusCreated, tasks.Task{}),
-		fibermap.WithResponse(fiber.StatusBadRequest, errBody))
+		fibermap.WithResponse(fiber.StatusCreated, tasks.Task{}))
 	eng.RegisterHandler("tasks.update", taskH.Update,
 		fibermap.WithBody(tasks.UpdateReq{}),
-		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}),
-		fibermap.WithResponse(fiber.StatusBadRequest, errBody),
-		fibermap.WithResponse(fiber.StatusNotFound, errBody))
+		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
 	eng.RegisterHandler("tasks.delete", taskH.Delete,
-		fibermap.WithResponse(fiber.StatusNoContent, nil),
-		fibermap.WithResponse(fiber.StatusForbidden, errBody))
+		fibermap.WithResponse(fiber.StatusNoContent, nil))
 	eng.RegisterHandler("admin.routes", admin.Routes(eng))
 
 	// OpenAPI 3.0 spec — generated from Engine.Routes() + the handler
 	// schemas attached above. The generator reads from the engine,
 	// so the spec is always in sync with the live route table.
+	// errBody is the shape of every 4xx/5xx response — a single
+	// `{"error": "..."}` object. Declared once on the generator so
+	// every operation in the spec advertises the same error contract
+	// without per-handler boilerplate.
+	errBody := fiber.Map{"error": ""}
 	gen := openapi.NewGenerator(eng,
 		openapi.WithInfo(openapi.Info{
 			Title:       "Tasks API",
 			Version:     "0.1.0",
 			Description: "Per-user task lists — demo for the fibermap library.",
 		}),
+		// Universal error responses — applied to every operation.
+		openapi.WithDefaultResponse(fiber.StatusBadRequest, errBody),
+		openapi.WithDefaultResponse(fiber.StatusUnauthorized, errBody),
+		openapi.WithDefaultResponse(fiber.StatusForbidden, errBody),
+		openapi.WithDefaultResponse(fiber.StatusNotFound, errBody),
+		openapi.WithDefaultResponse(fiber.StatusInternalServerError, errBody),
 		// `auth` is the fibermap-middleware name. Bearer OR Basic both
 		// satisfy it (see auth.BearerOrBasic in WithUse below) — the
 		// spec lists both schemes; clients pick either.

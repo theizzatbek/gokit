@@ -243,6 +243,21 @@ func (g *Generator[T]) buildOperation(r fibermap.RouteInfo, components *Componen
 	}
 	op.Security = sec
 
+	// Engine-wide default responses first (e.g. universal 400/404/500
+	// declared once on the generator). Route-level WithResponse below
+	// overrides per-status.
+	for status, model := range g.cfg.defaultResponses {
+		resp := Response{Description: defaultStatusDescription(status)}
+		if model != nil {
+			schema, err := g.reflectSchema(model, components)
+			if err != nil {
+				return nil, fmt.Errorf("default response %d: %w", status, err)
+			}
+			resp.Content = map[string]MediaType{"application/json": {Schema: schema}}
+		}
+		op.Responses[fmt.Sprintf("%d", status)] = resp
+	}
+
 	// Schemas registered alongside the handler via
 	// fibermap.WithBody / WithQuery / WithHeaders / WithResponse.
 	if meta := g.eng.HandlerMeta(r.Handler); meta != nil {
