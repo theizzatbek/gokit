@@ -91,7 +91,7 @@ func main() {
 		}, nil
 	})
 
-	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
+	fibermap.RegisterMiddlewareFactory(eng, "require_role", auth.RequireRole)
 
 	// Engine-wide validator — fibermap.RegisterBody and friends pass
 	// the parsed struct through it before calling the handler.
@@ -114,19 +114,20 @@ func main() {
 	// Body-binding handlers use fibermap.RegisterBody — the request
 	// type appears once (in the handler signature) and is auto-parsed
 	// + validated before the handler runs. The body schema is also
-	// auto-attached for OpenAPI.
+	// auto-attached for OpenAPI. Other handlers use the symmetric
+	// fibermap.RegisterHandler — same shape, just no typed body.
 	taskH := tasks.New(store, valid)
-	eng.RegisterHandler("tasks.list", taskH.List,
+	fibermap.RegisterHandler(eng, "tasks.list", taskH.List,
 		fibermap.WithResponse(fiber.StatusOK, fiber.Map{"tasks": []tasks.Task{}}))
-	eng.RegisterHandler("tasks.get", taskH.Get,
+	fibermap.RegisterHandler(eng, "tasks.get", taskH.Get,
 		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
 	fibermap.RegisterBody(eng, "tasks.create", taskH.Create,
 		fibermap.WithResponse(fiber.StatusCreated, tasks.Task{}))
 	fibermap.RegisterBody(eng, "tasks.update", taskH.Update,
 		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
-	eng.RegisterHandler("tasks.delete", taskH.Delete,
+	fibermap.RegisterHandler(eng, "tasks.delete", taskH.Delete,
 		fibermap.WithResponse(fiber.StatusNoContent, nil))
-	eng.RegisterHandler("admin.routes", admin.Routes(eng))
+	fibermap.RegisterHandler(eng, "admin.routes", admin.Routes(eng))
 
 	// OpenAPI 3.0 spec — generated from Engine.Routes() + the handler
 	// schemas attached above. The generator reads from the engine,

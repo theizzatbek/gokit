@@ -2,6 +2,34 @@ package fibermap
 
 import "github.com/theizzatbek/fibermap/bind"
 
+// RegisterHandler is the package-level form of
+// [Engine.RegisterHandler]. It exists so callers can use a uniform
+// `fibermap.Register*` style across plain handlers, body-binding
+// handlers, middleware, and factories (the body-binding helpers
+// have to be package-level functions because Go does not allow
+// generic methods, so package-level is the lowest common surface).
+//
+// Behaviour and panic semantics are identical to the method form.
+//
+//	fibermap.RegisterHandler(eng, "tasks.list", taskH.List,
+//	    fibermap.WithResponse(200, ListResp{}),
+//	)
+func RegisterHandler[T any](e *Engine[T], name string, h HandlerFunc[T], opts ...HandlerOption) {
+	e.RegisterHandler(name, h, opts...)
+}
+
+// RegisterMiddleware is the package-level form of
+// [Engine.RegisterMiddleware].
+func RegisterMiddleware[T any](e *Engine[T], name string, m MiddlewareFunc[T]) {
+	e.RegisterMiddleware(name, m)
+}
+
+// RegisterMiddlewareFactory is the package-level form of
+// [Engine.RegisterMiddlewareFactory].
+func RegisterMiddlewareFactory[T any](e *Engine[T], name string, f MiddlewareFactoryFunc[T]) {
+	e.RegisterMiddlewareFactory(name, f)
+}
+
 // RegisterBody registers a typed-body handler. The wrapper parses
 // the request body into Req via bind.Body (using the engine's
 // validator if set), then invokes h with the populated value.

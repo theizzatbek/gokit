@@ -19,6 +19,15 @@ OpenAPI — the request type appears once at the call site instead of
 three times (handler signature + bind.Body call + WithBody option).
 
 ### Added
+- `fibermap.RegisterHandler(eng, name, h, opts...)`,
+  `fibermap.RegisterMiddleware(eng, name, m)`, and
+  `fibermap.RegisterMiddlewareFactory(eng, name, f)` —
+  package-level forms of the existing `Engine.Register*` methods.
+  Exist so callers can use a uniform `fibermap.Register*(eng, ...)`
+  style throughout — including with the new typed-body helpers
+  below, which CAN'T be methods because Go disallows generic
+  methods. The original `Engine.Register*` methods remain; both
+  forms are exported and equivalent.
 - `fibermap.RegisterBody[T, Req any](eng, name, h, opts...)` — wraps
   a typed handler `func(*Context[T], Req) error` into a
   `HandlerFunc[T]` that parses the body via `bind.Body[Req]`, runs
