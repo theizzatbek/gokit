@@ -7,7 +7,7 @@ teaching demo. Copy this directory, rename, adjust, ship.
 
 | Path | Why |
 | --- | --- |
-| `main.go` | wire-up; graceful shutdown on SIGINT/SIGTERM; structured `slog` logger; embedded `routes.yaml` via `embed.FS` (one binary, no on-disk file dependency) |
+| `main.go` | wire-up via `eng.Run(...)` — one call covers `fiber.New(custom config)`, `app.Use(request_id, auth.Bearer)`, `LoadFS` of embedded `routes.yaml`, `Mount`, `Listen(":3000")`, and SIGINT/SIGTERM graceful shutdown |
 | `routes.yaml` | declarative route tree, mounted via `Engine.LoadFS`; modeline at the top gives editor autocomplete via JSON Schema |
 | `internal/appctx/` | `AppCtx` struct (user_id, role, request_id, scoped logger) + `Ctx` / `H` / `MW` aliases so handler signatures don't carry the generic parameter |
 | `internal/auth/` | Fiber-level Bearer-token middleware (runs **before** `ContextBuilder`) + fibermap factory `require_role` |
@@ -66,7 +66,7 @@ curl -i -H "Authorization: Bearer root-token" \
    `routes.yaml` and easy to introspect/test.
 
 3. **`embed.FS` for `routes.yaml`.** `//go:embed routes.yaml` plus
-   `eng.LoadFS(routesFS, "routes.yaml")` → one binary, no
+   `fibermap.WithRoutesFS(routesFS)` → one binary, no
    working-directory traps in deployment.
 
 4. **`Store` is an interface.** The in-memory impl is fine for a demo;
@@ -89,6 +89,27 @@ curl -i -H "Authorization: Bearer root-token" \
    one-liner `req, err := bind.Body[createReq](c.Ctx, h.Validator)`.
    Cross-field rules that don't fit tags ("at least one of title,
    done") stay as hand-rolled checks after `bind.Body` succeeds.
+
+8. **Built-in response cache with per-user KeyBy.** Read-only routes
+   (`GET /tasks`, `GET /tasks/:id`) declare `cache:` directly in YAML
+   — scalar form (`cache: 10s`) for just a TTL or a mapping for
+   `control`/`headers`/`vary_header`. `main.go` wires the engine-wide
+   defaults via `eng.SetCacheDefaults(fibermap.CacheDefaults[AppCtx]{
+   KeyBy: c.Data.UserID })` so the cache namespace is per-user —
+   alice's list is never served to bob. Default storage is Fiber's
+   in-process map (fine for a single instance); swap `Storage:
+   redis.New(...)` from
+   [`gofiber/storage`](https://github.com/gofiber/storage) for a
+   shared cache across replicas.
+
+9. **`eng.Run(...)` instead of hand-rolled lifecycle.** `main.go` uses
+   the one-call launcher: `WithFiberConfig` plugs in the custom
+   `ErrorHandler`, `WithUse(fibermap.RequestID(), auth.Bearer())`
+   installs the two Fiber-level middlewares (the built-in `RequestID`
+   replaces a hand-rolled 8-line copy), `WithRoutesFS(routesFS)`
+   loads the embedded YAML. SIGINT/SIGTERM with a 10s drain is the
+   default — no manual `signal.NotifyContext` / `ShutdownWithContext`
+   boilerplate.
 
 ## What you'd add for real production
 

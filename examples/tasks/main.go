@@ -17,20 +17,20 @@
 //	curl -X DELETE -H "Authorization: Bearer alice-token"  http://localhost:3000/api/v1/tasks/<id>   # 403
 //	curl -X DELETE -H "Authorization: Bearer root-token"   http://localhost:3000/api/v1/tasks/<id>   # 204
 //	curl -H "Authorization: Bearer root-token"             http://localhost:3000/api/v1/admin/routes
+//
+//	# The GET /tasks endpoint is cached for 10s per-user (see
+//	# routes.yaml + SetCacheDefaults wiring below). The second call
+//	# within 10s does not invoke the handler.
+//	curl -H "Authorization: Bearer alice-token" http://localhost:3000/api/v1/tasks   # miss
+//	curl -H "Authorization: Bearer alice-token" http://localhost:3000/api/v1/tasks   # cache hit
+//	curl -H "Authorization: Bearer bob-token"   http://localhost:3000/api/v1/tasks   # separate KeyBy bucket → miss
 package main
 
 import (
-	"context"
-	"crypto/rand"
 	"embed"
-	"encoding/hex"
-	"errors"
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -42,30 +42,13 @@ import (
 )
 
 // Embed routes.yaml into the binary so the deploy is a single artifact.
-// Showcases Engine.LoadFS.
+// Showcases Run + WithRoutesFS.
 //
 //go:embed routes.yaml
 var routesFS embed.FS
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	app := fiber.New(fiber.Config{
-		// Quiet Fiber's banner — we log via slog.
-		DisableStartupMessage: true,
-		// Pass handler errors through to our central handler.
-		ErrorHandler: func(c *fiber.Ctx, err error) error {
-			logger.Error("unhandled error", "err", err, "path", c.Path())
-			return c.Status(http.StatusInternalServerError).
-				JSON(fiber.Map{"error": "internal server error"})
-		},
-	})
-
-	// --- Fiber-level middlewares (run BEFORE fibermap's ContextBuilder).
-	// Order matters: request_id provides the value the ContextBuilder
-	// needs; auth provides user_id / role.
-	app.Use(requestIDMiddleware)
-	app.Use(auth.Bearer())
 
 	// --- Engine setup.
 	store := tasks.NewMemStore()
@@ -74,11 +57,11 @@ func main() {
 
 	eng.SetContextBuilder(func(c *fiber.Ctx) (appctx.AppCtx, error) {
 		// All four locals are populated by the Fiber-level middlewares
-		// above. If any are missing, the whole request is broken — we
-		// rely on Bearer() returning 401 before we ever get here.
+		// wired via WithUse below. If any are missing, the request is
+		// broken — Bearer() returns 401 before we ever get here.
 		uid, _ := c.Locals("user_id").(string)
 		role, _ := c.Locals("role").(string)
-		rid, _ := c.Locals("request_id").(string)
+		rid, _ := c.Locals(fibermap.LocalsRequestID).(string)
 		return appctx.AppCtx{
 			UserID:    uid,
 			Role:      role,
@@ -89,6 +72,20 @@ func main() {
 
 	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
 
+	// Engine-wide cache defaults. The built-in cache (declared per-route
+	// in routes.yaml via `cache: ...`) uses these for storage + key
+	// partitioning. Default storage is Fiber's in-process map — fine
+	// for this single-instance demo; in production set
+	// `Storage: redis.New(...)` (from gofiber/storage) so replicas
+	// share one cache.
+	//
+	// KeyBy is the critical part: without it, alice's cached GET /tasks
+	// body would be served to bob. We scope by UserID so each caller
+	// has their own cache namespace.
+	eng.SetCacheDefaults(fibermap.CacheDefaults[appctx.AppCtx]{
+		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
+	})
+
 	taskH := tasks.New(store, valid)
 	eng.RegisterHandler("tasks.list", taskH.List)
 	eng.RegisterHandler("tasks.get", taskH.Get)
@@ -97,47 +94,27 @@ func main() {
 	eng.RegisterHandler("tasks.delete", taskH.Delete)
 	eng.RegisterHandler("admin.routes", admin.Routes(eng))
 
-	if err := eng.LoadFS(routesFS, "routes.yaml"); err != nil {
-		logger.Error("LoadFS failed", "err", err)
-		os.Exit(1)
-	}
-	if err := eng.Mount(app); err != nil {
-		logger.Error("Mount failed", "err", err)
-		os.Exit(1)
-	}
-
-	// --- Graceful shutdown. Catch SIGINT/SIGTERM, give Fiber 10s to
-	// drain in-flight requests, then exit.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	go func() {
-		<-ctx.Done()
-		logger.Info("shutting down — draining for up to 10s")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = app.ShutdownWithContext(shutdownCtx)
-	}()
-
-	logger.Info("listening", "addr", ":3000", "routes", len(eng.Routes()))
-	if err := app.Listen(":3000"); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("listen failed", "err", err)
+	// One call wraps fiber.New (with custom config), app.Use for the
+	// two Fiber-level middlewares (order matters: request_id then
+	// auth — both run BEFORE fibermap's ContextBuilder), LoadFS from
+	// the embedded routes.yaml, Mount, Listen on :3000, and graceful
+	// shutdown on SIGINT/SIGTERM with a 10s drain (the default).
+	logger.Info("listening", "addr", ":3000")
+	err := eng.Run(
+		fibermap.WithFiberConfig(fiber.Config{
+			DisableStartupMessage: true,
+			ErrorHandler: func(c *fiber.Ctx, err error) error {
+				logger.Error("unhandled error", "err", err, "path", c.Path())
+				return c.Status(http.StatusInternalServerError).
+					JSON(fiber.Map{"error": "internal server error"})
+			},
+		}),
+		fibermap.WithUse(fibermap.RequestID(), auth.Bearer()),
+		fibermap.WithRoutesFS(routesFS),
+	)
+	if err != nil {
+		logger.Error("server stopped with error", "err", err)
 		os.Exit(1)
 	}
 	logger.Info("bye")
-}
-
-// requestIDMiddleware reads X-Request-ID from the incoming request or
-// generates one, sets it on Locals (for ContextBuilder) and echoes it
-// back in the response header (so callers can correlate).
-func requestIDMiddleware(c *fiber.Ctx) error {
-	id := c.Get("X-Request-ID")
-	if id == "" {
-		var b [8]byte
-		_, _ = rand.Read(b[:])
-		id = hex.EncodeToString(b[:])
-	}
-	c.Locals("request_id", id)
-	c.Set("X-Request-ID", id)
-	return c.Next()
 }

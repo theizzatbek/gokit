@@ -1,0 +1,14 @@
+groups:
+  - prefix: /v1
+    routes:
+      - method: GET
+        path: /fast
+        handler: fast
+      - method: GET
+        path: /slow
+        handler: slow
+        timeout: 50ms
+      - method: POST
+        path: /upload
+        handler: upload
+        timeout: 1m30s

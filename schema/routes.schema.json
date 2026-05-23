@@ -103,6 +103,46 @@
         "description": {
           "type": "string",
           "description": "Free-form description. Surfaced via Routes()/Walk()."
+        },
+        "timeout": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))*$",
+          "description": "Go duration string ('5s', '300ms', '1m30s'). When set, the route is wrapped with Fiber's timeout middleware (NewWithContext): the handler's UserContext deadline is set to this duration, and a returned context.DeadlineExceeded surfaces as 408 Request Timeout. Empty (default) means no per-route timeout."
+        },
+        "cache": {
+          "description": "Enables response caching for this route. Either a scalar duration string (TTL only) or a mapping with finer-grained options. Engine-wide knobs (Storage, KeyBy) are set on Engine via SetCacheDefaults — KeyBy is REQUIRED for user-specific responses or one user's cached body will be served to another.",
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))*$",
+              "description": "Scalar form: TTL only (e.g. '30s')."
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ttl"],
+              "properties": {
+                "ttl": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))*$",
+                  "description": "Go duration string. Required, > 0."
+                },
+                "control": {
+                  "type": "boolean",
+                  "description": "Respect Cache-Control: no-store / no-cache request headers (forwarded to fiber.cache.Config.CacheControl)."
+                },
+                "headers": {
+                  "type": "boolean",
+                  "description": "Cache and replay handler-set response headers (forwarded to fiber.cache.Config.StoreResponseHeaders)."
+                },
+                "vary_header": {
+                  "type": "array",
+                  "description": "Request headers whose values get folded into the cache key. Two requests with different Accept-Language values keep separate cache entries.",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          ]
         }
       }
     }

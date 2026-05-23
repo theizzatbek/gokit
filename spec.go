@@ -28,7 +28,34 @@ type rawRoute struct {
 	Name          string   `yaml:"name"`
 	Tags          []string `yaml:"tags"`
 	Description   string   `yaml:"description"`
-	Line          int      `yaml:"-"`
+	// Timeout is a Go duration string ("5s", "300ms"). Empty means no
+	// per-route timeout. Parsed at LoadFile/LoadBytes time;
+	// CodeInvalidTimeout on malformed value.
+	Timeout string `yaml:"timeout"`
+	// Cache enables response caching for the route. nil → no cache.
+	// Two accepted YAML shapes (see rawCache.UnmarshalYAML):
+	//   cache: 30s
+	//   cache: {ttl: 30s, control: true, headers: true,
+	//           vary_header: [Accept-Language]}
+	Cache *rawCache `yaml:"cache"`
+	Line  int       `yaml:"-"`
+}
+
+// rawCache is the route-level cache configuration. Engine-wide knobs
+// (Storage, KeyBy, MaxBytes) live on Engine via SetCacheDefaults.
+type rawCache struct {
+	// TTL is a Go duration string ("30s", "5m"). Required, > 0.
+	TTL string `yaml:"ttl"`
+	// Control: respect `Cache-Control: no-store` / `no-cache` request
+	// headers (forwarded to fiber.cache.Config.CacheControl).
+	Control bool `yaml:"control"`
+	// Headers: also cache and replay handler-set response headers
+	// (forwarded to fiber.cache.Config.StoreResponseHeaders).
+	Headers bool `yaml:"headers"`
+	// VaryHeader: request headers whose values get folded into the
+	// cache key, so two requests with different Accept-Language values
+	// keep separate cache entries.
+	VaryHeader []string `yaml:"vary_header"`
 }
 
 // mwRef is a reference to a middleware in YAML. It is either a scalar string
@@ -51,6 +78,10 @@ type MiddlewareRef struct {
 // RouteInfo is the public introspection record returned by Engine.Routes().
 // JSON tags are provided so users can expose Routes() over an admin
 // endpoint or dump it for tooling without an extra wrapper struct.
+//
+// Timeout is the verbatim YAML duration string ("5s") — empty when no
+// per-route timeout was declared. Kept as a string so JSON
+// admin-endpoint output stays human-readable.
 type RouteInfo struct {
 	Method      string          `json:"method"`
 	Path        string          `json:"path"`
@@ -59,4 +90,15 @@ type RouteInfo struct {
 	Description string          `json:"description,omitempty"`
 	Middleware  []MiddlewareRef `json:"middleware,omitempty"`
 	Tags        []string        `json:"tags,omitempty"`
+	Timeout     string          `json:"timeout,omitempty"`
+	Cache       *CacheInfo      `json:"cache,omitempty"`
+}
+
+// CacheInfo is the public introspection form of a route's cache
+// configuration. nil → no cache.
+type CacheInfo struct {
+	TTL        string   `json:"ttl"`
+	Control    bool     `json:"control,omitempty"`
+	Headers    bool     `json:"headers,omitempty"`
+	VaryHeader []string `json:"vary_header,omitempty"`
 }

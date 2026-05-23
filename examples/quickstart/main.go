@@ -1,3 +1,13 @@
+// Command quickstart is the smallest fibermap demo: a single file
+// boots a routed server. fiber.New, LoadFile, Mount, app.Listen, and
+// graceful shutdown all live inside `eng.Run(...)`.
+//
+//	go run ./examples/quickstart
+//
+//	curl                 'http://localhost:3000/v1/patients'
+//	curl -X POST         'http://localhost:3000/v1/patients?role=director'
+//	curl -X POST         'http://localhost:3000/v1/patients?role=guest'      # 403
+//	curl -X PUT          'http://localhost:3000/v1/patients/7?role=director'
 package main
 
 import (
@@ -6,6 +16,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/theizzatbek/fibermap"
+	"github.com/theizzatbek/fibermap/factory"
 )
 
 // AppCtx is the per-request payload built by ContextBuilder.
@@ -18,19 +29,15 @@ type AppCtx struct {
 // read as `func(c *Ctx) error` instead of carrying the generic parameter.
 type Ctx = fibermap.Context[AppCtx]
 
-// MW aliases fibermap.MiddlewareFunc[AppCtx] for the factory return type.
-type MW = fibermap.MiddlewareFunc[AppCtx]
-
 func main() {
-	app := fiber.New()
-
-	// Real auth happens at the Fiber level, BEFORE fibermap's context builder.
-	// This stub reads ?role=... from the query so you can switch roles in curl.
-	app.Use(func(c *fiber.Ctx) error {
+	// Stub auth: read ?role=... from the query so you can switch roles
+	// in curl. Real auth runs at the Fiber level too — see
+	// examples/tasks for a Bearer-token version.
+	stubAuth := func(c *fiber.Ctx) error {
 		c.Locals("user_id", "u-42")
 		c.Locals("role", c.Query("role", "guest"))
 		return c.Next()
-	})
+	}
 
 	eng := fibermap.New[AppCtx]()
 
@@ -50,21 +57,10 @@ func main() {
 		return c.Next()
 	})
 
+	// Built-in role guard from factory/.
 	eng.RegisterMiddlewareFactory("require_role",
-		func(args []string) (MW, error) {
-			if len(args) == 0 {
-				return nil, fmt.Errorf("require_role: at least one role required")
-			}
-			allowed := append([]string(nil), args...)
-			return func(c *Ctx) error {
-				for _, r := range allowed {
-					if r == c.Data.Role {
-						return c.Next()
-					}
-				}
-				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "forbidden"})
-			}, nil
-		})
+		factory.RequireRole(func(c *Ctx) string { return c.Data.Role }),
+	)
 
 	eng.RegisterHandler("patient.list", func(c *Ctx) error {
 		return c.JSON(fiber.Map{"patients": []string{"Alice", "Bob"}, "by": c.Data.UserID})
@@ -76,25 +72,16 @@ func main() {
 		return c.JSON(fiber.Map{"updated": c.Params("id"), "by": c.Data.UserID})
 	})
 
-	if err := eng.LoadFile("routes.yaml"); err != nil {
-		log.Fatal(err)
-	}
-	if err := eng.Mount(app); err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("Registered routes:")
-	for _, r := range eng.Routes() {
-		fmt.Printf("  %-6s %-25s -> %-20s middleware=%v\n",
-			r.Method, r.Path, r.Handler, r.Middleware)
-	}
-	fmt.Println()
-	fmt.Println("Try:")
+	// One call wraps fiber.New, LoadFile("routes.yaml"), app.Use(stubAuth),
+	// engine.Mount, app.Listen(":3000"), and graceful shutdown on
+	// SIGINT/SIGTERM.
+	fmt.Println("Listening on :3000 — try:")
 	fmt.Println("  curl                 'http://localhost:3000/v1/patients'")
 	fmt.Println("  curl -X POST         'http://localhost:3000/v1/patients?role=director'")
 	fmt.Println("  curl -X POST         'http://localhost:3000/v1/patients?role=guest'      # 403")
 	fmt.Println("  curl -X PUT          'http://localhost:3000/v1/patients/7?role=director'")
-	fmt.Println()
 
-	log.Fatal(app.Listen(":3000"))
+	if err := eng.Run(fibermap.WithUse(stubAuth)); err != nil {
+		log.Fatal(err)
+	}
 }

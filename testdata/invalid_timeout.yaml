@@ -1,0 +1,7 @@
+groups:
+  - prefix: /v1
+    routes:
+      - method: GET
+        path: /x
+        handler: x
+        timeout: "not-a-duration"

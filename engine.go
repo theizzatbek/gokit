@@ -4,8 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cache"
+	"github.com/gofiber/fiber/v2/middleware/timeout"
 )
 
 type (
@@ -16,6 +20,35 @@ type (
 	ContextErrorFunc             func(c *fiber.Ctx, err error) error
 )
 
+// CacheDefaults holds the engine-wide knobs for the built-in response
+// cache. Per-route TTL and flags live in the YAML `cache:` field;
+// these defaults supply the bits that can't be expressed as strings.
+type CacheDefaults[T any] struct {
+	// Storage backs the cache. Any fiber.Storage implementation works:
+	// the gofiber/storage repo ships drivers for Redis, memcached,
+	// PostgreSQL, S3, …
+	//
+	// Nil → Fiber's default in-process map. Convenient for a single
+	// instance; in production use a shared backend so replicas share
+	// one cache and restarts don't wipe it.
+	Storage fiber.Storage
+
+	// KeyBy returns a per-request fragment mixed into every cache key
+	// for routes that opt into caching. Use it to scope cache entries
+	// by tenant / user / role — anything that should invalidate
+	// independently.
+	//
+	// SECURITY: when nil, the cache key is method + URL + vary
+	// headers. If you cache a handler whose response depends on the
+	// authenticated user, you MUST set KeyBy or one user's response
+	// will be served to another.
+	KeyBy func(c *Context[T]) string
+
+	// MaxBytes caps Fiber's default in-process store. Ignored when
+	// Storage is set. 0 means unlimited — do not use in production.
+	MaxBytes uint
+}
+
 // Engine is the build-once-mount-once configurator. It is parameterized by T,
 // the per-request payload type produced by ContextBuilder.
 type Engine[T any] struct {
@@ -24,6 +57,8 @@ type Engine[T any] struct {
 	middlewares map[string]MiddlewareFunc[T]
 	factories   map[string]MiddlewareFactoryFunc[T]
 	ctxError    ContextErrorFunc
+
+	cacheDefaults CacheDefaults[T]
 
 	cfg     *rawConfig
 	cfgFile string
@@ -51,6 +86,12 @@ func (e *Engine[T]) SetContextBuilder(fn ContextBuilder[T]) { e.builder = fn }
 // SetContextErrorHandler overrides the default response when ContextBuilder
 // returns an error.
 func (e *Engine[T]) SetContextErrorHandler(h ContextErrorFunc) { e.ctxError = h }
+
+// SetCacheDefaults installs engine-wide defaults for routes that
+// declare `cache:` in YAML. Call once before Mount; later calls
+// silently overwrite. See CacheDefaults for the security note about
+// the KeyBy field.
+func (e *Engine[T]) SetCacheDefaults(d CacheDefaults[T]) { e.cacheDefaults = d }
 
 // panicIfMounted is called by every Register* method. Registering after
 // Mount is silently useless — the registration map is consulted only
@@ -201,6 +242,18 @@ type plannedRoute struct {
 	Method, Path, Handler, Name, Description string
 	Chain                                    []mwRef
 	Tags                                     []string
+	Timeout                                  time.Duration
+	TimeoutSpec                              string
+	Cache                                    *plannedCache
+}
+
+// plannedCache is the validated, parsed form of a route's cache YAML.
+type plannedCache struct {
+	TTL        time.Duration
+	TTLSpec    string
+	Control    bool
+	Headers    bool
+	VaryHeader []string
 }
 
 // buildPlan walks the parsed YAML tree, resolves chains, and returns either a
@@ -308,6 +361,25 @@ func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 				}
 				seenRoute[key] = r.Handler
 
+				// Timeout / cache TTL were format-validated in parseBytes;
+				// these re-parses cannot fail.
+				var timeoutDur time.Duration
+				if r.Timeout != "" {
+					timeoutDur, _ = time.ParseDuration(r.Timeout)
+				}
+
+				var pc *plannedCache
+				if r.Cache != nil {
+					ttl, _ := time.ParseDuration(r.Cache.TTL)
+					pc = &plannedCache{
+						TTL:        ttl,
+						TTLSpec:    r.Cache.TTL,
+						Control:    r.Cache.Control,
+						Headers:    r.Cache.Headers,
+						VaryHeader: append([]string(nil), r.Cache.VaryHeader...),
+					}
+				}
+
 				routes = append(routes, plannedRoute{
 					Method:      r.Method,
 					Path:        routePath,
@@ -316,6 +388,9 @@ func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 					Description: r.Description,
 					Chain:       chain,
 					Tags:        r.Tags,
+					Timeout:     timeoutDur,
+					TimeoutSpec: r.Timeout,
+					Cache:       pc,
 				})
 			}
 
@@ -353,6 +428,21 @@ func joinPath(prefix, path string) string {
 
 const ctxKey = "__fibermap_ctx__"
 
+// ContextFrom retrieves the per-request *Context[T] that fibermap's
+// root middleware stashed on the given *fiber.Ctx. Returns
+// (nil, false) when called on a request that didn't pass through a
+// fibermap-mounted router, or when T does not match the engine's
+// payload type.
+//
+// Use this in code that operates on a plain fiber.Handler but still
+// needs typed access to Context[T].Data — most commonly inside cache
+// key generators or other adapters that bridge to non-fibermap
+// middleware.
+func ContextFrom[T any](c *fiber.Ctx) (*Context[T], bool) {
+	ctx, ok := c.Locals(ctxKey).(*Context[T])
+	return ctx, ok
+}
+
 func (e *Engine[T]) installPlan(router fiber.Router, plan []plannedRoute) error {
 	// Root middleware that builds the Context[T] and stashes it in locals.
 	contextInit := func(c *fiber.Ctx) error {
@@ -388,7 +478,17 @@ func (e *Engine[T]) installPlan(router fiber.Router, plan []plannedRoute) error 
 			}
 			handlers = append(handlers, h)
 		}
-		handlers = append(handlers, e.wrapHandler(e.handlers[r.Handler]))
+		final := e.wrapHandler(e.handlers[r.Handler])
+		if r.Timeout > 0 {
+			final = timeout.NewWithContext(final, r.Timeout)
+		}
+		// Cache is inserted BEFORE the final handler: on hit it
+		// responds without calling c.Next(); on miss it calls c.Next()
+		// to invoke the handler and stores the response.
+		if r.Cache != nil {
+			handlers = append(handlers, e.cacheHandler(r.Cache))
+		}
+		handlers = append(handlers, final)
 
 		router.Add(r.Method, r.Path, handlers...)
 
@@ -400,9 +500,69 @@ func (e *Engine[T]) installPlan(router fiber.Router, plan []plannedRoute) error 
 			Description: r.Description,
 			Middleware:  toPublicChain(r.Chain),
 			Tags:        r.Tags,
+			Timeout:     r.TimeoutSpec,
+			Cache:       toCacheInfo(r.Cache),
 		})
 	}
 	return nil
+}
+
+// cacheHandler returns the Fiber cache middleware configured from the
+// route-level `cache:` block plus engine-wide CacheDefaults.
+//
+// The cache key is `METHOD ORIGINAL_URL` plus `|h:Name=value` for
+// each VaryHeader plus a final `|d:fragment` for whatever
+// CacheDefaults.KeyBy returns. KeyBy receives the per-request
+// Context[T] populated by contextInit; if KeyBy is nil, the key
+// depends only on method + URL + vary headers.
+func (e *Engine[T]) cacheHandler(pc *plannedCache) fiber.Handler {
+	defaults := e.cacheDefaults
+	vary := pc.VaryHeader
+	keyBy := defaults.KeyBy
+
+	return cache.New(cache.Config{
+		Expiration:           pc.TTL,
+		CacheControl:         pc.Control,
+		StoreResponseHeaders: pc.Headers,
+		MaxBytes:             defaults.MaxBytes,
+		Storage:              defaults.Storage,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			var sb strings.Builder
+			// Fiber's default key is c.Path() — that drops the method
+			// and the query string, which is almost never what you
+			// want. Use method + full URL as the base.
+			sb.WriteString(c.Method())
+			sb.WriteByte(' ')
+			sb.WriteString(c.OriginalURL())
+			for _, h := range vary {
+				sb.WriteString("|h:")
+				sb.WriteString(h)
+				sb.WriteByte('=')
+				sb.WriteString(c.Get(h))
+			}
+			if keyBy != nil {
+				if ctx, ok := c.Locals(ctxKey).(*Context[T]); ok {
+					if extra := keyBy(ctx); extra != "" {
+						sb.WriteString("|d:")
+						sb.WriteString(extra)
+					}
+				}
+			}
+			return sb.String()
+		},
+	})
+}
+
+func toCacheInfo(pc *plannedCache) *CacheInfo {
+	if pc == nil {
+		return nil
+	}
+	return &CacheInfo{
+		TTL:        pc.TTLSpec,
+		Control:    pc.Control,
+		Headers:    pc.Headers,
+		VaryHeader: append([]string(nil), pc.VaryHeader...),
+	}
 }
 
 func (e *Engine[T]) wrapMW(mw MiddlewareFunc[T]) fiber.Handler {
@@ -491,5 +651,10 @@ func copyRouteInfo(r RouteInfo) RouteInfo {
 		mw[j] = MiddlewareRef{Name: m.Name, Args: append([]string(nil), m.Args...)}
 	}
 	out.Middleware = mw
+	if r.Cache != nil {
+		c := *r.Cache
+		c.VaryHeader = append([]string(nil), r.Cache.VaryHeader...)
+		out.Cache = &c
+	}
 	return out
 }
