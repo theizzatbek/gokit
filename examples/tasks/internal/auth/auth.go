@@ -11,13 +11,15 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/theizzatbek/fibermap"
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/appctx"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // demoUser is the resolved identity an auth middleware writes to
 // Locals — same shape regardless of which scheme produced it.
 type demoUser struct {
-	UserID string
-	Role   string
+	UserID       string
+	Role         string
+	passwordHash string // unexported — never serialized
 }
 
 // Demo token table — in a real app, this is a JWT verifier hitting
@@ -29,12 +31,23 @@ var demoTokens = map[string]demoUser{
 	"root-token":  {UserID: "u-root", Role: "admin"},
 }
 
-// Demo Basic-auth credentials. Real apps store hashed passwords
-// (bcrypt/argon2); this is a demo, so plaintext suffices.
+// Demo Basic-auth credentials. Passwords stored as bcrypt hashes
+// (cost 10) — plaintext is for the README, not the source.
+//
+// Regenerate via:
+//
+//	hash, _ := bcrypt.GenerateFromPassword([]byte("new-password"), bcrypt.DefaultCost)
+//	fmt.Println(string(hash))
+//
+// Default logins (for the README + quick curl):
+//
+//	alice : secret
+//	bob   : secret
+//	root  : admin
 var demoBasic = map[string]demoUser{
-	"alice:secret": {UserID: "u-alice", Role: "user"},
-	"bob:secret":   {UserID: "u-bob", Role: "user"},
-	"root:admin":   {UserID: "u-root", Role: "admin"},
+	"alice": {UserID: "u-alice", Role: "user", passwordHash: "$2a$10$bzi.7kkcBVEhP1Im/VKcmePqrGr/aPEuzRIOqQdlE.EnrYvSjckJ6"},
+	"bob":   {UserID: "u-bob", Role: "user", passwordHash: "$2a$10$DvaFoDRCWCltEHkIp.zTtOuUzRRFS8jIbfk9B392DH8eGU.bePLja"},
+	"root":  {UserID: "u-root", Role: "admin", passwordHash: "$2a$10$qz8SXSRLRyD72noufvqxsee1KJtgUn6oL4QZc9vY5wZ8tQdMIU3E."},
 }
 
 func writeUser(c *fiber.Ctx, u demoUser) error {
@@ -62,22 +75,40 @@ func Bearer() fiber.Handler {
 }
 
 // Basic parses `Authorization: Basic <base64(user:pass)>`, looks up
-// the credentials in the demo table, and stashes user_id + role on
-// c.Locals. 401 on missing or invalid credentials.
+// the user in the demo table, and verifies the password against the
+// stored bcrypt hash. On success, stashes user_id + role on c.Locals.
+//
+// Every failure branch — missing header, bad base64, unknown user,
+// wrong password — returns an identical 401 body. Distinct messages
+// would leak whether a username exists (user-enumeration).
 func Basic() fiber.Handler {
+	// invalidCreds is the one and only 401 body Basic emits to clients.
+	const invalidCreds = `{"error":"invalid basic credentials"}`
+	unauthorized := func(c *fiber.Ctx) error {
+		c.Status(fiber.StatusUnauthorized)
+		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
+		return c.SendString(invalidCreds)
+	}
 	return func(c *fiber.Ctx) error {
 		const prefix = "Basic "
 		h := c.Get("Authorization")
 		if !strings.HasPrefix(h, prefix) {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing basic credentials"})
+			return unauthorized(c)
 		}
 		decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(h, prefix))
 		if err != nil {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid basic credentials (bad base64)"})
+			return unauthorized(c)
 		}
-		u, ok := demoBasic[string(decoded)]
+		user, pass, ok := strings.Cut(string(decoded), ":")
 		if !ok {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid basic credentials"})
+			return unauthorized(c)
+		}
+		u, ok := demoBasic[user]
+		if !ok {
+			return unauthorized(c)
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(u.passwordHash), []byte(pass)); err != nil {
+			return unauthorized(c)
 		}
 		return writeUser(c, u)
 	}
