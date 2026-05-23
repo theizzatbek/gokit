@@ -30,9 +30,10 @@ func RegisterMiddlewareFactory[T any](e *Engine[T], name string, f MiddlewareFac
 	e.RegisterMiddlewareFactory(name, f)
 }
 
-// RegisterBody registers a typed-body handler. The wrapper parses
-// the request body into Req via bind.Body (using the engine's
-// validator if set), then invokes h with the populated value.
+// RegisterHandlerWithBody registers a typed-body handler. The
+// wrapper parses the request body into Req via bind.Body (using the
+// engine's validator if set), then invokes h with the populated
+// value.
 //
 // One source of truth for the request type: it appears in h's
 // signature and is automatically attached as a schema for OpenAPI
@@ -48,7 +49,7 @@ func RegisterMiddlewareFactory[T any](e *Engine[T], name string, f MiddlewareFac
 //	    return c.Status(201).JSON(...)
 //	}
 //
-//	fibermap.RegisterBody(eng, "tasks.create", h.Create,
+//	fibermap.RegisterHandlerWithBody(eng, "tasks.create", h.Create,
 //	    fibermap.WithResponse(201, Task{}),
 //	)
 //
@@ -59,7 +60,7 @@ func RegisterMiddlewareFactory[T any](e *Engine[T], name string, f MiddlewareFac
 // Extra HandlerOption values (WithResponse, WithQuery, WithHeaders,
 // …) are forwarded to RegisterHandler — only the request-body
 // schema is auto-derived from Req.
-func RegisterBody[T, Req any](e *Engine[T], name string, h func(*Context[T], Req) error, opts ...HandlerOption) {
+func RegisterHandlerWithBody[T, Req any](e *Engine[T], name string, h func(*Context[T], Req) error, opts ...HandlerOption) {
 	wrapped := func(c *Context[T]) error {
 		req, err := bind.Body[Req](c.Ctx, e.validator)
 		if err != nil {
@@ -71,9 +72,9 @@ func RegisterBody[T, Req any](e *Engine[T], name string, h func(*Context[T], Req
 	e.RegisterHandler(name, wrapped, all...)
 }
 
-// RegisterQuery is the query-string analogue of [RegisterBody].
-// Fields on Req use the `query:` tag.
-func RegisterQuery[T, Req any](e *Engine[T], name string, h func(*Context[T], Req) error, opts ...HandlerOption) {
+// RegisterHandlerWithQuery is the query-string analogue of
+// [RegisterHandlerWithBody]. Fields on Req use the `query:` tag.
+func RegisterHandlerWithQuery[T, Req any](e *Engine[T], name string, h func(*Context[T], Req) error, opts ...HandlerOption) {
 	wrapped := func(c *Context[T]) error {
 		req, err := bind.Query[Req](c.Ctx, e.validator)
 		if err != nil {
@@ -85,9 +86,9 @@ func RegisterQuery[T, Req any](e *Engine[T], name string, h func(*Context[T], Re
 	e.RegisterHandler(name, wrapped, all...)
 }
 
-// RegisterParams is the route-param analogue of [RegisterBody].
-// Fields on Req use the `params:` tag.
-func RegisterParams[T, Req any](e *Engine[T], name string, h func(*Context[T], Req) error, opts ...HandlerOption) {
+// RegisterHandlerWithParams is the route-param analogue of
+// [RegisterHandlerWithBody]. Fields on Req use the `params:` tag.
+func RegisterHandlerWithParams[T, Req any](e *Engine[T], name string, h func(*Context[T], Req) error, opts ...HandlerOption) {
 	wrapped := func(c *Context[T]) error {
 		req, err := bind.Params[Req](c.Ctx, e.validator)
 		if err != nil {
@@ -98,9 +99,9 @@ func RegisterParams[T, Req any](e *Engine[T], name string, h func(*Context[T], R
 	e.RegisterHandler(name, wrapped, opts...)
 }
 
-// RegisterHeaders is the header analogue of [RegisterBody]. Fields
-// on Req use the `reqHeader:` tag.
-func RegisterHeaders[T, Req any](e *Engine[T], name string, h func(*Context[T], Req) error, opts ...HandlerOption) {
+// RegisterHandlerWithHeaders is the header analogue of
+// [RegisterHandlerWithBody]. Fields on Req use the `reqHeader:` tag.
+func RegisterHandlerWithHeaders[T, Req any](e *Engine[T], name string, h func(*Context[T], Req) error, opts ...HandlerOption) {
 	wrapped := func(c *Context[T]) error {
 		req, err := bind.Header[Req](c.Ctx, e.validator)
 		if err != nil {

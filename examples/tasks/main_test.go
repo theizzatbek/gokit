@@ -40,8 +40,8 @@ func buildEngine(t *testing.T) *fibermap.Engine[appctx.AppCtx] {
 	taskH := tasks.New(store, valid)
 	fibermap.RegisterHandler(eng, "tasks.list", taskH.List)
 	fibermap.RegisterHandler(eng, "tasks.get", taskH.Get)
-	fibermap.RegisterBody(eng, "tasks.create", taskH.Create)
-	fibermap.RegisterBody(eng, "tasks.update", taskH.Update)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.create", taskH.Create)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.update", taskH.Update)
 	fibermap.RegisterHandler(eng, "tasks.delete", taskH.Delete)
 	fibermap.RegisterHandler(eng, "admin.routes", admin.Routes(eng))
 
@@ -108,8 +108,8 @@ func TestCreateThenList(t *testing.T) {
 	taskH := tasks.New(store, valid)
 	fibermap.RegisterHandler(eng, "tasks.list", taskH.List)
 	fibermap.RegisterHandler(eng, "tasks.get", taskH.Get)
-	fibermap.RegisterBody(eng, "tasks.create", taskH.Create)
-	fibermap.RegisterBody(eng, "tasks.update", taskH.Update)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.create", taskH.Create)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.update", taskH.Update)
 	fibermap.RegisterHandler(eng, "tasks.delete", taskH.Delete)
 	fibermap.RegisterHandler(eng, "admin.routes", admin.Routes(eng))
 	if err := eng.LoadFS(routesFS, "routes.yaml"); err != nil {
@@ -177,8 +177,8 @@ func TestCacheIsolatesByUser(t *testing.T) {
 	taskH := tasks.New(store, valid)
 	fibermap.RegisterHandler(eng, "tasks.list", taskH.List)
 	fibermap.RegisterHandler(eng, "tasks.get", taskH.Get)
-	fibermap.RegisterBody(eng, "tasks.create", taskH.Create)
-	fibermap.RegisterBody(eng, "tasks.update", taskH.Update)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.create", taskH.Create)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.update", taskH.Update)
 	fibermap.RegisterHandler(eng, "tasks.delete", taskH.Delete)
 	fibermap.RegisterHandler(eng, "admin.routes", admin.Routes(eng))
 	if err := eng.LoadFS(routesFS, "routes.yaml"); err != nil {

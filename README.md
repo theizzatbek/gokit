@@ -455,10 +455,10 @@ Bad duration strings fail at `LoadFile`/`LoadBytes` with
 verbatim YAML value is surfaced on `RouteInfo.Timeout` for
 introspection.
 
-## Auto-binding handlers via `RegisterBody`
+## Auto-binding handlers via `RegisterHandlerWithBody`
 
 For the common case — POST/PUT/PATCH where the handler takes a typed
-JSON body — `fibermap.RegisterBody` removes the boilerplate. The
+JSON body — `fibermap.RegisterHandlerWithBody` removes the boilerplate. The
 request type appears once (in the handler signature), and fibermap
 auto-parses + validates + attaches the OpenAPI schema:
 
@@ -474,7 +474,7 @@ func (h *Handler) Create(c *Ctx, req CreateTaskReq) error {
 }
 
 eng.SetValidator(validator.New())                       // once, engine-wide
-fibermap.RegisterBody(eng, "tasks.create", h.Create,
+fibermap.RegisterHandlerWithBody(eng, "tasks.create", h.Create,
     fibermap.WithResponse(201, Task{}),
 )
 ```
@@ -487,10 +487,10 @@ Companions for the other input locations:
 
 | Helper                   | Reads from       | Tag         |
 | ------------------------ | ---------------- | ----------- |
-| `fibermap.RegisterBody`   | JSON body        | `json:`      |
-| `fibermap.RegisterQuery`  | Query string     | `query:`     |
-| `fibermap.RegisterParams` | Route params     | `params:`    |
-| `fibermap.RegisterHeaders`| Request headers  | `reqHeader:` |
+| `fibermap.RegisterHandlerWithBody`   | JSON body        | `json:`      |
+| `fibermap.RegisterHandlerWithQuery`  | Query string     | `query:`     |
+| `fibermap.RegisterHandlerWithParams` | Route params     | `params:`    |
+| `fibermap.RegisterHandlerWithHeaders`| Request headers  | `reqHeader:` |
 
 Handler signature is `func(c *Context[T], req Req) error` for all
 four — the typed parameter slot is auto-filled.

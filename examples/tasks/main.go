@@ -93,7 +93,7 @@ func main() {
 
 	fibermap.RegisterMiddlewareFactory(eng, "require_role", auth.RequireRole)
 
-	// Engine-wide validator — fibermap.RegisterBody and friends pass
+	// Engine-wide validator — fibermap.RegisterHandlerWithBody and friends pass
 	// the parsed struct through it before calling the handler.
 	eng.SetValidator(valid)
 
@@ -111,7 +111,7 @@ func main() {
 		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
 	})
 
-	// Body-binding handlers use fibermap.RegisterBody — the request
+	// Body-binding handlers use fibermap.RegisterHandlerWithBody — the request
 	// type appears once (in the handler signature) and is auto-parsed
 	// + validated before the handler runs. The body schema is also
 	// auto-attached for OpenAPI. Other handlers use the symmetric
@@ -121,9 +121,9 @@ func main() {
 		fibermap.WithResponse(fiber.StatusOK, fiber.Map{"tasks": []tasks.Task{}}))
 	fibermap.RegisterHandler(eng, "tasks.get", taskH.Get,
 		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
-	fibermap.RegisterBody(eng, "tasks.create", taskH.Create,
+	fibermap.RegisterHandlerWithBody(eng, "tasks.create", taskH.Create,
 		fibermap.WithResponse(fiber.StatusCreated, tasks.Task{}))
-	fibermap.RegisterBody(eng, "tasks.update", taskH.Update,
+	fibermap.RegisterHandlerWithBody(eng, "tasks.update", taskH.Update,
 		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
 	fibermap.RegisterHandler(eng, "tasks.delete", taskH.Delete,
 		fibermap.WithResponse(fiber.StatusNoContent, nil))

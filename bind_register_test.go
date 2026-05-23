@@ -71,7 +71,7 @@ func TestRegisterBody_HappyPath(t *testing.T) {
 	app := mountFor(t,
 		`groups: [{routes: [{method: POST, path: /tasks, handler: tasks.create}]}]`,
 		func(e *Engine[registerCtx]) {
-			RegisterBody(e, "tasks.create", func(c *Context[registerCtx], req createReq) error {
+			RegisterHandlerWithBody(e, "tasks.create", func(c *Context[registerCtx], req createReq) error {
 				return c.SendString("got: " + req.Title)
 			})
 		},
@@ -92,7 +92,7 @@ func TestRegisterBody_ValidationFail_400(t *testing.T) {
 	app := mountFor(t,
 		`groups: [{routes: [{method: POST, path: /tasks, handler: tasks.create}]}]`,
 		func(e *Engine[registerCtx]) {
-			RegisterBody(e, "tasks.create", func(c *Context[registerCtx], req createReq) error {
+			RegisterHandlerWithBody(e, "tasks.create", func(c *Context[registerCtx], req createReq) error {
 				t.Errorf("handler should not run on validation fail; got req=%+v", req)
 				return nil
 			})
@@ -116,7 +116,7 @@ func TestRegisterBody_ParseFail_400(t *testing.T) {
 	app := mountFor(t,
 		`groups: [{routes: [{method: POST, path: /tasks, handler: tasks.create}]}]`,
 		func(e *Engine[registerCtx]) {
-			RegisterBody(e, "tasks.create", func(c *Context[registerCtx], req createReq) error {
+			RegisterHandlerWithBody(e, "tasks.create", func(c *Context[registerCtx], req createReq) error {
 				return nil
 			})
 		},
@@ -143,7 +143,7 @@ func TestRegisterBody_CustomBindErrorHandler(t *testing.T) {
 				}
 				return c.Status(422).JSON(map[string]string{"kind": kind})
 			})
-			RegisterBody(e, "tasks.create", func(c *Context[registerCtx], req createReq) error {
+			RegisterHandlerWithBody(e, "tasks.create", func(c *Context[registerCtx], req createReq) error {
 				return nil
 			})
 		},
@@ -163,10 +163,10 @@ func TestRegisterBody_CustomBindErrorHandler(t *testing.T) {
 func TestRegisterBody_AutoAttachesSchema(t *testing.T) {
 	e := New[registerCtx]()
 	e.SetContextBuilder(func(c *fiber.Ctx) (registerCtx, error) { return registerCtx{}, nil })
-	RegisterBody(e, "tasks.create", func(c *Context[registerCtx], req createReq) error { return nil })
+	RegisterHandlerWithBody(e, "tasks.create", func(c *Context[registerCtx], req createReq) error { return nil })
 	meta := e.HandlerMeta("tasks.create")
 	if meta == nil {
-		t.Fatal("HandlerMeta missing — RegisterBody didn't attach the schema")
+		t.Fatal("HandlerMeta missing — RegisterHandlerWithBody didn't attach the schema")
 	}
 	if _, ok := meta.Body.(createReq); !ok {
 		t.Errorf("meta.Body = %T, want createReq", meta.Body)
@@ -177,7 +177,7 @@ func TestRegisterQuery_AutoBinds(t *testing.T) {
 	app := mountFor(t,
 		`groups: [{routes: [{method: GET, path: /things, handler: things.list}]}]`,
 		func(e *Engine[registerCtx]) {
-			RegisterQuery(e, "things.list", func(c *Context[registerCtx], q listQuery) error {
+			RegisterHandlerWithQuery(e, "things.list", func(c *Context[registerCtx], q listQuery) error {
 				return c.SendString("limit: " + itoa(q.Limit))
 			})
 		},
@@ -193,7 +193,7 @@ func TestRegisterParams_AutoBinds(t *testing.T) {
 	app := mountFor(t,
 		`groups: [{routes: [{method: GET, path: /things/:id, handler: things.get}]}]`,
 		func(e *Engine[registerCtx]) {
-			RegisterParams(e, "things.get", func(c *Context[registerCtx], p idParams) error {
+			RegisterHandlerWithParams(e, "things.get", func(c *Context[registerCtx], p idParams) error {
 				return c.SendString("id: " + p.ID)
 			})
 		},
@@ -209,7 +209,7 @@ func TestRegisterHeaders_AutoBinds(t *testing.T) {
 	app := mountFor(t,
 		`groups: [{routes: [{method: GET, path: /me, handler: me.get}]}]`,
 		func(e *Engine[registerCtx]) {
-			RegisterHeaders(e, "me.get", func(c *Context[registerCtx], h authHeader) error {
+			RegisterHandlerWithHeaders(e, "me.get", func(c *Context[registerCtx], h authHeader) error {
 				return c.SendString("auth: " + h.Authorization)
 			})
 		},

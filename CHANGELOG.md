@@ -28,12 +28,12 @@ three times (handler signature + bind.Body call + WithBody option).
   below, which CAN'T be methods because Go disallows generic
   methods. The original `Engine.Register*` methods remain; both
   forms are exported and equivalent.
-- `fibermap.RegisterBody[T, Req any](eng, name, h, opts...)` — wraps
+- `fibermap.RegisterHandlerWithBody[T, Req any](eng, name, h, opts...)` — wraps
   a typed handler `func(*Context[T], Req) error` into a
   `HandlerFunc[T]` that parses the body via `bind.Body[Req]`, runs
   the engine's validator, and invokes `h` with the result. Schema is
   auto-attached via `WithBody(*new(Req))`.
-- `fibermap.RegisterQuery` / `RegisterParams` / `RegisterHeaders` —
+- `fibermap.RegisterHandlerWithQuery` / `RegisterHandlerWithParams` / `RegisterHandlerWithHeaders` —
   same shape for the other bind locations, reading from the
   `query:` / `params:` / `reqHeader:` struct tags. Auto-attach the
   matching schema where applicable.
@@ -47,7 +47,7 @@ three times (handler signature + bind.Body call + WithBody option).
 - `fibermap.BindErrorFunc[T]` — public type for the bind error
   handler signature.
 - `examples/tasks` migrates `tasks.create` and `tasks.update` to
-  `fibermap.RegisterBody` — handler signatures gain a typed `req`
+  `fibermap.RegisterHandlerWithBody` — handler signatures gain a typed `req`
   parameter and the per-handler `bind.Body` + `badBody` branching
   disappears. Net ~15 lines fewer in the example.
 

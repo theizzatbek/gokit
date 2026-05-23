@@ -51,7 +51,7 @@ type CreateReq struct {
 	Title string `json:"title" validate:"required,min=1,max=200"`
 }
 
-// Create handles POST /tasks. Wired with fibermap.RegisterBody, so
+// Create handles POST /tasks. Wired with fibermap.RegisterHandlerWithBody, so
 // `req` arrives already parsed + validated; bind.Body call and
 // per-handler error branching live in fibermap, not here.
 func (h *Handler) Create(c *appctx.Ctx, req CreateReq) error {
@@ -75,7 +75,7 @@ type UpdateReq struct {
 func (h *Handler) Update(c *appctx.Ctx, req UpdateReq) error {
 	if req.Title == nil && req.Done == nil {
 		// Cross-field rule that doesn't fit a struct tag — keep the
-		// hand-rolled check here. fibermap.RegisterBody covers
+		// hand-rolled check here. fibermap.RegisterHandlerWithBody covers
 		// per-field validate; "at least one of" stays in code.
 		return badRequest(c, "at least one of title, done must be present")
 	}
