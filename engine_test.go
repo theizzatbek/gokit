@@ -2,10 +2,13 @@ package fibermap
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -1103,6 +1106,93 @@ func TestAdd_PanicsOnMissingFields(t *testing.T) {
 			fe := expectRegisterPanic(t, tc.fn)
 			if fe.Code != CodeMissingField {
 				t.Errorf("code = %q, want CodeMissingField", fe.Code)
+			}
+		})
+	}
+}
+
+func TestEngine_All_RangeOverFunc(t *testing.T) {
+	e := buildEngineWithTwoRoutes(t)
+
+	var collected []string
+	for r := range e.All() {
+		collected = append(collected, r.Method+" "+r.Path)
+	}
+
+	want := []string{"GET /v1/a", "GET /v1/b"}
+	if !reflect.DeepEqual(collected, want) {
+		t.Errorf("got %v, want %v", collected, want)
+	}
+}
+
+func TestEngine_All_BreakStops(t *testing.T) {
+	e := buildEngineWithTwoRoutes(t)
+
+	count := 0
+	for r := range e.All() {
+		count++
+		if r.Path == "/v1/a" {
+			break
+		}
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1 (break should stop after first)", count)
+	}
+}
+
+func TestEngine_All_DefensiveCopy(t *testing.T) {
+	e := buildEngineWithTwoRoutes(t)
+
+	for r := range e.All() {
+		r.Tags = append(r.Tags, "mutated")
+		_ = r
+	}
+
+	for _, r := range e.Routes() {
+		for _, tag := range r.Tags {
+			if tag == "mutated" {
+				t.Errorf("mutation leaked into engine state: %+v", r)
+			}
+		}
+	}
+}
+
+func benchEngine(b *testing.B, n int) *Engine[engCtx] {
+	b.Helper()
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	for i := 0; i < n; i++ {
+		name := "h" + strconv.Itoa(i)
+		e.RegisterHandler(name, func(c *Context[engCtx]) error { return nil })
+	}
+
+	var sb strings.Builder
+	sb.WriteString("groups:\n  - prefix: /v1\n    routes:\n")
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&sb, "      - { method: GET, path: /r%d, handler: h%d }\n", i, i)
+	}
+	if err := e.LoadBytes([]byte(sb.String())); err != nil {
+		b.Fatal(err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		b.Fatal(err)
+	}
+	return e
+}
+
+func BenchmarkEngine_Lookup(b *testing.B) {
+	for _, n := range []int{10, 100, 1000} {
+		b.Run("routes="+strconv.Itoa(n), func(b *testing.B) {
+			e := benchEngine(b, n)
+			// Pick a route in the MIDDLE of the slice — worst case
+			// for a linear scan.
+			method, path := "GET", "/v1/r"+strconv.Itoa(n/2)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, ok := e.Lookup(method, path); !ok {
+					b.Fatal("lookup miss")
+				}
 			}
 		})
 	}
