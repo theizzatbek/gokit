@@ -56,9 +56,13 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// --- Engine setup.
+	// Default[T]() returns an Engine with the v0.5 production ops bundle
+	// pre-wired into Run (Recover + RequestID + RequestLogger +
+	// HealthCheck + Metrics). New[T]() would give us the same bundle
+	// minus the Prometheus /metrics endpoint.
 	store := tasks.NewMemStore()
 	valid := validator.New(validator.WithRequiredStructEnabled())
-	eng := fibermap.New[appctx.AppCtx]()
+	eng := fibermap.Default[appctx.AppCtx]()
 
 	eng.SetContextBuilder(func(c *fiber.Ctx) (appctx.AppCtx, error) {
 		// All four locals are populated by the Fiber-level middlewares
@@ -99,16 +103,20 @@ func main() {
 	eng.RegisterHandler("tasks.delete", taskH.Delete)
 	eng.RegisterHandler("admin.routes", admin.Routes(eng))
 
-	// One Run call covers everything a production service typically
-	// needs:
-	//   - fiber.New with custom ErrorHandler
-	//   - Recover catches handler panics (logged with stack, returns 500)
-	//   - /healthz unauthenticated (k8s livenessProbe)
-	//   - structured access log (skip the noisy probe + metrics paths)
-	//   - Prometheus /metrics
-	//   - RequestID + Bearer auth installed BEFORE the ContextBuilder
-	//   - embedded routes.yaml, Mount, Listen on :3000 (or $PORT)
-	//   - SIGINT/SIGTERM graceful shutdown with a 10s drain (the default)
+	// Run covers everything a production service typically needs.
+	// The ops bundle (Recover, RequestID, RequestLogger, HealthCheck)
+	// is on by default; Default[T] above added the Prometheus
+	// /metrics endpoint on top.
+	//
+	// What's left to wire explicitly:
+	//   - fiber.New with a custom ErrorHandler (slog-aware)
+	//   - WithRecover(logger) — supply the structured logger instead
+	//     of the default's slog.Default() so panic logs land in our
+	//     JSON stream alongside everything else
+	//   - WithRequestLogger(logger, ...) — same reason
+	//   - WithUse(auth.Bearer()) — auth installed AFTER the default
+	//     RequestID, BEFORE the ContextBuilder
+	//   - WithRoutesFS(routesFS) — load YAML from the embedded FS
 	logger.Info("listening", "addr", ":3000")
 	err := eng.Run(
 		fibermap.WithFiberConfig(fiber.Config{
@@ -120,10 +128,8 @@ func main() {
 			},
 		}),
 		fibermap.WithRecover(logger),
-		fibermap.WithHealthCheck("/healthz"),
 		fibermap.WithRequestLogger(logger, "/healthz", "/metrics"),
-		fibermap.WithMetrics("/metrics"),
-		fibermap.WithUse(fibermap.RequestID(), auth.Bearer()),
+		fibermap.WithUse(auth.Bearer()),
 		fibermap.WithRoutesFS(routesFS),
 	)
 	if err != nil {

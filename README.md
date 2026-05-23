@@ -139,18 +139,19 @@ if err := eng.Run(); err != nil {
 
 Defaults (all overridable via options):
 
-| Default                          | Override                                                |
-| -------------------------------- | ------------------------------------------------------- |
-| Listen on `:3000` (or `$PORT` env if set) | `WithAddr(":8080")`                            |
-| Load `routes.yaml` from disk     | `WithRoutesPath("api.yaml")` / `WithRoutesFS(embedFS)`  |
-| `fiber.New()` with no config     | `WithFiberConfig(fiber.Config{ErrorHandler: ...})`      |
-| No Fiber-level middleware        | `WithUse(authBearer, requestID)` (run BEFORE ContextBuilder) |
-| No panic recovery                | `WithRecover(logger)` — catch + log panics, return 500   |
-| No health check                  | `WithHealthCheck("/healthz")` — bypasses auth + ContextBuilder |
-| No access log                    | `WithRequestLogger(logger, "/healthz", "/metrics")`     |
-| No metrics endpoint              | `WithMetrics("/metrics")` — Prometheus text format       |
-| 10s graceful drain on signal     | `WithShutdownTimeout(30*time.Second)` / `WithoutSignalHandling()` |
-| Escape hatch: groups, sub-routes | `WithConfigureApp(func(app *fiber.App) { ... })`        |
+| Default                                       | Customize / disable                                              |
+| --------------------------------------------- | ---------------------------------------------------------------- |
+| Listen on `:3000` (or `$PORT` env if set)      | `WithAddr(":8080")`                                              |
+| Load `routes.yaml` from disk                   | `WithRoutesPath("api.yaml")` / `WithRoutesFS(embedFS)`           |
+| `fiber.New()` with no config                   | `WithFiberConfig(fiber.Config{ErrorHandler: ...})`               |
+| No extra Fiber-level middleware                | `WithUse(auth.Bearer())` (appended after the built-in RequestID) |
+| **Recover** with `slog.Default()`              | `WithRecover(myLogger)` / `WithoutRecover()`                     |
+| **RequestID** (built-in `X-Request-ID`)        | `WithoutRequestID()`                                             |
+| **RequestLogger** with `slog.Default()`        | `WithRequestLogger(myLogger, skip...)` / `WithoutRequestLogger()` |
+| **HealthCheck at `/healthz`**                  | `WithHealthCheck("/_health")` / `WithoutHealthCheck()`           |
+| No metrics endpoint (heavy dep, opt-in)        | `WithMetrics("/metrics")` (or `fibermap.Default[T]()`)           |
+| 10s graceful drain on signal                   | `WithShutdownTimeout(30*time.Second)` / `WithoutSignalHandling()` |
+| Escape hatch: groups, sub-routes               | `WithConfigureApp(func(app *fiber.App) { ... })`                 |
 
 Run skips loading if the engine already has a YAML document loaded —
 useful when you preload from `LoadBytes` for tests or unusual layouts.
@@ -162,63 +163,58 @@ Mount errors, parse errors, and listen errors all surface as the
 return value of `Run`. SIGINT/SIGTERM during normal operation
 returns `nil` after a clean drain.
 
-### Production-ready ops bundle
+### Production-ready ops bundle — on by default
 
-For a typical service, four Run options give you panic-safe, observable,
-cloud-friendly behaviour with one call:
+Since v0.5 the ops bundle is built into `Run` itself. `New[T]()` +
+`Run()` already gives you:
+
+- **`Recover`** with `slog.Default()` — panics → structured log + 500
+- **`RequestID`** at the front of the Use chain — every response carries
+  `X-Request-ID`
+- **`RequestLogger`** with `slog.Default()`, skipping `/healthz` and
+  `/metrics` — one structured access-log line per request
+- **`HealthCheck`** at `/healthz` — bypasses auth/recover/ContextBuilder
+  for k8s probes
+
+`Metrics` is opt-in (it pulls in
+`github.com/prometheus/client_golang`); use `fibermap.Default[T]()`
+or `WithMetrics(path)` to enable it.
+
+**To override a default**, call the matching `With*` option — it wins:
 
 ```go
-logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-
-err := eng.Run(
-    fibermap.WithRecover(logger),                       // log panics → 500
-    fibermap.WithHealthCheck("/healthz"),               // k8s probes
-    fibermap.WithRequestLogger(logger, "/healthz", "/metrics"),
-    fibermap.WithMetrics("/metrics"),                   // Prometheus scrape
-    fibermap.WithUse(fibermap.RequestID(), auth.Bearer()),
+eng.Run(
+    fibermap.WithRecover(myLogger),                 // custom slog logger
+    fibermap.WithRequestLogger(myLogger, "/h", "/m"),
+    fibermap.WithHealthCheck("/_health"),           // move the path
 )
 ```
 
-What you get:
+**To suppress a default**, call the `Without*` option:
 
-- **`Recover`** wraps fiber's recover middleware with a slog-aware stack
-  trace handler. Panics in any downstream middleware or handler log
-  with method/path/request_id/stack and return a plain 500 instead of
-  dropping the connection.
-- **`HealthCheck`** registers a `GET` route returning `200 OK` BEFORE
-  any other middleware — bypasses auth, recover, request log, and the
-  `ContextBuilder`. Exactly what k8s `livenessProbe`/`readinessProbe`
-  wants.
-- **`RequestLogger`** emits one structured access-log line per request
-  with method, path, status, latency_ms, response bytes, client IP,
-  and request_id. INFO for status < 500, ERROR otherwise. Pass skip
-  paths (`/healthz`, `/metrics`) to keep the log clean.
-- **`Metrics`** installs a Prometheus-text scrape endpoint and exports
-  three series: `fibermap_http_requests_total{method,route,status}`
-  counter, `fibermap_http_request_duration_seconds{...}` histogram,
-  and `fibermap_http_requests_in_flight` gauge. The `route` label is
-  the Fiber route template (`/v1/tasks/:id`) — bounded cardinality,
-  not per-URL.
+```go
+eng.Run(
+    fibermap.WithoutRecover(),         // handle panics yourself
+    fibermap.WithoutRequestID(),       // you ship your own correlation header
+    fibermap.WithoutRequestLogger(),   // log access via a different stack
+    fibermap.WithoutHealthCheck(),     // probe lives elsewhere
+)
+```
 
-### `fibermap.Default[T]()` — the bundle in one constructor
+### `fibermap.Default[T]()` — adds Metrics on top
 
-If you just want a working service with `Recover + RequestID +
-RequestLogger + HealthCheck + Metrics` enabled — `Default[T]()`
-returns an `Engine` pre-wired with all of them, so `Run()` ships them
-without any per-option boilerplate:
+`Default[T]()` is `New[T]()` plus an `Engine`-level default of
+`WithMetrics("/metrics")` — use it when you want the full ops bundle
+including the Prometheus endpoint without spelling it out:
 
 ```go
 eng := fibermap.Default[AppCtx]()
 eng.SetContextBuilder(...)
 eng.RegisterHandler(...)
-eng.RegisterMiddlewareFactory(...)
-eng.Run(fibermap.WithUse(auth.Bearer()))   // bearer appended after the default RequestID
+eng.Run(fibermap.WithUse(auth.Bearer()))   // full bundle + auth
 ```
 
-Defaults are applied BEFORE the options you pass to `Run`, so any
-explicit option overrides the default — `Run(WithMetrics(""))`
-disables metrics, `Run(WithHealthCheck("/_health"))` moves the
-endpoint. Use `New[T]()` instead when you want zero defaults.
+To disable just metrics on a Default engine: `Run(WithoutMetrics())`.
 
 ### Programmatic routes via `Engine.Add`
 
