@@ -28,8 +28,13 @@
 //	curl -H "Authorization: Bearer alice-token" http://localhost:3000/api/v1/tasks   # cache hit
 //	curl -H "Authorization: Bearer bob-token"   http://localhost:3000/api/v1/tasks   # separate KeyBy bucket → miss
 //
+//	# Configuration is env-driven — see .env.example for every knob
+//	# (ADDR, LOG_LEVEL, CORS_ORIGINS, RATE_LIMIT_MAX, ...). With no env,
+//	# defaults match the curl examples above.
+//
 //	# Run wires the production-ops bundle: panic recovery, k8s
-//	# health check, structured access log, Prometheus metrics.
+//	# health check, structured access log, Prometheus metrics, plus
+//	# helmet (security headers) + cors + per-IP rate limiting.
 //	curl http://localhost:3000/healthz       # 200 ok, no auth needed
 //	curl http://localhost:3000/metrics       # Prometheus text format
 //
@@ -44,16 +49,22 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/helmet"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/theizzatbek/fibermap"
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/admin"
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/appctx"
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/auth"
+	"github.com/theizzatbek/fibermap/examples/tasks/internal/config"
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/tasks"
 	"github.com/theizzatbek/fibermap/openapi"
 )
@@ -65,7 +76,17 @@ import (
 var routesFS embed.FS
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+
+	logger, err := newLogger(cfg.LogFormat, cfg.LogLevel)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	// --- Engine setup.
 	// Default[T]() returns an Engine with the v0.5 production ops bundle
@@ -132,33 +153,30 @@ func main() {
 	// OpenAPI 3.0 spec — generated from Engine.Routes() + the handler
 	// schemas attached above. The generator reads from the engine,
 	// so the spec is always in sync with the live route table.
-	// errBody is the shape of every 4xx/5xx response — a single
-	// `{"error": "..."}` object. Declared once on the generator so
-	// every operation in the spec advertises the same error contract
-	// without per-handler boilerplate.
-	// (errBody removed — typed tasks.ErrorResponse passed directly below)
-	gen := openapi.NewGenerator(eng,
+	// Every 4xx/5xx response is `tasks.ErrorResponse` (typed
+	// `{"error": "..."}`), declared once on the generator so each
+	// operation advertises the same error contract without per-handler
+	// boilerplate.
+	genOpts := []openapi.Option{
 		openapi.WithInfo(openapi.Info{
 			Title:       "Tasks API",
 			Version:     "0.1.0",
 			Description: "Per-user task lists — demo for the fibermap library.",
 		}),
-		// Universal error responses — applied to every operation.
+	}
+	if cfg.APIBaseURL != "" {
+		genOpts = append(genOpts, openapi.WithServer(cfg.APIBaseURL, cfg.Env))
+	}
+	genOpts = append(genOpts,
 		openapi.WithDefaultResponse(fiber.StatusBadRequest, tasks.ErrorResponse{}),
 		openapi.WithDefaultResponse(fiber.StatusUnauthorized, tasks.ErrorResponse{}),
 		openapi.WithDefaultResponse(fiber.StatusForbidden, tasks.ErrorResponse{}),
 		openapi.WithDefaultResponse(fiber.StatusNotFound, tasks.ErrorResponse{}),
 		openapi.WithDefaultResponse(fiber.StatusInternalServerError, tasks.ErrorResponse{}),
-		// `auth` is the fibermap-middleware name. Bearer OR Basic both
-		// satisfy it (see auth.BearerOrBasic in WithUse below) — the
-		// spec lists both schemes; clients pick either.
-		//
-		// No WithServer here: OpenAPI tools default to relative URLs
-		// (resolves against wherever /openapi.json is served). For
-		// prod, set WithServer(os.Getenv("API_BASE_URL"), "prod").
 		openapi.SecurityMapping("BearerAuth", openapi.HTTPBearer(), "auth"),
 		openapi.SecurityMapping("BasicAuth", openapi.HTTPBasic(), "auth"),
 	)
+	gen := openapi.NewGenerator(eng, genOpts...)
 
 	// Mount installs /openapi.json (sync.Once-cached spec) and /docs
 	// (Scalar UI viewer) — both as programmatic routes on the
@@ -183,22 +201,49 @@ func main() {
 	//   - WithUse(auth.Bearer()) — auth installed AFTER the default
 	//     RequestID, BEFORE the ContextBuilder
 	//   - WithRoutesFS(routesFS) — load YAML from the embedded FS
-	logger.Info("listening", "addr", ":3000")
-	err := eng.Run(
+	// When cfg.Addr is empty, fibermap.Run resolves $PORT (cloud
+	// convention) → fallback :3000. Mirror that for the startup log
+	// so what we print matches what fibermap will actually listen on.
+	listenAddr := cfg.Addr
+	if listenAddr == "" {
+		if p := os.Getenv("PORT"); p != "" {
+			listenAddr = ":" + p
+		} else {
+			listenAddr = ":3000"
+		}
+	}
+	logger.Info("listening", "addr", listenAddr, "env", cfg.Env)
+	err = eng.Run(
+		fibermap.WithAddr(cfg.Addr),
+		fibermap.WithShutdownTimeout(cfg.ShutdownTimeout),
 		fibermap.WithFiberConfig(fiber.Config{
 			DisableStartupMessage: true,
+			BodyLimit:             cfg.BodyLimit,
 			ErrorHandler: func(c *fiber.Ctx, err error) error {
 				logger.Error("unhandled error", "err", err, "path", c.Path())
 				return c.Status(http.StatusInternalServerError).
-					JSON(fiber.Map{"error": "internal server error"})
+					JSON(tasks.ErrorResponse{Error: "internal server error"})
 			},
 		}),
 		fibermap.WithRecover(logger),
 		fibermap.WithRequestLogger(logger, "/healthz", "/metrics"),
-		// `/docs` and `/openapi.json` are public observability endpoints
-		// — same convention as `/healthz` and `/metrics`. Auth would
-		// just make the docs unbrowsable from a plain browser.
-		fibermap.WithUse(auth.BearerOrBasic("/docs", "/openapi.json")),
+		// Order matters: helmet sets security headers on every response
+		// (including 401/429); cors before auth so OPTIONS preflight
+		// doesn't trip on 401; limiter before auth so anonymous flood
+		// doesn't pay for credential lookup; auth runs last so locals
+		// are populated right before fibermap's ContextBuilder.
+		fibermap.WithUse(
+			helmet.New(),
+			cors.New(cors.Config{
+				AllowOrigins: strings.Join(cfg.CORSOrigins, ","),
+				AllowMethods: strings.Join(cfg.CORSMethods, ","),
+			}),
+			limiter.New(limiter.Config{
+				Max:        cfg.RateLimitMax,
+				Expiration: cfg.RateLimitExpiration,
+			}),
+			auth.BearerOrBasic("/docs", "/openapi.json"),
+		),
 		fibermap.WithRoutesFS(routesFS),
 	)
 	if err != nil {
@@ -206,4 +251,25 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("bye")
+}
+
+// newLogger builds a slog.Logger whose handler and level come from
+// config. Format is text|json; level is one of debug|info|warn|error
+// (validated in config.Load).
+func newLogger(format, levelStr string) (*slog.Logger, error) {
+	var lvl slog.Level
+	if err := lvl.UnmarshalText([]byte(levelStr)); err != nil {
+		return nil, fmt.Errorf("logger: parse level %q: %w", levelStr, err)
+	}
+	opts := &slog.HandlerOptions{Level: lvl}
+	var h slog.Handler
+	switch format {
+	case "json":
+		h = slog.NewJSONHandler(os.Stdout, opts)
+	case "text":
+		h = slog.NewTextHandler(os.Stdout, opts)
+	default:
+		return nil, fmt.Errorf("logger: unknown format %q", format)
+	}
+	return slog.New(h), nil
 }

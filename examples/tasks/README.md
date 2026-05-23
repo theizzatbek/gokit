@@ -10,6 +10,7 @@ teaching demo. Copy this directory, rename, adjust, ship.
 | `main.go` | wire-up via `eng.Run(...)` — one call covers `fiber.New(custom config)`, `app.Use(request_id, auth.Bearer)`, `LoadFS` of embedded `routes.yaml`, `Mount`, `Listen(":3000")`, and SIGINT/SIGTERM graceful shutdown |
 | `routes.yaml` | declarative route tree, mounted via `Engine.LoadFS`; modeline at the top gives editor autocomplete via JSON Schema |
 | `internal/appctx/` | `AppCtx` struct (user_id, role, request_id, scoped logger) + `Ctx` / `H` / `MW` aliases so handler signatures don't carry the generic parameter |
+| `internal/config/` | env-driven `Config` struct via `caarlos0/env/v11` — `ADDR`, `LOG_LEVEL`, `CORS_ORIGINS`, etc. See `.env.example` |
 | `internal/auth/` | Fiber-level Bearer-token middleware (runs **before** `ContextBuilder`) + fibermap factory `require_role` |
 | `internal/tasks/` | domain — `Task` model, `Store` interface (memory impl behind it; swap for postgres without touching handlers), handlers using `bind.Body[T]` with `go-playground/validator` tags |
 | `internal/admin/` | `/admin/routes` endpoint built on `Engine.Routes()` — handy ops endpoint, also shows the JSON tags on `RouteInfo` in action |
@@ -51,6 +52,30 @@ curl -i -X DELETE -H "Authorization: Bearer root-token" \
 curl -i -H "Authorization: Bearer root-token" \
         http://localhost:3000/api/v1/admin/routes
 ```
+
+## Configuration
+
+Everything is env-driven via `internal/config`. The shipped defaults
+match what you see in `curl` examples above — listens on `:3000`,
+JSON logs at `info`, open CORS, 100 req/min per IP. Override any field
+by exporting the corresponding env var (or dropping a `.env` next to
+the binary and sourcing it).
+
+| Var | Default | Meaning |
+| --- | --- | --- |
+| `ADDR` | _(unset)_ → `$PORT` / `:3000` | Listen address. When unset, `fibermap.Run` honors `$PORT` (cloud convention) and falls back to `:3000`. Set `ADDR` explicitly to override both |
+| `SHUTDOWN_TIMEOUT` | `10s` | Graceful drain budget on SIGINT/SIGTERM |
+| `BODY_LIMIT` | `1048576` (1 MiB) | `fiber.Config.BodyLimit` |
+| `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `LOG_FORMAT` | `json` | `json` / `text` |
+| `CORS_ORIGINS` | `*` | Comma-separated origins for `cors.AllowOrigins` |
+| `CORS_METHODS` | `GET,POST,PATCH,DELETE,OPTIONS` | `cors.AllowMethods` |
+| `RATE_LIMIT_MAX` | `100` | Requests per window per IP |
+| `RATE_LIMIT_EXPIRATION` | `1m` | Window length |
+| `ENV` | `development` | `development` / `staging` / `production` |
+| `API_BASE_URL` | _(unset)_ | If set, used as OpenAPI `servers[0].url` |
+
+Full template: [`.env.example`](.env.example).
 
 ## Patterns you'd want to copy
 
@@ -111,11 +136,30 @@ curl -i -H "Authorization: Bearer root-token" \
    default — no manual `signal.NotifyContext` / `ShutdownWithContext`
    boilerplate.
 
+10. **Security middleware via `WithUse`, in a fixed order.** `helmet` →
+    `cors` → `limiter` → `auth`. Order is in `main.go` with the
+    rationale spelled out as a comment: helmet decorates every
+    response, cors must come before auth so OPTIONS preflight gets
+    through, limiter must come before auth so anonymous flood doesn't
+    pay for credential lookup, auth last so locals are populated for
+    `ContextBuilder`.
+
+11. **Basic-auth passwords are bcrypt-hashed.** `internal/auth/auth.go`
+    stores `{user → bcryptHash}` and verifies via
+    `bcrypt.CompareHashAndPassword`. Every failure branch — unknown
+    user, wrong password, malformed header — returns one identical 401
+    body so the demo doesn't leak whether a username exists. Demo
+    logins still work: `alice:secret`, `bob:secret`, `root:admin`.
+
 ## What you'd add for real production
 
-- Replace `demoTokens` with a real JWT verifier or session store.
-- Swap `tasks.NewMemStore()` for a database-backed `Store`.
-- Add request-body size limits (Fiber `BodyLimit` config).
-- Wire metrics (Prometheus middleware) at the Fiber level.
-- Use `getkin/kin-openapi` over `Engine.Walk()` to publish a real
-  OpenAPI doc instead of just `/admin/routes`.
+Most of the boring stuff is already wired in this example (env config,
+body limit, helmet, CORS, per-IP rate limit, typed error responses,
+graceful shutdown, metrics). What's still demo-only:
+
+- Replace `tasks.NewMemStore()` with a database-backed `Store`
+  (Postgres / SQLite / DynamoDB — handlers won't change, only the
+  store impl).
+- Replace `demoTokens` / `demoBasic` with a real verifier — a JWT
+  library hitting your IdP's JWKS, an opaque-token Redis lookup, or
+  whatever your auth model is.
