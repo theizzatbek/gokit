@@ -10,6 +10,33 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 _Nothing yet._
 
+## [v0.4.1] - 2026-05-23
+
+Maintenance release. No API surface changes, no behaviour changes —
+the two improvements are observable only via benchmarks (`Lookup`)
+and idiom (`All`).
+
+### Added
+- `Engine.All() iter.Seq[RouteInfo]` — Go 1.23+ range-over-func
+  iterator over the route table. Idiomatic alternative to `Walk`
+  (which stays for callers that need the error-propagating callback
+  shape):
+
+  ```go
+  for r := range eng.All() {
+      if strings.HasPrefix(r.Path, "/internal/") { continue }
+      fmt.Println(r.Method, r.Path)
+  }
+  ```
+
+### Changed
+- `Engine.Lookup(method, path)` is now O(1). A
+  `map[method+space+path] → index` is built at Mount alongside the
+  route slice; `Lookup` consults the map instead of linearly scanning.
+  Benchmarks: ~30ns / 0 allocs regardless of route count
+  (previously linear). `Walk` and `Routes` still iterate the slice
+  in insertion order.
+
 ## [v0.4.0] - 2026-05-23
 
 A "dev velocity + API gaps" release. Closes three common pain points:
