@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,7 +20,7 @@ import (
 //   - Load routes from "routes.yaml" on disk (skipped if the engine
 //     already loaded a YAML document).
 //   - Mount on the new app.
-//   - Listen on ":3000".
+//   - Listen on $PORT if set ("PORT=8080" → ":8080"), else ":3000".
 //   - On SIGINT/SIGTERM, gracefully drain in-flight requests for up to
 //     10s, then exit.
 type RunOption func(*runConfig)
@@ -33,9 +34,23 @@ type runConfig struct {
 	configureApp    func(*fiber.App)
 	shutdownTimeout time.Duration
 	disableSignals  bool
+
+	withRecover bool
+	recoverLog  *slog.Logger
+
+	healthCheckPath string
+
+	withReqLog      bool
+	reqLog          *slog.Logger
+	reqLogSkipPaths []string
+
+	metricsPath string
 }
 
-// WithAddr overrides the listen address. Default ":3000".
+// WithAddr overrides the listen address. When unset, Run picks up the
+// `PORT` environment variable (cloud-platform convention: Heroku,
+// Cloud Run, fly.io, Railway) and listens on `:${PORT}`; if `PORT` is
+// also unset, defaults to ":3000". WithAddr always wins over `PORT`.
 func WithAddr(addr string) RunOption {
 	return func(c *runConfig) { c.addr = addr }
 }
@@ -99,6 +114,61 @@ func WithoutSignalHandling() RunOption {
 	return func(c *runConfig) { c.disableSignals = true }
 }
 
+// WithRecover installs [Recover] as the FIRST Fiber-level middleware
+// (before WithUse handlers). Panics in any downstream middleware or
+// handler are logged with the request's method, path, request_id,
+// and a full stack trace via the given logger, and the client gets a
+// generic 500 instead of a dropped connection. Pass nil for
+// slog.Default().
+func WithRecover(logger *slog.Logger) RunOption {
+	return func(c *runConfig) {
+		c.withRecover = true
+		c.recoverLog = logger
+	}
+}
+
+// WithRequestLogger installs [RequestLogger] in the Use chain AFTER
+// WithRecover and WithHealthCheck (so panics still get recovered and
+// logged separately, and the health check stays silent). Skip paths
+// are typically `/healthz` and `/metrics` — pass them via
+// `skipPaths`. Empty (or nil) logger falls back to slog.Default.
+func WithRequestLogger(logger *slog.Logger, skipPaths ...string) RunOption {
+	return func(c *runConfig) {
+		c.withReqLog = true
+		c.reqLog = logger
+		c.reqLogSkipPaths = skipPaths
+	}
+}
+
+// WithMetrics installs the Prometheus metrics middleware from [Metrics]
+// and exposes the metrics at `path` (Prometheus text format). Default
+// path "/metrics"; pass empty string to disable explicitly.
+//
+// The middleware is registered AFTER WithRecover / WithRequestLogger
+// so panics and request logs still happen as usual, but counts of
+// served requests reflect what actually succeeded.
+//
+//	eng.Run(fibermap.WithMetrics("/metrics"))
+func WithMetrics(path string) RunOption {
+	return func(c *runConfig) { c.metricsPath = path }
+}
+
+// WithHealthCheck registers a `GET` handler at `path` returning
+// 200 OK with body "ok". The route is installed BEFORE any other
+// middleware (WithRecover, WithUse, ContextBuilder) so it is not
+// subject to auth, context construction, or panic-bound code paths
+// — exactly what you want for a k8s livenessProbe / readinessProbe.
+//
+// The endpoint does NOT appear in Engine.Routes() because it lives
+// outside the engine's planned route set.
+//
+// Default path: "/healthz". Pass empty string to disable explicitly.
+//
+//	eng.Run(fibermap.WithHealthCheck("/healthz"))
+func WithHealthCheck(path string) RunOption {
+	return func(c *runConfig) { c.healthCheckPath = path }
+}
+
 // Run is the one-shot launcher. It creates (or uses) a fiber.App,
 // installs Fiber-level middlewares, loads the YAML route tree
 // (default "routes.yaml" on disk), mounts the engine, and blocks
@@ -114,12 +184,18 @@ func WithoutSignalHandling() RunOption {
 // Defaults — see RunOption documentation.
 func (e *Engine[T]) Run(opts ...RunOption) error {
 	cfg := runConfig{
-		addr:            ":3000",
 		routesPath:      "routes.yaml",
 		shutdownTimeout: 10 * time.Second,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+	if cfg.addr == "" {
+		if p := os.Getenv("PORT"); p != "" {
+			cfg.addr = ":" + p
+		} else {
+			cfg.addr = ":3000"
+		}
 	}
 
 	var app *fiber.App
@@ -129,6 +205,25 @@ func (e *Engine[T]) Run(opts ...RunOption) error {
 		app = fiber.New()
 	}
 
+	// Health check registered FIRST so it bypasses every middleware
+	// (auth, ContextBuilder, etc). The route handler doesn't call
+	// c.Next(), so the Use chain never fires for /healthz.
+	if cfg.healthCheckPath != "" {
+		app.Get(cfg.healthCheckPath, func(c *fiber.Ctx) error {
+			return c.SendString("ok")
+		})
+	}
+	if cfg.withRecover {
+		app.Use(Recover(cfg.recoverLog))
+	}
+	if cfg.withReqLog {
+		app.Use(RequestLogger(cfg.reqLog, cfg.reqLogSkipPaths...))
+	}
+	if cfg.metricsPath != "" {
+		mw, reg := Metrics()
+		app.Use(mw)
+		app.Get(cfg.metricsPath, MetricsHandler(reg))
+	}
 	for _, h := range cfg.uses {
 		app.Use(h)
 	}

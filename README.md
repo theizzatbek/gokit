@@ -140,19 +140,64 @@ Defaults (all overridable via options):
 
 | Default                          | Override                                                |
 | -------------------------------- | ------------------------------------------------------- |
-| Listen on `:3000`                | `WithAddr(":8080")`                                     |
+| Listen on `:3000` (or `$PORT` env if set) | `WithAddr(":8080")`                            |
 | Load `routes.yaml` from disk     | `WithRoutesPath("api.yaml")` / `WithRoutesFS(embedFS)`  |
 | `fiber.New()` with no config     | `WithFiberConfig(fiber.Config{ErrorHandler: ...})`      |
 | No Fiber-level middleware        | `WithUse(authBearer, requestID)` (run BEFORE ContextBuilder) |
+| No panic recovery                | `WithRecover(logger)` — catch + log panics, return 500   |
+| No health check                  | `WithHealthCheck("/healthz")` — bypasses auth + ContextBuilder |
+| No access log                    | `WithRequestLogger(logger, "/healthz", "/metrics")`     |
+| No metrics endpoint              | `WithMetrics("/metrics")` — Prometheus text format       |
 | 10s graceful drain on signal     | `WithShutdownTimeout(30*time.Second)` / `WithoutSignalHandling()` |
 | Escape hatch: groups, sub-routes | `WithConfigureApp(func(app *fiber.App) { ... })`        |
 
 Run skips loading if the engine already has a YAML document loaded —
 useful when you preload from `LoadBytes` for tests or unusual layouts.
 
+`$PORT` env support means a `Run()` call with no `WithAddr` works
+out-of-the-box on Heroku, Cloud Run, fly.io, Railway, etc.
+
 Mount errors, parse errors, and listen errors all surface as the
 return value of `Run`. SIGINT/SIGTERM during normal operation
 returns `nil` after a clean drain.
+
+### Production-ready ops bundle
+
+For a typical service, four Run options give you panic-safe, observable,
+cloud-friendly behaviour with one call:
+
+```go
+logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+err := eng.Run(
+    fibermap.WithRecover(logger),                       // log panics → 500
+    fibermap.WithHealthCheck("/healthz"),               // k8s probes
+    fibermap.WithRequestLogger(logger, "/healthz", "/metrics"),
+    fibermap.WithMetrics("/metrics"),                   // Prometheus scrape
+    fibermap.WithUse(fibermap.RequestID(), auth.Bearer()),
+)
+```
+
+What you get:
+
+- **`Recover`** wraps fiber's recover middleware with a slog-aware stack
+  trace handler. Panics in any downstream middleware or handler log
+  with method/path/request_id/stack and return a plain 500 instead of
+  dropping the connection.
+- **`HealthCheck`** registers a `GET` route returning `200 OK` BEFORE
+  any other middleware — bypasses auth, recover, request log, and the
+  `ContextBuilder`. Exactly what k8s `livenessProbe`/`readinessProbe`
+  wants.
+- **`RequestLogger`** emits one structured access-log line per request
+  with method, path, status, latency_ms, response bytes, client IP,
+  and request_id. INFO for status < 500, ERROR otherwise. Pass skip
+  paths (`/healthz`, `/metrics`) to keep the log clean.
+- **`Metrics`** installs a Prometheus-text scrape endpoint and exports
+  three series: `fibermap_http_requests_total{method,route,status}`
+  counter, `fibermap_http_request_duration_seconds{...}` histogram,
+  and `fibermap_http_requests_in_flight` gauge. The `route` label is
+  the Fiber route template (`/v1/tasks/:id`) — bounded cardinality,
+  not per-URL.
 
 If you need anything Run can't express (multiple servers, custom
 signal sets, hot-reload), stick with the manual `LoadFile → Mount →
