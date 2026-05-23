@@ -31,7 +31,7 @@ func (h *Handler) List(c *appctx.Ctx) error {
 	if out == nil {
 		out = []Task{} // never serialize null — clients hate it
 	}
-	return c.JSON(fiber.Map{"tasks": out})
+	return c.JSON(ListResponse{Tasks: out})
 }
 
 // Get handles GET /tasks/:id.
@@ -104,16 +104,16 @@ func (h *Handler) Delete(c *appctx.Ctx) error {
 		if errors.Is(err, ErrNotFound) {
 			return notFound(c)
 		}
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
 	}
 	c.Data.Log.Info("task deleted by admin", "task_id", id, "admin", c.Data.UserID)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func notFound(c *appctx.Ctx) error {
-	return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "task not found"})
+	return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{Error: "task not found"})
 }
 
 func badRequest(c *appctx.Ctx, msg string) error {
-	return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": msg})
+	return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{Error: msg})
 }
