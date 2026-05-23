@@ -10,6 +10,106 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 _Nothing yet._
 
+## [v0.7.0] - 2026-05-23
+
+OpenAPI ergonomics pass:
+  - schemas now attach at `RegisterHandler` time (removes the
+    `OnHandler` builder and the duplicated handler name);
+  - `Generator.Mount()` wires `/openapi.json` + `/docs` in one call
+    (replaces ~25 lines of `Engine.Add` + `sync.Once` boilerplate);
+  - three HTML viewer helpers (Swagger UI / Redoc / Scalar);
+  - `openapi.SecurityMapping(...)` combines `WithSecurity` +
+    `MapMiddlewareToSecurity` into one call (these were always used
+    together).
+
+### Changed
+- `Engine.RegisterHandler` is now variadic: it accepts optional
+  [HandlerOption] values that attach typed request/response schemas
+  to the handler. Backwards-compatible — existing calls that pass
+  only the handler still work.
+- `openapi.Generator.OnHandler` + `HandlerSchemaBuilder` removed.
+  Schemas live on the engine via `fibermap.With{Body,Query,Headers,Response}`.
+  The generator reads them via `Engine.HandlerMeta(name)`.
+
+### Added
+- `fibermap.HandlerOption` + `WithBody(model)` / `WithQuery(model)`
+  / `WithHeaders(model)` / `WithResponse(status, model)` —
+  introspection-only metadata attached at `RegisterHandler` time.
+  Runtime ignores them; `fibermap/openapi` reads them for spec
+  generation.
+- `Engine.HandlerMeta(name) *HandlerMeta` getter — opens the same
+  metadata to any introspection tool (not just openapi).
+- `openapi.SecurityMapping(name, scheme, middlewares...)` —
+  one-call combination of `WithSecurity` + one-or-more
+  `MapMiddlewareToSecurity`. The originals stay for callers that
+  need finer control.
+- `Generator.Mount(opts ...MountOpts) error` — installs two
+  programmatic routes on the generator's engine:
+    - `GET /openapi.json` — spec, generated lazily on first request,
+      cached for subsequent requests.
+    - `GET /docs` — HTML viewer pointing at the spec.
+  Both paths and the docs viewer are overridable via `MountOpts`
+  (zero value uses sensible defaults — Scalar viewer, the
+  generator's Info.Title as the docs title).
+- `openapi.MountOpts` — config struct for `Mount` with `SpecPath`,
+  `DocsPath`, `DocsTitle`, `DocsViewer` fields.
+- `openapi.SwaggerUI(specURL, title)` — Swagger UI 5.x via unpkg.
+- `openapi.Redoc(specURL, title)` — Redoc 2.x via unpkg.
+- `openapi.Scalar(specURL, title)` — Scalar API Reference via
+  jsdelivr (modern UI, dark-mode default, built-in API client).
+  Default viewer for `Mount`.
+- All three viewer helpers return a self-contained HTML string with
+  user input HTML-escaped (`html.EscapeString`) — safe to pass
+  title/url from config or environment.
+- `examples/tasks/main.go` migrates to the new pattern: schemas at
+  `RegisterHandler`, single `gen.Mount()` for spec + docs,
+  `SecurityMapping` instead of two separate options.
+
+### Changed (continued)
+- `openapi.MapMiddlewareToSecurity` and `openapi.SecurityMapping`
+  now accumulate when the same middleware is mapped to multiple
+  schemes — both schemes appear in the operation's `security` array
+  as separate entries (OR semantics: any one satisfies). This lets
+  an `auth` middleware that accepts both Bearer and Basic
+  credentials advertise both in the spec.
+- `examples/tasks/internal/auth`: added `Basic()` middleware (HTTP
+  Basic against an in-memory user table) and `BearerOrBasic()` that
+  dispatches on the `Authorization` header prefix. The example wires
+  `BearerOrBasic()` and registers both `BearerAuth` + `BasicAuth`
+  schemes in the OpenAPI spec.
+- `examples/tasks/main.go`: dropped the hardcoded
+  `WithServer("http://localhost:3000", ...)` — without it, OpenAPI
+  tools resolve URLs relative to where the spec is served
+  (correct for both local and production). A comment shows how to
+  wire `os.Getenv("API_BASE_URL")` for prod.
+
+### Notes
+- v0.6.0's `openapi.OnHandler` API was never tagged as stable
+  (0.x). Callers that used it should migrate to
+  `fibermap.WithBody`/`WithResponse` at `RegisterHandler`.
+
+### Added
+- `Generator.Mount(opts ...MountOpts) error` — installs two
+  programmatic routes on the generator's engine:
+    - `GET /openapi.json` — spec, generated lazily on first request,
+      cached for subsequent requests.
+    - `GET /docs` — HTML viewer pointing at the spec.
+  Both paths and the docs viewer are overridable via `MountOpts`
+  (zero value uses sensible defaults — Scalar viewer, the
+  generator's Info.Title as the docs title).
+- `openapi.MountOpts` — config struct for `Mount` with `SpecPath`,
+  `DocsPath`, `DocsTitle`, `DocsViewer` fields.
+- `openapi.SwaggerUI(specURL, title)` — Swagger UI 5.x via unpkg.
+- `openapi.Redoc(specURL, title)` — Redoc 2.x via unpkg.
+- `openapi.Scalar(specURL, title)` — Scalar API Reference via
+  jsdelivr (modern UI, dark-mode default, built-in API client).
+  Default viewer for `Mount`.
+- All three viewer helpers return a self-contained HTML string with
+  user input HTML-escaped (`html.EscapeString`) — safe to pass
+  title/url from config or environment.
+- `examples/tasks/main.go` now calls `gen.Mount()` instead of the
+  hand-rolled spec + docs wiring it had in v0.6.0.
+
 ## [v0.6.0] - 2026-05-23
 
 OpenAPI 3.0 spec generation. Most users of declarative routers pick

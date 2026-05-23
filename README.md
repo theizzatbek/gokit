@@ -617,20 +617,21 @@ documentation:
 ```
 
 ```go
-// Go — typed schemas live here
+// Schemas live on the handler — declared once at registration time.
+eng.RegisterHandler("tasks.create", h.Create,
+    fibermap.WithBody(CreateTaskReq{}),
+    fibermap.WithResponse(201, Task{}),
+    fibermap.WithResponse(400, ErrorResponse{}),
+)
+
 import "github.com/theizzatbek/fibermap/openapi"
 
 gen := openapi.NewGenerator(eng,
     openapi.WithInfo(openapi.Info{Title: "Tasks API", Version: "1.0.0"}),
     openapi.WithServer("https://api.example.com", "production"),
-    openapi.WithSecurity("BearerAuth", openapi.HTTPBearer("JWT")),
-    openapi.MapMiddlewareToSecurity("auth", "BearerAuth"),
+    // Combined helper — registers the scheme AND maps middleware to it.
+    openapi.SecurityMapping("BearerAuth", openapi.HTTPBearer("JWT"), "auth"),
 )
-
-gen.OnHandler("tasks.create").
-    Body(CreateTaskReq{}).
-    Response(201, Task{}).
-    Response(400, ErrorResponse{})
 
 spec, err := gen.Generate()         // []byte JSON
 ```
@@ -645,16 +646,18 @@ What's automatic — pulled straight from the route's YAML:
 - Routes whose chain includes a middleware mapped via
   `MapMiddlewareToSecurity` get `security: [{name: []}]` attached.
 
-What's opt-in via the builder:
+What's opt-in via [HandlerOption] values on `RegisterHandler`:
 
-- Request body schema — `OnHandler("name").Body(MyReq{})`.
-- Query / header schemas — `.Query(...)` / `.Headers(...)`.
-- Response schemas per status — `.Response(201, Task{})`. Pass `nil`
-  to advertise an empty body (e.g. `Response(204, nil)`).
+- `fibermap.WithBody(MyReq{})` — request body schema.
+- `fibermap.WithQuery(MyQuery{})` — query-string schema.
+- `fibermap.WithHeaders(MyHeaders{})` — request-header schema.
+- `fibermap.WithResponse(201, Task{})` — response body schema per
+  status. Pass `nil` to advertise an empty body
+  (`fibermap.WithResponse(204, nil)`).
 
 Text fields (`summary`, `description`, `tags`) are intentionally NOT
-in the builder — they live in `routes.yaml`, alongside the route they
-describe, so the YAML stays the single source of truth.
+in the Go options — they live in `routes.yaml`, alongside the route
+they describe, so the YAML stays the single source of truth.
 
 Schema reflection uses
 [`invopop/jsonschema`](https://github.com/invopop/jsonschema) — Go
@@ -662,26 +665,77 @@ struct fields' `json:`, `validate:`, and `description` tags are
 honoured. Reflected types are hoisted into
 `components.schemas` and referenced via `$ref`.
 
-To serve the spec at `/openapi.json`, combine with `Engine.Add`:
+### `gen.Mount()` — one-line wiring
+
+To expose the spec at `/openapi.json` AND a docs viewer at `/docs`:
 
 ```go
-var (
-    once     sync.Once
-    cached   []byte
-    cacheErr error
-)
-eng.Add("GET", "/openapi.json", "openapi.spec",
+gen := openapi.NewGenerator(eng, opts...)
+gen.OnHandler("tasks.create").Body(CreateReq{}).Response(201, Task{})
+// ...
+
+if err := gen.Mount(); err != nil {
+    log.Fatal(err)
+}
+```
+
+That's it. `Mount` installs two programmatic routes on the engine via
+`Engine.Add`:
+
+- `GET /openapi.json` — spec (lazy-generated on first request, cached
+  via `sync.Once`).
+- `GET /docs` — Scalar HTML viewer pointing at `/openapi.json`.
+
+Customize via `MountOpts` (zero value uses defaults shown above):
+
+```go
+gen.Mount(openapi.MountOpts{
+    SpecPath:   "/api/openapi",
+    DocsPath:   "/api/docs",
+    DocsTitle:  "Tasks API",                // defaults to gen Info.Title
+    DocsViewer: openapi.SwaggerUI,          // or .Redoc, or .Scalar
+})
+```
+
+`Mount` must be called BEFORE `Engine.Run` / `Engine.Mount` — same
+constraint as any `Engine.Add`.
+
+If you need finer control (different caching, auth-gated docs,
+multiple viewer mounts), skip `Mount` and call `gen.Generate()` /
+`openapi.Scalar(...)` directly inside your own `Engine.Add` handlers.
+
+### Browsable docs at `/docs`
+
+Three HTML viewers are built in — each is a one-line helper that
+returns a self-contained HTML page loading the viewer from a CDN and
+pointing it at your `/openapi.json`. Pick whichever you prefer; or
+mount more than one at different paths.
+
+| Helper                          | Library                                                    | Notes                                            |
+| ------------------------------- | ---------------------------------------------------------- | ------------------------------------------------ |
+| `openapi.SwaggerUI(url, title)` | [Swagger UI](https://github.com/swagger-api/swagger-ui)     | Classic, full "try it out" requester.            |
+| `openapi.Redoc(url, title)`     | [Redoc](https://github.com/Redocly/redoc)                   | Read-only, prettier for long specs.               |
+| `openapi.Scalar(url, title)`    | [Scalar API Reference](https://github.com/scalar/scalar)    | Modern, dark-mode default, built-in API client.  |
+
+```go
+docs := openapi.Scalar("/openapi.json", "Tasks API")  // generate once at startup
+eng.Add("GET", "/docs", "openapi.docs",
     func(c *fibermap.Context[AppCtx]) error {
-        once.Do(func() { cached, cacheErr = gen.Generate() })
-        if cacheErr != nil { /* ... */ }
-        c.Set("Content-Type", "application/json")
-        return c.Send(cached)
+        c.Set("Content-Type", "text/html; charset=utf-8")
+        return c.SendString(docs)
     },
 )
 ```
 
+The HTML output is a static string — generate it once at startup,
+serve as bytes per request. First page load fetches the JS bundle
+from the CDN; subsequent loads use the browser cache.
+
+User input is HTML-escaped, so passing values from config/env to
+`title` is safe.
+
 See [`examples/tasks/main.go`](./examples/tasks/main.go) for the full
-wire-up.
+wire-up (spec at `/openapi.json`, Scalar UI at `/docs`).
 
 ## Ready-made middleware factories
 

@@ -173,16 +173,17 @@ groups:
         summary: Create a task
         tags: [tasks, write]
 `, func(e *fibermap.Engine[appCtx]) {
-		e.RegisterHandler("tasks.create", func(c *fibermap.Context[appCtx]) error { return nil })
+		e.RegisterHandler("tasks.create",
+			func(c *fibermap.Context[appCtx]) error { return nil },
+			fibermap.WithBody(CreateTaskReq{}),
+			fibermap.WithResponse(201, TaskResponse{}),
+			fibermap.WithResponse(400, ErrorResponse{}),
+		)
 	})
 
 	gen := openapi.NewGenerator(e,
 		openapi.WithInfo(openapi.Info{Title: "Tasks API", Version: "1.0.0"}),
 	)
-	gen.OnHandler("tasks.create").
-		Body(CreateTaskReq{}).
-		Response(201, TaskResponse{}).
-		Response(400, ErrorResponse{})
 
 	b, err := gen.Generate()
 	if err != nil {
@@ -312,5 +313,137 @@ groups:
 	}
 	if info["version"] != "0.0.0" {
 		t.Errorf("default version = %v", info["version"])
+	}
+}
+
+func TestMount_DefaultsInstallBothRoutes(t *testing.T) {
+	e := fibermap.New[appCtx]()
+	e.SetContextBuilder(func(c *fiber.Ctx) (appCtx, error) { return appCtx{}, nil })
+	e.RegisterHandler("ping", func(c *fibermap.Context[appCtx]) error { return c.SendString("pong") })
+
+	if err := e.LoadBytes([]byte(`
+groups:
+  - prefix: /v1
+    routes:
+      - { method: GET, path: /ping, handler: ping, name: ping }
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	gen := openapi.NewGenerator(e,
+		openapi.WithInfo(openapi.Info{Title: "T", Version: "1"}),
+	)
+	if err := gen.Mount(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Fatal(err)
+	}
+
+	var sawSpec, sawDocs bool
+	for r := range e.All() {
+		switch r.Path {
+		case "/openapi.json":
+			sawSpec = true
+			if r.Source != fibermap.SourceProgrammatic {
+				t.Errorf("/openapi.json source = %q", r.Source)
+			}
+		case "/docs":
+			sawDocs = true
+		}
+	}
+	if !sawSpec {
+		t.Error("/openapi.json not installed by Mount()")
+	}
+	if !sawDocs {
+		t.Error("/docs not installed by Mount()")
+	}
+}
+
+func TestMount_CustomPathsAndViewer(t *testing.T) {
+	e := fibermap.New[appCtx]()
+	e.SetContextBuilder(func(c *fiber.Ctx) (appCtx, error) { return appCtx{}, nil })
+	e.RegisterHandler("ping", func(c *fibermap.Context[appCtx]) error { return c.SendString("pong") })
+	if err := e.LoadBytes([]byte(`
+groups:
+  - routes:
+      - { method: GET, path: /x, handler: ping, name: ping }
+`)); err != nil {
+		t.Fatal(err)
+	}
+
+	gen := openapi.NewGenerator(e, openapi.WithInfo(openapi.Info{Title: "T", Version: "1"}))
+	err := gen.Mount(openapi.MountOpts{
+		SpecPath:   "/api/openapi",
+		DocsPath:   "/api/docs",
+		DocsTitle:  "Custom Title",
+		DocsViewer: openapi.SwaggerUI,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := e.Lookup("GET", "/api/openapi"); !ok {
+		t.Error("/api/openapi missing")
+	}
+	if _, ok := e.Lookup("GET", "/api/docs"); !ok {
+		t.Error("/api/docs missing")
+	}
+	// Defaults must NOT be installed.
+	if _, ok := e.Lookup("GET", "/openapi.json"); ok {
+		t.Error("default /openapi.json leaked")
+	}
+	if _, ok := e.Lookup("GET", "/docs"); ok {
+		t.Error("default /docs leaked")
+	}
+}
+
+func TestGenerate_MultipleSchemesPerMiddleware(t *testing.T) {
+	// One middleware ("auth") maps to TWO schemes (Bearer + Basic).
+	// The operation must list both as separate entries (OR semantics).
+	e := buildEngine(t, `
+groups:
+  - prefix: /api
+    middleware: [auth]
+    routes:
+      - { method: GET, path: /me, handler: me.get, name: me.get }
+`, func(e *fibermap.Engine[appCtx]) {
+		e.RegisterMiddleware("auth", func(c *fibermap.Context[appCtx]) error { return c.Next() })
+		e.RegisterHandler("me.get", func(c *fibermap.Context[appCtx]) error { return nil })
+	})
+
+	b, err := openapi.NewGenerator(e,
+		openapi.SecurityMapping("BearerAuth", openapi.HTTPBearer(), "auth"),
+		openapi.SecurityMapping("BasicAuth", openapi.HTTPBasic(), "auth"),
+	).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := decode(t, b)
+
+	op := path(doc, "paths", "/api/me", "get").(map[string]any)
+	sec := op["security"].([]any)
+	if len(sec) != 2 {
+		t.Fatalf("security = %v, want 2 entries (Bearer + Basic)", sec)
+	}
+	seen := map[string]bool{}
+	for _, entry := range sec {
+		for name := range entry.(map[string]any) {
+			seen[name] = true
+		}
+	}
+	if !seen["BearerAuth"] || !seen["BasicAuth"] {
+		t.Errorf("missing scheme(s) in security: %v", seen)
+	}
+
+	schemes := path(doc, "components", "securitySchemes").(map[string]any)
+	if _, ok := schemes["BearerAuth"]; !ok {
+		t.Error("BearerAuth not in components.securitySchemes")
+	}
+	if _, ok := schemes["BasicAuth"]; !ok {
+		t.Error("BasicAuth not in components.securitySchemes")
 	}
 }

@@ -63,6 +63,7 @@ type programmaticRoute[T any] struct {
 type Engine[T any] struct {
 	builder     ContextBuilder[T]
 	handlers    map[string]HandlerFunc[T]
+	handlerMeta map[string]*HandlerMeta // opaque schemas from RegisterHandler options
 	middlewares map[string]MiddlewareFunc[T]
 	factories   map[string]MiddlewareFactoryFunc[T]
 	ctxError    ContextErrorFunc
@@ -90,6 +91,7 @@ type Engine[T any] struct {
 func New[T any]() *Engine[T] {
 	return &Engine[T]{
 		handlers:    map[string]HandlerFunc[T]{},
+		handlerMeta: map[string]*HandlerMeta{},
 		middlewares: map[string]MiddlewareFunc[T]{},
 		factories:   map[string]MiddlewareFactoryFunc[T]{},
 		ctxError:    defaultContextError,
@@ -189,12 +191,35 @@ func (e *Engine[T]) panicIfMounted(kind, name string) {
 // RegisterHandler registers a handler under a name referenced from YAML.
 // Panics with *Error / CodeDuplicateRegistration if the name is already
 // taken, or CodeRegisterAfterMount if called after Mount.
-func (e *Engine[T]) RegisterHandler(name string, h HandlerFunc[T]) {
+//
+// Optional [HandlerOption] values attach typed request / response
+// schemas (read by fibermap/openapi for spec generation, ignored at
+// runtime):
+//
+//	eng.RegisterHandler("tasks.create", h.Create,
+//	    fibermap.WithBody(CreateReq{}),
+//	    fibermap.WithResponse(201, Task{}),
+//	    fibermap.WithResponse(400, ErrorResponse{}),
+//	)
+func (e *Engine[T]) RegisterHandler(name string, h HandlerFunc[T], opts ...HandlerOption) {
 	e.panicIfMounted("handler", name)
 	if _, ok := e.handlers[name]; ok {
 		panic(&Error{Stage: "register", Code: CodeDuplicateRegistration, Message: "handler " + name + " already registered"})
 	}
 	e.handlers[name] = h
+	if meta := applyHandlerOptions(opts); meta != nil {
+		e.handlerMeta[name] = meta
+	}
+}
+
+// HandlerMeta returns the schema metadata attached to a handler via
+// [HandlerOption] values passed to [Engine.RegisterHandler]. Returns
+// nil when no options were attached. The returned pointer aliases
+// engine state — callers must treat it as read-only.
+//
+// Primarily for introspection consumers like fibermap/openapi.
+func (e *Engine[T]) HandlerMeta(name string) *HandlerMeta {
+	return e.handlerMeta[name]
 }
 
 // RegisterMiddleware registers a plain (no-args) middleware. YAML references

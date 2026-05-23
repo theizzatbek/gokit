@@ -9,7 +9,10 @@
 //	go run ./examples/tasks
 //
 //	# default tokens: alice-token / bob-token (role=user), root-token (role=admin)
+//	# Bearer:
 //	curl -H "Authorization: Bearer alice-token"            http://localhost:3000/api/v1/tasks
+//	# Basic (alternative — see auth.BearerOrBasic):
+//	curl -u alice:secret                                   http://localhost:3000/api/v1/tasks
 //	curl -H "Authorization: Bearer alice-token" \
 //	     -H "Content-Type: application/json" \
 //	     -d '{"title":"buy milk"}' \
@@ -31,8 +34,12 @@
 //	curl http://localhost:3000/metrics       # Prometheus text format
 //
 //	# OpenAPI 3.0 spec generated from routes.yaml + typed handler
-//	# schemas (see Engine.Add(...) wiring below).
-//	curl -H "Authorization: Bearer alice-token" http://localhost:3000/openapi.json
+//	# schemas. Public — no auth required.
+//	curl http://localhost:3000/openapi.json
+//
+//	# Browsable HTML docs (Scalar API Reference, loaded from CDN).
+//	# Public — open in browser.
+//	open http://localhost:3000/docs
 package main
 
 import (
@@ -40,7 +47,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"sync"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -101,70 +107,64 @@ func main() {
 		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
 	})
 
+	// Handlers carry their typed request/response schemas at
+	// registration. Routes only declare HAPPY paths and unusual
+	// status codes — the universal errors (400/401/403/404/500) are
+	// declared once on the generator via WithDefaultResponse below.
 	taskH := tasks.New(store, valid)
-	eng.RegisterHandler("tasks.list", taskH.List)
-	eng.RegisterHandler("tasks.get", taskH.Get)
-	eng.RegisterHandler("tasks.create", taskH.Create)
-	eng.RegisterHandler("tasks.update", taskH.Update)
-	eng.RegisterHandler("tasks.delete", taskH.Delete)
+	eng.RegisterHandler("tasks.list", taskH.List,
+		fibermap.WithResponse(fiber.StatusOK, fiber.Map{"tasks": []tasks.Task{}}))
+	eng.RegisterHandler("tasks.get", taskH.Get,
+		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
+	eng.RegisterHandler("tasks.create", taskH.Create,
+		fibermap.WithBody(tasks.CreateReq{}),
+		fibermap.WithResponse(fiber.StatusCreated, tasks.Task{}))
+	eng.RegisterHandler("tasks.update", taskH.Update,
+		fibermap.WithBody(tasks.UpdateReq{}),
+		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
+	eng.RegisterHandler("tasks.delete", taskH.Delete,
+		fibermap.WithResponse(fiber.StatusNoContent, nil))
 	eng.RegisterHandler("admin.routes", admin.Routes(eng))
 
-	// --- OpenAPI 3.0 spec — generated from Engine.Routes() + typed
-	// per-handler schemas, served at /openapi.json. The generator
-	// reads from the engine, so the spec is always in sync with the
-	// live route table; we cache the JSON behind a sync.Once so each
-	// scrape is a memcpy, not a re-reflection.
+	// OpenAPI 3.0 spec — generated from Engine.Routes() + the handler
+	// schemas attached above. The generator reads from the engine,
+	// so the spec is always in sync with the live route table.
+	// errBody is the shape of every 4xx/5xx response — a single
+	// `{"error": "..."}` object. Declared once on the generator so
+	// every operation in the spec advertises the same error contract
+	// without per-handler boilerplate.
+	errBody := fiber.Map{"error": ""}
 	gen := openapi.NewGenerator(eng,
 		openapi.WithInfo(openapi.Info{
 			Title:       "Tasks API",
 			Version:     "0.1.0",
 			Description: "Per-user task lists — demo for the fibermap library.",
 		}),
-		openapi.WithServer("http://localhost:3000", "local dev"),
-		openapi.WithSecurity("BearerAuth", openapi.HTTPBearer()),
-		openapi.MapMiddlewareToSecurity("auth", "BearerAuth"),
+		// Universal error responses — applied to every operation.
+		openapi.WithDefaultResponse(fiber.StatusBadRequest, errBody),
+		openapi.WithDefaultResponse(fiber.StatusUnauthorized, errBody),
+		openapi.WithDefaultResponse(fiber.StatusForbidden, errBody),
+		openapi.WithDefaultResponse(fiber.StatusNotFound, errBody),
+		openapi.WithDefaultResponse(fiber.StatusInternalServerError, errBody),
+		// `auth` is the fibermap-middleware name. Bearer OR Basic both
+		// satisfy it (see auth.BearerOrBasic in WithUse below) — the
+		// spec lists both schemes; clients pick either.
+		//
+		// No WithServer here: OpenAPI tools default to relative URLs
+		// (resolves against wherever /openapi.json is served). For
+		// prod, set WithServer(os.Getenv("API_BASE_URL"), "prod").
+		openapi.SecurityMapping("BearerAuth", openapi.HTTPBearer(), "auth"),
+		openapi.SecurityMapping("BasicAuth", openapi.HTTPBasic(), "auth"),
 	)
-	// summary / description / tags come from routes.yaml; the
-	// builder is reserved for typed Go schemas.
-	gen.OnHandler("tasks.create").
-		Body(tasks.CreateReq{}).
-		Response(201, tasks.Task{}).
-		Response(400, fiber.Map{"error": ""})
-	gen.OnHandler("tasks.update").
-		Body(tasks.UpdateReq{}).
-		Response(200, tasks.Task{}).
-		Response(400, fiber.Map{"error": ""}).
-		Response(404, fiber.Map{"error": ""})
-	gen.OnHandler("tasks.get").
-		Response(200, tasks.Task{}).
-		Response(404, fiber.Map{"error": ""})
-	gen.OnHandler("tasks.list").
-		Response(200, fiber.Map{"tasks": []tasks.Task{}})
-	gen.OnHandler("tasks.delete").
-		Response(204, nil).
-		Response(403, fiber.Map{"error": ""})
 
-	var (
-		specOnce sync.Once
-		specJSON []byte
-		specErr  error
-	)
-	eng.Add("GET", "/openapi.json", "openapi.spec",
-		func(c *fibermap.Context[appctx.AppCtx]) error {
-			specOnce.Do(func() { specJSON, specErr = gen.Generate() })
-			if specErr != nil {
-				c.Data.Log.Error("openapi generation failed", "err", specErr)
-				return c.Status(http.StatusInternalServerError).
-					JSON(fiber.Map{"error": "spec generation failed"})
-			}
-			c.Set("Content-Type", "application/json")
-			return c.Send(specJSON)
-		},
-		fibermap.AddOpts{
-			Description: "OpenAPI 3.0 specification for this API",
-			Tags:        []string{"meta"},
-		},
-	)
+	// Mount installs /openapi.json (sync.Once-cached spec) and /docs
+	// (Scalar UI viewer) — both as programmatic routes on the
+	// engine. Pass MountOpts to override paths or pick a different
+	// viewer (openapi.SwaggerUI / openapi.Redoc).
+	if err := gen.Mount(); err != nil {
+		logger.Error("openapi.Mount failed", "err", err)
+		os.Exit(1)
+	}
 
 	// Run covers everything a production service typically needs.
 	// The ops bundle (Recover, RequestID, RequestLogger, HealthCheck)
@@ -192,7 +192,10 @@ func main() {
 		}),
 		fibermap.WithRecover(logger),
 		fibermap.WithRequestLogger(logger, "/healthz", "/metrics"),
-		fibermap.WithUse(auth.Bearer()),
+		// `/docs` and `/openapi.json` are public observability endpoints
+		// — same convention as `/healthz` and `/metrics`. Auth would
+		// just make the docs unbrowsable from a plain browser.
+		fibermap.WithUse(auth.BearerOrBasic("/docs", "/openapi.json")),
 		fibermap.WithRoutesFS(routesFS),
 	)
 	if err != nil {
