@@ -10,6 +10,45 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 _Nothing yet._
 
+## [v0.4.0] - 2026-05-23
+
+A "dev velocity + API gaps" release. Closes three common pain points:
+binding request headers (the missing `bind.Header[T]`), defining
+routes that don't fit YAML (`Engine.Add`), and the boilerplate of
+wiring the v0.3 ops bundle every time (`fibermap.Default[T]`).
+
+### Added
+- `fibermap.Default[T]()` — constructor that returns an Engine
+  pre-wired with the v0.3 ops bundle (`Recover` + `RequestID` +
+  `RequestLogger` + `HealthCheck` + `Metrics`). `eng.Run()` ships
+  with sensible production defaults. Defaults are applied BEFORE
+  user options, so any explicit option (`WithMetrics("")`,
+  `WithHealthCheck("/_health")`, `WithRecover(myLogger)`) overrides
+  the default.
+- `bind.Header[T]` + `ErrParseHeader` / `ErrValidateHeader` — fourth
+  in the bind family alongside `Body` / `Query` / `Params`. Wraps
+  Fiber's `ReqHeaderParser`; struct fields use the `reqHeader:`
+  tag. Typical targets: `Authorization`, `X-Idempotency-Key`,
+  `Accept-Language`.
+- `Engine.Add(method, path, name, handler, [AddOpts{...}])` —
+  programmatic route registration for handlers that don't fit the
+  YAML model (debug/pprof, dynamic admin routes, embedded UIs).
+  Goes through the same per-request `Context[T]` wrapper as YAML
+  routes. Surfaced on `Engine.Routes()` with
+  `Source = SourceProgrammatic` so introspection tools and
+  `fibermaptest` see them. Panics on programmer errors (invalid
+  method, empty name/path, nil handler, called after Mount).
+- `RouteInfo.Source` — `"yaml"` or `"programmatic"`. Public
+  constants `SourceYAML` and `SourceProgrammatic`. Existing YAML
+  routes now report `Source: SourceYAML` in their introspection
+  record.
+
+### Deferred
+- Hot-reload of `routes.yaml` (`WithHotReload`) — Fiber does not
+  support route-table mutation after `app.Add`, so honest hot reload
+  requires Listen restart / atomic listener handoff. Design-heavy
+  enough to warrant its own release; revisit after v0.4.
+
 ## [v0.3.0] - 2026-05-23
 
 A "production defaults" release. Five new `Engine.Run` options
