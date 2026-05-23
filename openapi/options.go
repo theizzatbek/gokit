@@ -52,9 +52,34 @@ func WithSecurity(name string, scheme SecurityScheme) Option {
 //
 // The scheme must also be registered via [WithSecurity]; otherwise
 // Generate fails with an error pointing at the missing reference.
+// Prefer [SecurityMapping] for the common "scheme + one or more
+// middleware names" case.
 //
 //	openapi.WithSecurity("BearerAuth", openapi.HTTPBearer("JWT"))
 //	openapi.MapMiddlewareToSecurity("auth", "BearerAuth")
 func MapMiddlewareToSecurity(middleware, schemeName string) Option {
 	return func(c *config) { c.middlewareSecurity[middleware] = schemeName }
+}
+
+// SecurityMapping registers a security scheme AND attaches one or
+// more middleware names to it in a single call. Equivalent to
+// [WithSecurity] plus one [MapMiddlewareToSecurity] per name:
+//
+//	openapi.SecurityMapping("BearerAuth", openapi.HTTPBearer("JWT"), "auth")
+//
+// is identical to:
+//
+//	openapi.WithSecurity("BearerAuth", openapi.HTTPBearer("JWT"))
+//	openapi.MapMiddlewareToSecurity("auth", "BearerAuth")
+//
+// Pass multiple middleware names if more than one fibermap middleware
+// maps to the same scheme (e.g. `auth` and `auth_optional` both
+// satisfy `BearerAuth`).
+func SecurityMapping(schemeName string, scheme SecurityScheme, middlewares ...string) Option {
+	return func(c *config) {
+		c.securitySchemes[schemeName] = scheme
+		for _, mw := range middlewares {
+			c.middlewareSecurity[mw] = schemeName
+		}
+	}
 }

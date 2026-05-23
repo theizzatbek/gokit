@@ -109,9 +109,11 @@ func (g *Generator[T]) Mount(opts ...MountOpts) error {
 }
 
 // Generator builds an OpenAPI 3.0 spec from a fibermap engine.
-// Construct via [NewGenerator]; attach per-handler request/response
-// schemas with [Generator.OnHandler]; produce JSON bytes with
-// [Generator.Generate].
+// Construct via [NewGenerator]; produce JSON bytes with
+// [Generator.Generate]. Per-handler request/response schemas live on
+// [fibermap.Engine] itself — attach them via [fibermap.WithBody],
+// [fibermap.WithResponse], and friends at [fibermap.Engine.RegisterHandler]
+// time, and the generator picks them up automatically.
 //
 // Generator is generic over T (the engine's per-request payload
 // type) — solely so it can hold a typed [fibermap.Engine] pointer.
@@ -121,23 +123,20 @@ type Generator[T any] struct {
 	eng *fibermap.Engine[T]
 	cfg *config
 
-	handlerSchemas map[string]*HandlerSchemaBuilder
-
 	reflector *jsonschema.Reflector
 }
 
 // NewGenerator constructs a Generator for `eng`, applying the given
-// options. Use the returned Generator's `OnHandler` to attach typed
-// request/response schemas, then call `Generate` to produce JSON.
+// options. Schemas come from the engine's [fibermap.HandlerMeta] —
+// see [fibermap.WithBody] / [fibermap.WithResponse] etc.
 func NewGenerator[T any](eng *fibermap.Engine[T], opts ...Option) *Generator[T] {
 	cfg := newConfig()
 	for _, opt := range opts {
 		opt(cfg)
 	}
 	return &Generator[T]{
-		eng:            eng,
-		cfg:            cfg,
-		handlerSchemas: map[string]*HandlerSchemaBuilder{},
+		eng: eng,
+		cfg: cfg,
 		reflector: &jsonschema.Reflector{
 			// Do NOT use ref-by-id for anonymous structs — keep schemas
 			// inline so the generated spec is portable.
@@ -148,71 +147,6 @@ func NewGenerator[T any](eng *fibermap.Engine[T], opts ...Option) *Generator[T] 
 			ExpandedStruct: false,
 		},
 	}
-}
-
-// HandlerSchemaBuilder collects request and response schemas for one
-// handler (by registered name). Methods chain so wiring is one
-// expression per handler:
-//
-//	gen.OnHandler("tasks.create").
-//	    Body(CreateTaskReq{}).
-//	    Query(ListQuery{}).
-//	    Response(201, Task{}).
-//	    Response(400, ErrorResponse{})
-//
-// Operation metadata — `summary`, `description`, `tags` — is taken
-// from `routes.yaml` (the `summary:`, `description:`, `tags:` fields
-// on each route). Keep documentation declarative alongside the
-// route definition; the builder is reserved for typed Go schemas.
-type HandlerSchemaBuilder struct {
-	name      string
-	body      any
-	query     any
-	headers   any
-	responses map[int]any
-}
-
-// OnHandler returns (or creates) the schema builder for the handler
-// registered under `name`. Multiple calls return the same builder,
-// so configuration can be split across files / packages if needed.
-func (g *Generator[T]) OnHandler(name string) *HandlerSchemaBuilder {
-	b, ok := g.handlerSchemas[name]
-	if !ok {
-		b = &HandlerSchemaBuilder{name: name, responses: map[int]any{}}
-		g.handlerSchemas[name] = b
-	}
-	return b
-}
-
-// Body attaches a JSON request-body schema. Pass the zero value of
-// the request struct: `b.Body(CreateTaskReq{})`. The struct is
-// reflected via invopop/jsonschema, honouring `json:` and `validate:`
-// tags.
-func (b *HandlerSchemaBuilder) Body(model any) *HandlerSchemaBuilder {
-	b.body = model
-	return b
-}
-
-// Query attaches a schema for query parameters. Fields use the
-// `query:` tag (Fiber's convention) to name each parameter.
-func (b *HandlerSchemaBuilder) Query(model any) *HandlerSchemaBuilder {
-	b.query = model
-	return b
-}
-
-// Headers attaches a schema for request headers. Fields use the
-// `reqHeader:` tag.
-func (b *HandlerSchemaBuilder) Headers(model any) *HandlerSchemaBuilder {
-	b.headers = model
-	return b
-}
-
-// Response attaches the schema for one response status code. The
-// schema describes the JSON body; status `204` (No Content) should
-// pass `nil` to advertise an empty body.
-func (b *HandlerSchemaBuilder) Response(status int, model any) *HandlerSchemaBuilder {
-	b.responses[status] = model
-	return b
 }
 
 // Generate returns the OpenAPI 3.0 document as JSON. Errors:
@@ -305,10 +239,11 @@ func (g *Generator[T]) buildOperation(r fibermap.RouteInfo, components *Componen
 	}
 	op.Security = sec
 
-	// Optional typed schemas for the handler.
-	if b, ok := g.handlerSchemas[r.Handler]; ok {
-		if b.body != nil {
-			schema, err := g.reflectSchema(b.body, components)
+	// Schemas registered alongside the handler via
+	// fibermap.WithBody / WithQuery / WithHeaders / WithResponse.
+	if meta := g.eng.HandlerMeta(r.Handler); meta != nil {
+		if meta.Body != nil {
+			schema, err := g.reflectSchema(meta.Body, components)
 			if err != nil {
 				return nil, fmt.Errorf("body: %w", err)
 			}
@@ -317,21 +252,21 @@ func (g *Generator[T]) buildOperation(r fibermap.RouteInfo, components *Componen
 				Content:  map[string]MediaType{"application/json": {Schema: schema}},
 			}
 		}
-		if b.query != nil {
-			params, err := g.reflectParams(b.query, "query", "query")
+		if meta.Query != nil {
+			params, err := g.reflectParams(meta.Query, "query", "query")
 			if err != nil {
 				return nil, fmt.Errorf("query: %w", err)
 			}
 			op.Parameters = append(op.Parameters, params...)
 		}
-		if b.headers != nil {
-			params, err := g.reflectParams(b.headers, "reqHeader", "header")
+		if meta.Headers != nil {
+			params, err := g.reflectParams(meta.Headers, "reqHeader", "header")
 			if err != nil {
 				return nil, fmt.Errorf("headers: %w", err)
 			}
 			op.Parameters = append(op.Parameters, params...)
 		}
-		for status, model := range b.responses {
+		for status, model := range meta.Responses {
 			resp := Response{Description: defaultStatusDescription(status)}
 			if model != nil {
 				schema, err := g.reflectSchema(model, components)

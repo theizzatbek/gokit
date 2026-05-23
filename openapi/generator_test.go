@@ -173,16 +173,17 @@ groups:
         summary: Create a task
         tags: [tasks, write]
 `, func(e *fibermap.Engine[appCtx]) {
-		e.RegisterHandler("tasks.create", func(c *fibermap.Context[appCtx]) error { return nil })
+		e.RegisterHandler("tasks.create",
+			func(c *fibermap.Context[appCtx]) error { return nil },
+			fibermap.WithBody(CreateTaskReq{}),
+			fibermap.WithResponse(201, TaskResponse{}),
+			fibermap.WithResponse(400, ErrorResponse{}),
+		)
 	})
 
 	gen := openapi.NewGenerator(e,
 		openapi.WithInfo(openapi.Info{Title: "Tasks API", Version: "1.0.0"}),
 	)
-	gen.OnHandler("tasks.create").
-		Body(CreateTaskReq{}).
-		Response(201, TaskResponse{}).
-		Response(400, ErrorResponse{})
 
 	b, err := gen.Generate()
 	if err != nil {

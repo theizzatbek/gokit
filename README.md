@@ -617,20 +617,21 @@ documentation:
 ```
 
 ```go
-// Go — typed schemas live here
+// Schemas live on the handler — declared once at registration time.
+eng.RegisterHandler("tasks.create", h.Create,
+    fibermap.WithBody(CreateTaskReq{}),
+    fibermap.WithResponse(201, Task{}),
+    fibermap.WithResponse(400, ErrorResponse{}),
+)
+
 import "github.com/theizzatbek/fibermap/openapi"
 
 gen := openapi.NewGenerator(eng,
     openapi.WithInfo(openapi.Info{Title: "Tasks API", Version: "1.0.0"}),
     openapi.WithServer("https://api.example.com", "production"),
-    openapi.WithSecurity("BearerAuth", openapi.HTTPBearer("JWT")),
-    openapi.MapMiddlewareToSecurity("auth", "BearerAuth"),
+    // Combined helper — registers the scheme AND maps middleware to it.
+    openapi.SecurityMapping("BearerAuth", openapi.HTTPBearer("JWT"), "auth"),
 )
-
-gen.OnHandler("tasks.create").
-    Body(CreateTaskReq{}).
-    Response(201, Task{}).
-    Response(400, ErrorResponse{})
 
 spec, err := gen.Generate()         // []byte JSON
 ```
@@ -645,16 +646,18 @@ What's automatic — pulled straight from the route's YAML:
 - Routes whose chain includes a middleware mapped via
   `MapMiddlewareToSecurity` get `security: [{name: []}]` attached.
 
-What's opt-in via the builder:
+What's opt-in via [HandlerOption] values on `RegisterHandler`:
 
-- Request body schema — `OnHandler("name").Body(MyReq{})`.
-- Query / header schemas — `.Query(...)` / `.Headers(...)`.
-- Response schemas per status — `.Response(201, Task{})`. Pass `nil`
-  to advertise an empty body (e.g. `Response(204, nil)`).
+- `fibermap.WithBody(MyReq{})` — request body schema.
+- `fibermap.WithQuery(MyQuery{})` — query-string schema.
+- `fibermap.WithHeaders(MyHeaders{})` — request-header schema.
+- `fibermap.WithResponse(201, Task{})` — response body schema per
+  status. Pass `nil` to advertise an empty body
+  (`fibermap.WithResponse(204, nil)`).
 
 Text fields (`summary`, `description`, `tags`) are intentionally NOT
-in the builder — they live in `routes.yaml`, alongside the route they
-describe, so the YAML stays the single source of truth.
+in the Go options — they live in `routes.yaml`, alongside the route
+they describe, so the YAML stays the single source of truth.
 
 Schema reflection uses
 [`invopop/jsonschema`](https://github.com/invopop/jsonschema) — Go

@@ -103,19 +103,34 @@ func main() {
 		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
 	})
 
+	// Handlers carry their typed request/response schemas at
+	// registration. fibermap.WithBody / WithResponse / etc. attach
+	// opaque schema models that fibermap/openapi reflects on. The
+	// runtime ignores them.
+	errBody := fiber.Map{"error": ""}
 	taskH := tasks.New(store, valid)
-	eng.RegisterHandler("tasks.list", taskH.List)
-	eng.RegisterHandler("tasks.get", taskH.Get)
-	eng.RegisterHandler("tasks.create", taskH.Create)
-	eng.RegisterHandler("tasks.update", taskH.Update)
-	eng.RegisterHandler("tasks.delete", taskH.Delete)
+	eng.RegisterHandler("tasks.list", taskH.List,
+		fibermap.WithResponse(200, fiber.Map{"tasks": []tasks.Task{}}))
+	eng.RegisterHandler("tasks.get", taskH.Get,
+		fibermap.WithResponse(200, tasks.Task{}),
+		fibermap.WithResponse(404, errBody))
+	eng.RegisterHandler("tasks.create", taskH.Create,
+		fibermap.WithBody(tasks.CreateReq{}),
+		fibermap.WithResponse(201, tasks.Task{}),
+		fibermap.WithResponse(400, errBody))
+	eng.RegisterHandler("tasks.update", taskH.Update,
+		fibermap.WithBody(tasks.UpdateReq{}),
+		fibermap.WithResponse(200, tasks.Task{}),
+		fibermap.WithResponse(400, errBody),
+		fibermap.WithResponse(404, errBody))
+	eng.RegisterHandler("tasks.delete", taskH.Delete,
+		fibermap.WithResponse(204, nil),
+		fibermap.WithResponse(403, errBody))
 	eng.RegisterHandler("admin.routes", admin.Routes(eng))
 
-	// --- OpenAPI 3.0 spec — generated from Engine.Routes() + typed
-	// per-handler schemas, served at /openapi.json. The generator
-	// reads from the engine, so the spec is always in sync with the
-	// live route table; we cache the JSON behind a sync.Once so each
-	// scrape is a memcpy, not a re-reflection.
+	// OpenAPI 3.0 spec — generated from Engine.Routes() + the handler
+	// schemas attached above. The generator reads from the engine,
+	// so the spec is always in sync with the live route table.
 	gen := openapi.NewGenerator(eng,
 		openapi.WithInfo(openapi.Info{
 			Title:       "Tasks API",
@@ -123,28 +138,8 @@ func main() {
 			Description: "Per-user task lists — demo for the fibermap library.",
 		}),
 		openapi.WithServer("http://localhost:3000", "local dev"),
-		openapi.WithSecurity("BearerAuth", openapi.HTTPBearer()),
-		openapi.MapMiddlewareToSecurity("auth", "BearerAuth"),
+		openapi.SecurityMapping("BearerAuth", openapi.HTTPBearer(), "auth"),
 	)
-	// summary / description / tags come from routes.yaml; the
-	// builder is reserved for typed Go schemas.
-	gen.OnHandler("tasks.create").
-		Body(tasks.CreateReq{}).
-		Response(201, tasks.Task{}).
-		Response(400, fiber.Map{"error": ""})
-	gen.OnHandler("tasks.update").
-		Body(tasks.UpdateReq{}).
-		Response(200, tasks.Task{}).
-		Response(400, fiber.Map{"error": ""}).
-		Response(404, fiber.Map{"error": ""})
-	gen.OnHandler("tasks.get").
-		Response(200, tasks.Task{}).
-		Response(404, fiber.Map{"error": ""})
-	gen.OnHandler("tasks.list").
-		Response(200, fiber.Map{"tasks": []tasks.Task{}})
-	gen.OnHandler("tasks.delete").
-		Response(204, nil).
-		Response(403, fiber.Map{"error": ""})
 
 	// Mount installs /openapi.json (sync.Once-cached spec) and /docs
 	// (Scalar UI viewer) — both as programmatic routes on the
