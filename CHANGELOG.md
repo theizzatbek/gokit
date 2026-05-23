@@ -10,6 +10,47 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 _Nothing yet._
 
+## [v0.5.0] - 2026-05-23
+
+A "smart defaults" release: most of the v0.3 ops bundle is now ON BY
+DEFAULT inside `Engine.Run`. The intent is "your service should be
+observable, recoverable, and probe-able with zero opt-in code".
+
+### Changed
+- `Engine.Run` now installs the following automatically when the
+  caller didn't pass an opt-out:
+  - **Recover** with `slog.Default()` — panics in any downstream
+    handler/middleware are logged with stack + 500 returned.
+  - **RequestID** prepended to the Use chain — every response carries
+    a 16-hex `X-Request-ID`.
+  - **RequestLogger** with `slog.Default()`, skipping `/healthz` and
+    `/metrics` — one structured access-log line per request.
+  - **HealthCheck** at `/healthz` — 200 OK, bypasses every middleware.
+  These defaults apply to **all** engines — both `New[T]()` and
+  `Default[T]()`. **This is a behavior change for existing callers
+  that already serve `/healthz` themselves or that intentionally
+  wanted zero middleware** — use the new `Without*` options listed
+  below to opt out.
+- `fibermap.Default[T]()` simplified: previously a "full ops bundle"
+  shortcut, now equivalent to `New[T]()` plus `WithMetrics("/metrics")`.
+  Since the rest of the bundle moved into `Run` itself, the only
+  thing Default still adds is the Prometheus endpoint (which stays
+  opt-in because it pulls in `prometheus/client_golang`).
+- `examples/tasks/main.go` switched to `Default[T]()` and dropped the
+  explicit `WithRecover` / `WithHealthCheck` / `WithMetrics` /
+  `WithUse(RequestID(), ...)` calls. Only `WithRequestLogger(logger,
+  ...)` is kept (custom slog logger instead of `slog.Default()`).
+
+### Added
+- `WithoutRecover()` — opt out of the built-in Recover default.
+- `WithoutRequestID()` — opt out of the built-in `RequestID` default.
+- `WithoutRequestLogger()` — opt out of the built-in access logger.
+- `WithoutHealthCheck()` — opt out of the built-in `/healthz` route
+  (equivalent to `WithHealthCheck("")`).
+- `WithoutMetrics()` — opt out of `WithMetrics` (useful when an
+  engine constructed via `Default[T]()` doesn't want the
+  Prometheus endpoint after all).
+
 ## [v0.4.1] - 2026-05-23
 
 Maintenance release. No API surface changes, no behaviour changes —
