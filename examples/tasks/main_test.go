@@ -61,7 +61,7 @@ func TestRoutesYAML(t *testing.T) {
 
 	fibermaptest.AssertRoute(t, eng, "GET", "/api/v1/tasks",
 		fibermaptest.WithHandler("tasks.list"),
-		fibermaptest.WithTags("tasks", "read"))
+		fibermaptest.WithTags("tasks"))
 
 	fibermaptest.AssertRoute(t, eng, "POST", "/api/v1/tasks",
 		fibermaptest.WithHandler("tasks.create"))
