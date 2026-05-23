@@ -10,6 +10,19 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 _Nothing yet._
 
+## [v0.8.2] - 2026-05-23
+
+Finishes the OpenAPI-schema fix that v0.8.1 only partially shipped.
+
+### Fixed
+- `examples/tasks/main.go` still passed `fiber.Map{...}` literals to
+  `openapi.WithDefaultResponse` (for the universal 4xx/5xx) and to
+  `fibermap.WithResponse(fiber.StatusOK, …)` on `tasks.list`. v0.8.1
+  introduced the typed `tasks.ListResponse` / `tasks.ErrorResponse`
+  structs in the internal handler code but never wired them into the
+  generator options — Scalar / Swagger UI continued to show empty
+  response bodies. v0.8.2 actually swaps those call sites over.
+
 ## [v0.8.1] - 2026-05-23
 
 Documentation fix for the example. No library API changes — only
