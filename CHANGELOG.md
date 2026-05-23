@@ -65,6 +65,24 @@ OpenAPI ergonomics pass:
   `RegisterHandler`, single `gen.Mount()` for spec + docs,
   `SecurityMapping` instead of two separate options.
 
+### Changed (continued)
+- `openapi.MapMiddlewareToSecurity` and `openapi.SecurityMapping`
+  now accumulate when the same middleware is mapped to multiple
+  schemes — both schemes appear in the operation's `security` array
+  as separate entries (OR semantics: any one satisfies). This lets
+  an `auth` middleware that accepts both Bearer and Basic
+  credentials advertise both in the spec.
+- `examples/tasks/internal/auth`: added `Basic()` middleware (HTTP
+  Basic against an in-memory user table) and `BearerOrBasic()` that
+  dispatches on the `Authorization` header prefix. The example wires
+  `BearerOrBasic()` and registers both `BearerAuth` + `BasicAuth`
+  schemes in the OpenAPI spec.
+- `examples/tasks/main.go`: dropped the hardcoded
+  `WithServer("http://localhost:3000", ...)` — without it, OpenAPI
+  tools resolve URLs relative to where the spec is served
+  (correct for both local and production). A comment shows how to
+  wire `os.Getenv("API_BASE_URL")` for prod.
+
 ### Notes
 - v0.6.0's `openapi.OnHandler` API was never tagged as stable
   (0.x). Callers that used it should migrate to

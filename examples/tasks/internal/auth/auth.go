@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"encoding/base64"
 	"errors"
 	"strings"
 
@@ -12,39 +13,96 @@ import (
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/appctx"
 )
 
+// demoUser is the resolved identity an auth middleware writes to
+// Locals — same shape regardless of which scheme produced it.
+type demoUser struct {
+	UserID string
+	Role   string
+}
+
 // Demo token table — in a real app, this is a JWT verifier hitting
 // the public key, an opaque-token lookup against Redis, etc. The
 // shape (token -> {user_id, role}) stays the same.
-var demoTokens = map[string]struct {
-	UserID string
-	Role   string
-}{
+var demoTokens = map[string]demoUser{
 	"alice-token": {UserID: "u-alice", Role: "user"},
 	"bob-token":   {UserID: "u-bob", Role: "user"},
 	"root-token":  {UserID: "u-root", Role: "admin"},
 }
 
-// Bearer is a Fiber-level middleware (install via app.Use) that
-// parses `Authorization: Bearer <token>`, looks the token up, and
-// writes user_id + role into c.Locals. 401 on missing/unknown.
-//
-// MUST run before fibermap.Engine.Mount so the ContextBuilder can
-// read the locals it just set.
+// Demo Basic-auth credentials. Real apps store hashed passwords
+// (bcrypt/argon2); this is a demo, so plaintext suffices.
+var demoBasic = map[string]demoUser{
+	"alice:secret": {UserID: "u-alice", Role: "user"},
+	"bob:secret":   {UserID: "u-bob", Role: "user"},
+	"root:admin":   {UserID: "u-root", Role: "admin"},
+}
+
+func writeUser(c *fiber.Ctx, u demoUser) error {
+	c.Locals("user_id", u.UserID)
+	c.Locals("role", u.Role)
+	return c.Next()
+}
+
+// Bearer parses `Authorization: Bearer <token>`, looks the token up
+// in the demo table, and stashes user_id + role on c.Locals. 401 on
+// missing or unknown token.
 func Bearer() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		h := c.Get("Authorization")
 		const prefix = "Bearer "
+		h := c.Get("Authorization")
 		if !strings.HasPrefix(h, prefix) {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing bearer token"})
 		}
-		token := strings.TrimPrefix(h, prefix)
-		u, ok := demoTokens[token]
+		u, ok := demoTokens[strings.TrimPrefix(h, prefix)]
 		if !ok {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid token"})
 		}
-		c.Locals("user_id", u.UserID)
-		c.Locals("role", u.Role)
-		return c.Next()
+		return writeUser(c, u)
+	}
+}
+
+// Basic parses `Authorization: Basic <base64(user:pass)>`, looks up
+// the credentials in the demo table, and stashes user_id + role on
+// c.Locals. 401 on missing or invalid credentials.
+func Basic() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		const prefix = "Basic "
+		h := c.Get("Authorization")
+		if !strings.HasPrefix(h, prefix) {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing basic credentials"})
+		}
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(h, prefix))
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid basic credentials (bad base64)"})
+		}
+		u, ok := demoBasic[string(decoded)]
+		if !ok {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid basic credentials"})
+		}
+		return writeUser(c, u)
+	}
+}
+
+// BearerOrBasic accepts either a Bearer token or a Basic
+// (user:password) Authorization header, dispatching to the
+// corresponding scheme. Used in the demo so /docs can show both
+// auth options in the OpenAPI spec.
+//
+// Order: inspect the Authorization header prefix. No prefix → 401
+// without consulting either scheme (cheap fail-fast).
+func BearerOrBasic() fiber.Handler {
+	bearer := Bearer()
+	basic := Basic()
+	return func(c *fiber.Ctx) error {
+		h := c.Get("Authorization")
+		switch {
+		case strings.HasPrefix(h, "Bearer "):
+			return bearer(c)
+		case strings.HasPrefix(h, "Basic "):
+			return basic(c)
+		default:
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing credentials (Bearer or Basic)"})
+		}
 	}
 }
 

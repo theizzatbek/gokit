@@ -200,9 +200,11 @@ func (g *Generator[T]) Generate() ([]byte, error) {
 }
 
 func (g *Generator[T]) validateConfig() error {
-	for mw, scheme := range g.cfg.middlewareSecurity {
-		if _, ok := g.cfg.securitySchemes[scheme]; !ok {
-			return fmt.Errorf("openapi: middleware %q mapped to security scheme %q, but the scheme is not registered (use WithSecurity)", mw, scheme)
+	for mw, schemes := range g.cfg.middlewareSecurity {
+		for _, scheme := range schemes {
+			if _, ok := g.cfg.securitySchemes[scheme]; !ok {
+				return fmt.Errorf("openapi: middleware %q mapped to security scheme %q, but the scheme is not registered (use WithSecurity)", mw, scheme)
+			}
 		}
 	}
 	return nil
@@ -230,10 +232,12 @@ func (g *Generator[T]) buildOperation(r fibermap.RouteInfo, components *Componen
 	}
 
 	// Security: any middleware in this route's chain that's mapped
-	// to a scheme contributes to the security requirement.
+	// to one or more schemes contributes to the security requirement.
+	// Each scheme is emitted as its own entry in the security array
+	// (OR semantics: any one satisfies).
 	var sec []map[string][]string
 	for _, mw := range r.Middleware {
-		if scheme, ok := g.cfg.middlewareSecurity[mw.Name]; ok {
+		for _, scheme := range g.cfg.middlewareSecurity[mw.Name] {
 			sec = append(sec, map[string][]string{scheme: {}})
 		}
 	}

@@ -9,7 +9,10 @@
 //	go run ./examples/tasks
 //
 //	# default tokens: alice-token / bob-token (role=user), root-token (role=admin)
+//	# Bearer:
 //	curl -H "Authorization: Bearer alice-token"            http://localhost:3000/api/v1/tasks
+//	# Basic (alternative — see auth.BearerOrBasic):
+//	curl -u alice:secret                                   http://localhost:3000/api/v1/tasks
 //	curl -H "Authorization: Bearer alice-token" \
 //	     -H "Content-Type: application/json" \
 //	     -d '{"title":"buy milk"}' \
@@ -110,22 +113,22 @@ func main() {
 	errBody := fiber.Map{"error": ""}
 	taskH := tasks.New(store, valid)
 	eng.RegisterHandler("tasks.list", taskH.List,
-		fibermap.WithResponse(200, fiber.Map{"tasks": []tasks.Task{}}))
+		fibermap.WithResponse(fiber.StatusOK, fiber.Map{"tasks": []tasks.Task{}}))
 	eng.RegisterHandler("tasks.get", taskH.Get,
-		fibermap.WithResponse(200, tasks.Task{}),
-		fibermap.WithResponse(404, errBody))
+		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}),
+		fibermap.WithResponse(fiber.StatusNotFound, errBody))
 	eng.RegisterHandler("tasks.create", taskH.Create,
 		fibermap.WithBody(tasks.CreateReq{}),
-		fibermap.WithResponse(201, tasks.Task{}),
-		fibermap.WithResponse(400, errBody))
+		fibermap.WithResponse(fiber.StatusCreated, tasks.Task{}),
+		fibermap.WithResponse(fiber.StatusBadRequest, errBody))
 	eng.RegisterHandler("tasks.update", taskH.Update,
 		fibermap.WithBody(tasks.UpdateReq{}),
-		fibermap.WithResponse(200, tasks.Task{}),
-		fibermap.WithResponse(400, errBody),
-		fibermap.WithResponse(404, errBody))
+		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}),
+		fibermap.WithResponse(fiber.StatusBadRequest, errBody),
+		fibermap.WithResponse(fiber.StatusNotFound, errBody))
 	eng.RegisterHandler("tasks.delete", taskH.Delete,
-		fibermap.WithResponse(204, nil),
-		fibermap.WithResponse(403, errBody))
+		fibermap.WithResponse(fiber.StatusNoContent, nil),
+		fibermap.WithResponse(fiber.StatusForbidden, errBody))
 	eng.RegisterHandler("admin.routes", admin.Routes(eng))
 
 	// OpenAPI 3.0 spec — generated from Engine.Routes() + the handler
@@ -137,8 +140,15 @@ func main() {
 			Version:     "0.1.0",
 			Description: "Per-user task lists — demo for the fibermap library.",
 		}),
-		openapi.WithServer("http://localhost:3000", "local dev"),
+		// `auth` is the fibermap-middleware name. Bearer OR Basic both
+		// satisfy it (see auth.BearerOrBasic in WithUse below) — the
+		// spec lists both schemes; clients pick either.
+		//
+		// No WithServer here: OpenAPI tools default to relative URLs
+		// (resolves against wherever /openapi.json is served). For
+		// prod, set WithServer(os.Getenv("API_BASE_URL"), "prod").
 		openapi.SecurityMapping("BearerAuth", openapi.HTTPBearer(), "auth"),
+		openapi.SecurityMapping("BasicAuth", openapi.HTTPBasic(), "auth"),
 	)
 
 	// Mount installs /openapi.json (sync.Once-cached spec) and /docs
@@ -176,7 +186,7 @@ func main() {
 		}),
 		fibermap.WithRecover(logger),
 		fibermap.WithRequestLogger(logger, "/healthz", "/metrics"),
-		fibermap.WithUse(auth.Bearer()),
+		fibermap.WithUse(auth.BearerOrBasic()),
 		fibermap.WithRoutesFS(routesFS),
 	)
 	if err != nil {

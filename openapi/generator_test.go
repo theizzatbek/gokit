@@ -400,3 +400,50 @@ groups:
 		t.Error("default /docs leaked")
 	}
 }
+
+func TestGenerate_MultipleSchemesPerMiddleware(t *testing.T) {
+	// One middleware ("auth") maps to TWO schemes (Bearer + Basic).
+	// The operation must list both as separate entries (OR semantics).
+	e := buildEngine(t, `
+groups:
+  - prefix: /api
+    middleware: [auth]
+    routes:
+      - { method: GET, path: /me, handler: me.get, name: me.get }
+`, func(e *fibermap.Engine[appCtx]) {
+		e.RegisterMiddleware("auth", func(c *fibermap.Context[appCtx]) error { return c.Next() })
+		e.RegisterHandler("me.get", func(c *fibermap.Context[appCtx]) error { return nil })
+	})
+
+	b, err := openapi.NewGenerator(e,
+		openapi.SecurityMapping("BearerAuth", openapi.HTTPBearer(), "auth"),
+		openapi.SecurityMapping("BasicAuth", openapi.HTTPBasic(), "auth"),
+	).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := decode(t, b)
+
+	op := path(doc, "paths", "/api/me", "get").(map[string]any)
+	sec := op["security"].([]any)
+	if len(sec) != 2 {
+		t.Fatalf("security = %v, want 2 entries (Bearer + Basic)", sec)
+	}
+	seen := map[string]bool{}
+	for _, entry := range sec {
+		for name := range entry.(map[string]any) {
+			seen[name] = true
+		}
+	}
+	if !seen["BearerAuth"] || !seen["BasicAuth"] {
+		t.Errorf("missing scheme(s) in security: %v", seen)
+	}
+
+	schemes := path(doc, "components", "securitySchemes").(map[string]any)
+	if _, ok := schemes["BearerAuth"]; !ok {
+		t.Error("BearerAuth not in components.securitySchemes")
+	}
+	if _, ok := schemes["BasicAuth"]; !ok {
+		t.Error("BasicAuth not in components.securitySchemes")
+	}
+}
