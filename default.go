@@ -1,47 +1,36 @@
 package fibermap
 
-import "log/slog"
-
-// Default returns an Engine[T] pre-wired with sensible production
-// defaults that [Engine.Run] applies automatically:
+// Default returns an Engine[T] pre-wired to also enable Prometheus
+// [WithMetrics] when [Engine.Run] is called. Since v0.5, the other
+// pieces of the ops bundle — Recover, RequestID, RequestLogger, and
+// HealthCheck — are built into Run itself and on by default, so
+// `New[T]().Run()` already gets them. The only thing Default adds is
+// the metrics endpoint, which is opt-in because it pulls in
+// `github.com/prometheus/client_golang`.
 //
-//   - [Recover] with slog.Default() — catch panics, log with stack, 500
-//   - [RequestID]() at the front of the Use chain — every request
-//     carries an X-Request-ID
-//   - [RequestLogger] with slog.Default(), skipping `/healthz` and `/metrics`
-//   - [WithHealthCheck]("/healthz") — k8s livenessProbe endpoint
-//   - [WithMetrics]("/metrics") — Prometheus scrape endpoint
-//
-// Call SetContextBuilder and Register* like usual, then Run():
+// Use Default when you want the metrics endpoint without spelling it
+// out:
 //
 //	eng := fibermap.Default[AppCtx]()
 //	eng.SetContextBuilder(...)
 //	eng.RegisterHandler(...)
-//	eng.RegisterMiddlewareFactory(...)
-//	eng.Run()                       // ops bundle is on
+//	eng.Run(fibermap.WithUse(auth.Bearer()))   // full bundle + auth
 //
-// To override a default, pass the same option to Run with new
-// arguments — later options win:
+// Use [New] when you don't want metrics. You can still get the rest of
+// the ops bundle:
 //
-//	eng.Run(fibermap.WithHealthCheck("/_health"))           // path override
-//	eng.Run(fibermap.WithMetrics(""))                       // disable metrics
-//	eng.Run(fibermap.WithRecover(myLogger))                 // structured logger
+//	eng := fibermap.New[AppCtx]()              // recover + request_id + logger + healthz still on
+//	eng.Run(fibermap.WithoutRecover())         // opt out of any default
 //
-// To add MORE Fiber-level middleware on top of the default RequestID:
+// To override a built-in default — change the health-check path,
+// supply a custom slog.Logger, etc. — call the matching With* option:
 //
-//	eng.Run(fibermap.WithUse(auth.Bearer()))                // request_id + auth
-//
-// Use [New] instead of Default when you want zero defaults — handy
-// for tests, embedded use, or unusual deployments.
+//	eng.Run(fibermap.WithHealthCheck("/_health"))
+//	eng.Run(fibermap.WithRecover(myLogger))
 func Default[T any]() *Engine[T] {
 	e := New[T]()
-	logger := slog.Default()
 	e.defaultRunOpts = []RunOption{
-		WithRecover(logger),
-		WithRequestLogger(logger, "/healthz", "/metrics"),
-		WithHealthCheck("/healthz"),
 		WithMetrics("/metrics"),
-		WithUse(RequestID()),
 	}
 	return e
 }

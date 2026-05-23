@@ -37,14 +37,22 @@ type runConfig struct {
 
 	withRecover bool
 	recoverLog  *slog.Logger
+	noRecover   bool
 
 	healthCheckPath string
+	healthCheckSet  bool
+	noHealthCheck   bool
 
 	withReqLog      bool
 	reqLog          *slog.Logger
 	reqLogSkipPaths []string
+	noReqLog        bool
+
+	noRequestID bool
 
 	metricsPath string
+	metricsSet  bool
+	noMetrics   bool
 }
 
 // WithAddr overrides the listen address. When unset, Run picks up the
@@ -120,23 +128,61 @@ func WithoutSignalHandling() RunOption {
 // and a full stack trace via the given logger, and the client gets a
 // generic 500 instead of a dropped connection. Pass nil for
 // slog.Default().
+//
+// Recover is ON BY DEFAULT in Run — call WithRecover only to supply
+// a custom logger, or WithoutRecover to disable.
 func WithRecover(logger *slog.Logger) RunOption {
 	return func(c *runConfig) {
 		c.withRecover = true
 		c.recoverLog = logger
+		c.noRecover = false
 	}
 }
 
+// WithoutRecover disables the built-in Recover middleware that Run
+// otherwise installs by default. Use only when you have your own
+// panic-handling wired (e.g. via Fiber's ErrorHandler or
+// WithConfigureApp).
+func WithoutRecover() RunOption {
+	return func(c *runConfig) {
+		c.noRecover = true
+		c.withRecover = false
+	}
+}
+
+// WithoutRequestID suppresses the built-in [RequestID] middleware
+// that Run prepends to the Use chain by default. Use when you have
+// a custom request-correlation scheme you're installing yourself via
+// WithUse.
+func WithoutRequestID() RunOption {
+	return func(c *runConfig) { c.noRequestID = true }
+}
+
 // WithRequestLogger installs [RequestLogger] in the Use chain AFTER
-// WithRecover and WithHealthCheck (so panics still get recovered and
-// logged separately, and the health check stays silent). Skip paths
-// are typically `/healthz` and `/metrics` — pass them via
+// WithRecover (so panics still get recovered and logged separately).
+// Skip paths are typically `/healthz` and `/metrics` — pass them via
 // `skipPaths`. Empty (or nil) logger falls back to slog.Default.
+//
+// RequestLogger is ON BY DEFAULT in Run (with `slog.Default()` and
+// skipPaths `[/healthz, /metrics]`) — call this only to supply a
+// custom logger or skip-set, or WithoutRequestLogger to disable.
 func WithRequestLogger(logger *slog.Logger, skipPaths ...string) RunOption {
 	return func(c *runConfig) {
 		c.withReqLog = true
 		c.reqLog = logger
 		c.reqLogSkipPaths = skipPaths
+		c.noReqLog = false
+	}
+}
+
+// WithoutRequestLogger disables the built-in [RequestLogger] that
+// Run otherwise installs by default. Use when you log access yourself
+// (e.g. via a different middleware in WithUse) and don't want a
+// duplicate line.
+func WithoutRequestLogger() RunOption {
+	return func(c *runConfig) {
+		c.noReqLog = true
+		c.withReqLog = false
 	}
 }
 
@@ -148,9 +194,27 @@ func WithRequestLogger(logger *slog.Logger, skipPaths ...string) RunOption {
 // so panics and request logs still happen as usual, but counts of
 // served requests reflect what actually succeeded.
 //
+// Metrics is OFF BY DEFAULT in Run (it pulls
+// `github.com/prometheus/client_golang` into the binary). Use
+// [Default] or call WithMetrics explicitly to enable it.
+//
 //	eng.Run(fibermap.WithMetrics("/metrics"))
 func WithMetrics(path string) RunOption {
-	return func(c *runConfig) { c.metricsPath = path }
+	return func(c *runConfig) {
+		c.metricsPath = path
+		c.metricsSet = true
+		c.noMetrics = false
+	}
+}
+
+// WithoutMetrics suppresses the Prometheus metrics endpoint. Useful
+// in combination with [Default] when you want every default EXCEPT
+// metrics.
+func WithoutMetrics() RunOption {
+	return func(c *runConfig) {
+		c.noMetrics = true
+		c.metricsPath = ""
+	}
 }
 
 // WithHealthCheck registers a `GET` handler at `path` returning
@@ -162,11 +226,30 @@ func WithMetrics(path string) RunOption {
 // The endpoint does NOT appear in Engine.Routes() because it lives
 // outside the engine's planned route set.
 //
-// Default path: "/healthz". Pass empty string to disable explicitly.
-//
-//	eng.Run(fibermap.WithHealthCheck("/healthz"))
+// HealthCheck is ON BY DEFAULT in Run at path `/healthz` — call
+// WithHealthCheck only to move it (e.g. `WithHealthCheck("/_health")`),
+// pass empty string to disable, or use [WithoutHealthCheck].
 func WithHealthCheck(path string) RunOption {
-	return func(c *runConfig) { c.healthCheckPath = path }
+	return func(c *runConfig) {
+		c.healthCheckPath = path
+		c.healthCheckSet = true
+		if path == "" {
+			c.noHealthCheck = true
+		} else {
+			c.noHealthCheck = false
+		}
+	}
+}
+
+// WithoutHealthCheck disables the built-in health-check route that
+// Run otherwise installs by default. Equivalent to
+// `WithHealthCheck("")`.
+func WithoutHealthCheck() RunOption {
+	return func(c *runConfig) {
+		c.noHealthCheck = true
+		c.healthCheckSet = true
+		c.healthCheckPath = ""
+	}
 }
 
 // Run is the one-shot launcher. It creates (or uses) a fiber.App,
@@ -201,6 +284,27 @@ func (e *Engine[T]) Run(opts ...RunOption) error {
 		} else {
 			cfg.addr = ":3000"
 		}
+	}
+
+	// Built-in defaults — applied AFTER user options so explicit
+	// With*/Without* calls always win. Each `no*` flag tells us to
+	// skip the corresponding default.
+	if !cfg.noRecover && !cfg.withRecover {
+		cfg.withRecover = true
+		cfg.recoverLog = slog.Default()
+	}
+	if !cfg.noReqLog && !cfg.withReqLog {
+		cfg.withReqLog = true
+		cfg.reqLog = slog.Default()
+		cfg.reqLogSkipPaths = []string{"/healthz", "/metrics"}
+	}
+	if !cfg.noHealthCheck && !cfg.healthCheckSet {
+		cfg.healthCheckPath = "/healthz"
+	}
+	// RequestID is installed by prepending to cfg.uses. Default ON
+	// unless WithoutRequestID was called.
+	if !cfg.noRequestID {
+		cfg.uses = append([]fiber.Handler{RequestID()}, cfg.uses...)
 	}
 
 	var app *fiber.App
