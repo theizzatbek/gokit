@@ -594,6 +594,80 @@ zero / negative `ttl` or empty `vary_header` entries fail at
 The cache config is surfaced on `RouteInfo.Cache` for introspection
 (JSON-friendly).
 
+## OpenAPI 3.0 spec generation
+
+Subpackage `fibermap/openapi` builds an OpenAPI 3.0 document from the
+engine's introspection API — paths, methods, tags, descriptions,
+and `operationId`s are pulled straight from `routes.yaml`. Per-handler
+request/response types are attached via a fluent builder so the spec
+becomes a single source of truth for both routing AND API
+documentation:
+
+```go
+import "github.com/theizzatbek/fibermap/openapi"
+
+gen := openapi.NewGenerator(eng,
+    openapi.WithInfo(openapi.Info{Title: "Tasks API", Version: "1.0.0"}),
+    openapi.WithServer("https://api.example.com", "production"),
+    openapi.WithSecurity("BearerAuth", openapi.HTTPBearer("JWT")),
+    openapi.MapMiddlewareToSecurity("auth", "BearerAuth"),
+)
+
+gen.OnHandler("tasks.create").
+    Summary("Create a task").
+    Body(CreateTaskReq{}).
+    Response(201, Task{}).
+    Response(400, ErrorResponse{})
+
+spec, err := gen.Generate()         // []byte JSON
+```
+
+What's automatic:
+
+- `Path` translated from Fiber syntax to OpenAPI:
+  `/users/:id/posts/:postId` → `/users/{id}/posts/{postId}` with the
+  path parameters declared and marked `required: true`.
+- `Name` field on a route becomes `operationId`.
+- `Description`, `Tags` are forwarded.
+- Routes whose chain includes a middleware mapped via
+  `MapMiddlewareToSecurity` get `security: [{name: []}]` attached.
+- Path params from Fiber routes are auto-declared.
+
+What's opt-in via the builder:
+
+- Request body schema — `OnHandler("name").Body(MyReq{})`.
+- Query / header schemas — `.Query(...)` / `.Headers(...)`.
+- Response schemas per status — `.Response(201, Task{})`. Pass `nil`
+  to advertise an empty body (e.g. `Response(204, nil)`).
+- Custom `Summary` / `Description` overrides.
+
+Schema reflection uses
+[`invopop/jsonschema`](https://github.com/invopop/jsonschema) — Go
+struct fields' `json:`, `validate:`, and `description` tags are
+honoured. Reflected types are hoisted into
+`components.schemas` and referenced via `$ref`.
+
+To serve the spec at `/openapi.json`, combine with `Engine.Add`:
+
+```go
+var (
+    once     sync.Once
+    cached   []byte
+    cacheErr error
+)
+eng.Add("GET", "/openapi.json", "openapi.spec",
+    func(c *fibermap.Context[AppCtx]) error {
+        once.Do(func() { cached, cacheErr = gen.Generate() })
+        if cacheErr != nil { /* ... */ }
+        c.Set("Content-Type", "application/json")
+        return c.Send(cached)
+    },
+)
+```
+
+See [`examples/tasks/main.go`](./examples/tasks/main.go) for the full
+wire-up.
+
 ## Ready-made middleware factories
 
 Subpackage `fibermap/factory` ships the factories every project ends

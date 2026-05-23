@@ -29,6 +29,10 @@
 //	# health check, structured access log, Prometheus metrics.
 //	curl http://localhost:3000/healthz       # 200 ok, no auth needed
 //	curl http://localhost:3000/metrics       # Prometheus text format
+//
+//	# OpenAPI 3.0 spec generated from routes.yaml + typed handler
+//	# schemas (see Engine.Add(...) wiring below).
+//	curl -H "Authorization: Bearer alice-token" http://localhost:3000/openapi.json
 package main
 
 import (
@@ -36,6 +40,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -44,6 +49,7 @@ import (
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/appctx"
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/auth"
 	"github.com/theizzatbek/fibermap/examples/tasks/internal/tasks"
+	"github.com/theizzatbek/fibermap/openapi"
 )
 
 // Embed routes.yaml into the binary so the deploy is a single artifact.
@@ -102,6 +108,66 @@ func main() {
 	eng.RegisterHandler("tasks.update", taskH.Update)
 	eng.RegisterHandler("tasks.delete", taskH.Delete)
 	eng.RegisterHandler("admin.routes", admin.Routes(eng))
+
+	// --- OpenAPI 3.0 spec — generated from Engine.Routes() + typed
+	// per-handler schemas, served at /openapi.json. The generator
+	// reads from the engine, so the spec is always in sync with the
+	// live route table; we cache the JSON behind a sync.Once so each
+	// scrape is a memcpy, not a re-reflection.
+	gen := openapi.NewGenerator(eng,
+		openapi.WithInfo(openapi.Info{
+			Title:       "Tasks API",
+			Version:     "0.1.0",
+			Description: "Per-user task lists — demo for the fibermap library.",
+		}),
+		openapi.WithServer("http://localhost:3000", "local dev"),
+		openapi.WithSecurity("BearerAuth", openapi.HTTPBearer()),
+		openapi.MapMiddlewareToSecurity("auth", "BearerAuth"),
+	)
+	gen.OnHandler("tasks.create").
+		Summary("Create a task").
+		Body(tasks.CreateReq{}).
+		Response(201, tasks.Task{}).
+		Response(400, fiber.Map{"error": ""})
+	gen.OnHandler("tasks.update").
+		Summary("Update a task (partial)").
+		Body(tasks.UpdateReq{}).
+		Response(200, tasks.Task{}).
+		Response(400, fiber.Map{"error": ""}).
+		Response(404, fiber.Map{"error": ""})
+	gen.OnHandler("tasks.get").
+		Summary("Get one task").
+		Response(200, tasks.Task{}).
+		Response(404, fiber.Map{"error": ""})
+	gen.OnHandler("tasks.list").
+		Summary("List the caller's tasks").
+		Response(200, fiber.Map{"tasks": []tasks.Task{}})
+	gen.OnHandler("tasks.delete").
+		Summary("Delete a task (admin only)").
+		Response(204, nil).
+		Response(403, fiber.Map{"error": ""})
+
+	var (
+		specOnce  sync.Once
+		specJSON  []byte
+		specErr   error
+	)
+	eng.Add("GET", "/openapi.json", "openapi.spec",
+		func(c *fibermap.Context[appctx.AppCtx]) error {
+			specOnce.Do(func() { specJSON, specErr = gen.Generate() })
+			if specErr != nil {
+				c.Data.Log.Error("openapi generation failed", "err", specErr)
+				return c.Status(http.StatusInternalServerError).
+					JSON(fiber.Map{"error": "spec generation failed"})
+			}
+			c.Set("Content-Type", "application/json")
+			return c.Send(specJSON)
+		},
+		fibermap.AddOpts{
+			Description: "OpenAPI 3.0 specification for this API",
+			Tags:        []string{"meta"},
+		},
+	)
 
 	// Run covers everything a production service typically needs.
 	// The ops bundle (Recover, RequestID, RequestLogger, HealthCheck)
