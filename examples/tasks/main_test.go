@@ -90,9 +90,11 @@ func TestRoutesYAML(t *testing.T) {
 		fibermaptest.WithTags("tasks"))
 	fibermaptest.AssertRoute(t, eng, "POST", "/api/v1/tasks",
 		fibermaptest.WithHandler("tasks.create"))
+	// DELETE must require admin role — contract we never want to lose silently.
 	fibermaptest.AssertRoute(t, eng, "DELETE", "/api/v1/tasks/:id",
 		fibermaptest.WithHandler("tasks.delete"),
 		fibermaptest.WithMiddleware("require_role"))
+	// /admin/* lives behind the same role guard.
 	fibermaptest.AssertRoute(t, eng, "GET", "/api/v1/admin/routes",
 		fibermaptest.WithHandler("admin.routes"),
 		fibermaptest.WithMiddleware("require_role"))
@@ -150,10 +152,12 @@ func TestCacheIsolatesByUser(t *testing.T) {
 		return v.Tasks
 	}
 
+	// 1. Alice's first GET — populates the cache.
 	if got := list("alice-token"); len(got) != 0 {
 		t.Fatalf("alice initial list = %v, want []", got)
 	}
 
+	// 2. Alice creates a task; the cached GET would otherwise show it.
 	create := httptest.NewRequest("POST", "/api/v1/tasks", strings.NewReader(`{"title":"buy milk"}`))
 	create.Header.Set("Authorization", "Bearer alice-token")
 	create.Header.Set("Content-Type", "application/json")
@@ -161,10 +165,14 @@ func TestCacheIsolatesByUser(t *testing.T) {
 		t.Fatalf("create: status = %d", resp.StatusCode)
 	}
 
+	// 3. Alice's second GET — should still return [] because of the
+	//    cache hit from step 1. Proves cache is hot, scoped to alice.
 	if got := list("alice-token"); len(got) != 0 {
 		t.Errorf("alice cached list = %v, want [] (cache miss → KeyBy not wired)", got)
 	}
 
+	// 4. Bob's GET — separate KeyBy bucket, handler runs fresh, sees
+	//    no tasks owned by bob. Proves cache namespace is per-user.
 	if got := list("bob-token"); len(got) != 0 {
 		t.Errorf("bob list = %v, want []", got)
 	}
