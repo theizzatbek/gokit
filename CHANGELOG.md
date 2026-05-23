@@ -10,6 +10,24 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 _Nothing yet._
 
+## [v0.7.0] - 2026-05-23
+
+OpenAPI docs viewers — three HTML helpers that render the generated
+spec in a browser. One-liner wiring via `Engine.Add`; the HTML is
+static so first-page latency is whatever the user's browser takes to
+fetch the JS bundle from a CDN.
+
+### Added
+- `openapi.SwaggerUI(specURL, title)` — Swagger UI 5.x via unpkg.
+- `openapi.Redoc(specURL, title)` — Redoc 2.x via unpkg.
+- `openapi.Scalar(specURL, title)` — Scalar API Reference via
+  jsdelivr (modern UI, dark-mode default, built-in API client).
+- All three return a self-contained HTML string with user input
+  HTML-escaped (`html.EscapeString`) — safe to pass title/url from
+  config or environment.
+- `examples/tasks` now mounts Scalar at `/docs` alongside the
+  existing `/openapi.json`.
+
 ## [v0.6.0] - 2026-05-23
 
 OpenAPI 3.0 spec generation. Most users of declarative routers pick
