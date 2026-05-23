@@ -201,7 +201,18 @@ func main() {
 	//   - WithUse(auth.Bearer()) — auth installed AFTER the default
 	//     RequestID, BEFORE the ContextBuilder
 	//   - WithRoutesFS(routesFS) — load YAML from the embedded FS
-	logger.Info("listening", "addr", cfg.Addr, "env", cfg.Env)
+	// When cfg.Addr is empty, fibermap.Run resolves $PORT (cloud
+	// convention) → fallback :3000. Mirror that for the startup log
+	// so what we print matches what fibermap will actually listen on.
+	listenAddr := cfg.Addr
+	if listenAddr == "" {
+		if p := os.Getenv("PORT"); p != "" {
+			listenAddr = ":" + p
+		} else {
+			listenAddr = ":3000"
+		}
+	}
+	logger.Info("listening", "addr", listenAddr, "env", cfg.Env)
 	err = eng.Run(
 		fibermap.WithAddr(cfg.Addr),
 		fibermap.WithShutdownTimeout(cfg.ShutdownTimeout),

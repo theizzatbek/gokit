@@ -14,8 +14,10 @@ import (
 // envDefault so a fresh checkout runs without any .env file. See
 // .env.example for documentation per field.
 type Config struct {
-	// Server
-	Addr            string        `env:"ADDR"             envDefault:":3000"`
+	// Server. Addr has no envDefault on purpose: when empty,
+	// fibermap.Run honors $PORT (cloud-platform convention) and falls
+	// back to :3000. Setting ADDR explicitly always wins.
+	Addr            string        `env:"ADDR"`
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"10s"`
 	BodyLimit       int           `env:"BODY_LIMIT"       envDefault:"1048576"` // 1 MiB
 

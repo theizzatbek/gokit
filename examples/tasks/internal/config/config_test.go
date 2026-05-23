@@ -41,8 +41,10 @@ func TestLoad_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Addr != ":3000" {
-		t.Errorf("Addr = %q, want :3000", cfg.Addr)
+	// Addr has no envDefault — empty means "let fibermap.Run resolve
+	// $PORT or fall back to :3000".
+	if cfg.Addr != "" {
+		t.Errorf("Addr = %q, want empty", cfg.Addr)
 	}
 	if cfg.ShutdownTimeout != 10*time.Second {
 		t.Errorf("ShutdownTimeout = %v, want 10s", cfg.ShutdownTimeout)

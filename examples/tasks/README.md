@@ -56,14 +56,14 @@ curl -i -H "Authorization: Bearer root-token" \
 ## Configuration
 
 Everything is env-driven via `internal/config`. The shipped defaults
-match what you see in `curl` examples above — `:3000`, JSON logs at
-`info`, open CORS, 100 req/min per IP. Override any field by exporting
-the corresponding env var (or dropping a `.env` next to the binary and
-sourcing it).
+match what you see in `curl` examples above — listens on `:3000`,
+JSON logs at `info`, open CORS, 100 req/min per IP. Override any field
+by exporting the corresponding env var (or dropping a `.env` next to
+the binary and sourcing it).
 
 | Var | Default | Meaning |
 | --- | --- | --- |
-| `ADDR` | `:3000` | Listen address. Cloud platforms set `PORT` instead — `fibermap.Run` honors that too |
+| `ADDR` | _(unset)_ → `$PORT` / `:3000` | Listen address. When unset, `fibermap.Run` honors `$PORT` (cloud convention) and falls back to `:3000`. Set `ADDR` explicitly to override both |
 | `SHUTDOWN_TIMEOUT` | `10s` | Graceful drain budget on SIGINT/SIGTERM |
 | `BODY_LIMIT` | `1048576` (1 MiB) | `fiber.Config.BodyLimit` |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
