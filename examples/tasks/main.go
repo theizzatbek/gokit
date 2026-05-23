@@ -33,6 +33,9 @@
 //	# OpenAPI 3.0 spec generated from routes.yaml + typed handler
 //	# schemas (see Engine.Add(...) wiring below).
 //	curl -H "Authorization: Bearer alice-token" http://localhost:3000/openapi.json
+//
+//	# Browsable HTML docs (Scalar API Reference, loaded from CDN).
+//	open http://localhost:3000/docs
 package main
 
 import (
@@ -162,6 +165,21 @@ func main() {
 		},
 		fibermap.AddOpts{
 			Description: "OpenAPI 3.0 specification for this API",
+			Tags:        []string{"meta"},
+		},
+	)
+	// Browsable docs at /docs — Scalar API Reference, loaded from a
+	// CDN. The HTML is generated once and served as a static byte
+	// slice. Try `curl http://localhost:3000/docs` (or open in a
+	// browser) to see the spec rendered.
+	docsHTML := openapi.Scalar("/openapi.json", "Tasks API — Docs")
+	eng.Add("GET", "/docs", "openapi.docs",
+		func(c *fibermap.Context[appctx.AppCtx]) error {
+			c.Set("Content-Type", "text/html; charset=utf-8")
+			return c.SendString(docsHTML)
+		},
+		fibermap.AddOpts{
+			Description: "Browsable API documentation (Scalar UI)",
 			Tags:        []string{"meta"},
 		},
 	)

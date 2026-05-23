@@ -680,8 +680,38 @@ eng.Add("GET", "/openapi.json", "openapi.spec",
 )
 ```
 
+### Browsable docs at `/docs`
+
+Three HTML viewers are built in — each is a one-line helper that
+returns a self-contained HTML page loading the viewer from a CDN and
+pointing it at your `/openapi.json`. Pick whichever you prefer; or
+mount more than one at different paths.
+
+| Helper                          | Library                                                    | Notes                                            |
+| ------------------------------- | ---------------------------------------------------------- | ------------------------------------------------ |
+| `openapi.SwaggerUI(url, title)` | [Swagger UI](https://github.com/swagger-api/swagger-ui)     | Classic, full "try it out" requester.            |
+| `openapi.Redoc(url, title)`     | [Redoc](https://github.com/Redocly/redoc)                   | Read-only, prettier for long specs.               |
+| `openapi.Scalar(url, title)`    | [Scalar API Reference](https://github.com/scalar/scalar)    | Modern, dark-mode default, built-in API client.  |
+
+```go
+docs := openapi.Scalar("/openapi.json", "Tasks API")  // generate once at startup
+eng.Add("GET", "/docs", "openapi.docs",
+    func(c *fibermap.Context[AppCtx]) error {
+        c.Set("Content-Type", "text/html; charset=utf-8")
+        return c.SendString(docs)
+    },
+)
+```
+
+The HTML output is a static string — generate it once at startup,
+serve as bytes per request. First page load fetches the JS bundle
+from the CDN; subsequent loads use the browser cache.
+
+User input is HTML-escaped, so passing values from config/env to
+`title` is safe.
+
 See [`examples/tasks/main.go`](./examples/tasks/main.go) for the full
-wire-up.
+wire-up (spec at `/openapi.json`, Scalar UI at `/docs`).
 
 ## Ready-made middleware factories
 
