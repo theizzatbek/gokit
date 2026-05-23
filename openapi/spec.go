@@ -22,6 +22,12 @@
 //
 //	spec, err := gen.Generate()           // JSON bytes
 //
+// Operation metadata — `summary`, `description`, `tags` — is taken
+// straight from the route's YAML (`summary:`, `description:`,
+// `tags:`). The builder is reserved for typed Go schemas; keeping
+// the human-readable text in YAML alongside the route keeps a
+// single source of truth.
+//
 // Schema reflection uses invopop/jsonschema and respects
 // `json:` and `validate:` struct tags.
 package openapi

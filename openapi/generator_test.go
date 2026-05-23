@@ -170,6 +170,7 @@ groups:
         path: /tasks
         handler: tasks.create
         name: tasks.create
+        summary: Create a task
         tags: [tasks, write]
 `, func(e *fibermap.Engine[appCtx]) {
 		e.RegisterHandler("tasks.create", func(c *fibermap.Context[appCtx]) error { return nil })
@@ -179,7 +180,6 @@ groups:
 		openapi.WithInfo(openapi.Info{Title: "Tasks API", Version: "1.0.0"}),
 	)
 	gen.OnHandler("tasks.create").
-		Summary("Create a task").
 		Body(CreateTaskReq{}).
 		Response(201, TaskResponse{}).
 		Response(400, ErrorResponse{})

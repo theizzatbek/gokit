@@ -124,33 +124,30 @@ func main() {
 		openapi.WithSecurity("BearerAuth", openapi.HTTPBearer()),
 		openapi.MapMiddlewareToSecurity("auth", "BearerAuth"),
 	)
+	// summary / description / tags come from routes.yaml; the
+	// builder is reserved for typed Go schemas.
 	gen.OnHandler("tasks.create").
-		Summary("Create a task").
 		Body(tasks.CreateReq{}).
 		Response(201, tasks.Task{}).
 		Response(400, fiber.Map{"error": ""})
 	gen.OnHandler("tasks.update").
-		Summary("Update a task (partial)").
 		Body(tasks.UpdateReq{}).
 		Response(200, tasks.Task{}).
 		Response(400, fiber.Map{"error": ""}).
 		Response(404, fiber.Map{"error": ""})
 	gen.OnHandler("tasks.get").
-		Summary("Get one task").
 		Response(200, tasks.Task{}).
 		Response(404, fiber.Map{"error": ""})
 	gen.OnHandler("tasks.list").
-		Summary("List the caller's tasks").
 		Response(200, fiber.Map{"tasks": []tasks.Task{}})
 	gen.OnHandler("tasks.delete").
-		Summary("Delete a task (admin only)").
 		Response(204, nil).
 		Response(403, fiber.Map{"error": ""})
 
 	var (
-		specOnce  sync.Once
-		specJSON  []byte
-		specErr   error
+		specOnce sync.Once
+		specJSON []byte
+		specErr  error
 	)
 	eng.Add("GET", "/openapi.json", "openapi.spec",
 		func(c *fibermap.Context[appctx.AppCtx]) error {

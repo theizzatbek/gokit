@@ -38,10 +38,18 @@ document.
   Response declarations for create / update / get / list / delete.
 
 ### Changed
+- New optional `summary:` YAML field on routes — short one-line
+  title, surfaced via `RouteInfo.Summary` and mapped to
+  `operation.summary` in the generated OpenAPI document. The longer
+  `description:` field continues to map to `operation.description`.
 - `examples/tasks/internal/tasks`: the per-request body types
   `createReq` and `updateReq` are renamed to exported `CreateReq` /
   `UpdateReq` so external code (`main.go`'s OpenAPI wiring) can
   reference them. No behaviour change.
+- The OpenAPI builder no longer exposes `Summary` / `Description`
+  setters — operation text lives in `routes.yaml` (the `summary:`
+  and `description:` fields). The builder is reserved for typed
+  Go schemas.
 
 ### Deps
 - Adds `github.com/invopop/jsonschema` (and its transitive deps:

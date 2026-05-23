@@ -367,14 +367,16 @@ Route:
 | `handler`        | string      | Required. Name registered via `RegisterHandler`.      |
 | `middleware`     | `[]MWRef`   | Appended after ancestor chain. Plain or parameterized. |
 | `middleware_set` | string      |                                                       |
-| `name`           | string      | Free-form identifier; surfaced via `Routes()`.        |
-| `tags`           | `[]string`  | Free-form; surfaced via `Routes()`.                   |
-| `description`    | string      | Free-form; surfaced via `Routes()`.                   |
+| `name`           | string      | Free-form identifier; surfaced via `Routes()`. OpenAPI: `operationId`. |
+| `summary`        | string      | Short one-line title; surfaced via `Routes()`. OpenAPI: `operation.summary`. |
+| `description`    | string      | Free-form longer description; surfaced via `Routes()`. OpenAPI: `operation.description`. |
+| `tags`           | `[]string`  | Free-form; surfaced via `Routes()`. OpenAPI: `operation.tags`. |
 | `timeout`        | duration    | Go duration string (`"5s"`, `"300ms"`). When set, the route is wrapped with Fiber's `timeout.NewWithContext`: the handler's `UserContext()` deadline is set to this duration; on deadline a `context.DeadlineExceeded` returned from the handler surfaces as **408 Request Timeout**. Empty (default) means no per-route timeout. |
 | `cache`          | duration / map | Enables built-in response caching. See "Response cache" below. |
 
-`name`, `tags`, and `description` are not interpreted — they exist for
-introspection tooling (see below).
+`name`, `summary`, `description`, and `tags` are not interpreted by
+the engine — they exist for introspection tooling and OpenAPI
+generation.
 
 ## Middleware sets
 
@@ -603,7 +605,19 @@ request/response types are attached via a fluent builder so the spec
 becomes a single source of truth for both routing AND API
 documentation:
 
+```yaml
+# routes.yaml — text-side metadata lives here
+- method: POST
+  path: /tasks
+  handler: tasks.create
+  name: tasks.create
+  summary: Create a task
+  description: Create a task for the caller
+  tags: [tasks, write]
+```
+
 ```go
+// Go — typed schemas live here
 import "github.com/theizzatbek/fibermap/openapi"
 
 gen := openapi.NewGenerator(eng,
@@ -614,7 +628,6 @@ gen := openapi.NewGenerator(eng,
 )
 
 gen.OnHandler("tasks.create").
-    Summary("Create a task").
     Body(CreateTaskReq{}).
     Response(201, Task{}).
     Response(400, ErrorResponse{})
@@ -622,16 +635,15 @@ gen.OnHandler("tasks.create").
 spec, err := gen.Generate()         // []byte JSON
 ```
 
-What's automatic:
+What's automatic — pulled straight from the route's YAML:
 
 - `Path` translated from Fiber syntax to OpenAPI:
   `/users/:id/posts/:postId` → `/users/{id}/posts/{postId}` with the
   path parameters declared and marked `required: true`.
-- `Name` field on a route becomes `operationId`.
-- `Description`, `Tags` are forwarded.
+- `Name` → `operationId`.
+- `Summary`, `Description`, `Tags` → operation metadata.
 - Routes whose chain includes a middleware mapped via
   `MapMiddlewareToSecurity` get `security: [{name: []}]` attached.
-- Path params from Fiber routes are auto-declared.
 
 What's opt-in via the builder:
 
@@ -639,7 +651,10 @@ What's opt-in via the builder:
 - Query / header schemas — `.Query(...)` / `.Headers(...)`.
 - Response schemas per status — `.Response(201, Task{})`. Pass `nil`
   to advertise an empty body (e.g. `Response(204, nil)`).
-- Custom `Summary` / `Description` overrides.
+
+Text fields (`summary`, `description`, `tags`) are intentionally NOT
+in the builder — they live in `routes.yaml`, alongside the route they
+describe, so the YAML stays the single source of truth.
 
 Schema reflection uses
 [`invopop/jsonschema`](https://github.com/invopop/jsonschema) — Go

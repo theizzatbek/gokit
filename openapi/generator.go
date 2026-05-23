@@ -61,15 +61,17 @@ func NewGenerator[T any](eng *fibermap.Engine[T], opts ...Option) *Generator[T] 
 //	    Query(ListQuery{}).
 //	    Response(201, Task{}).
 //	    Response(400, ErrorResponse{})
+//
+// Operation metadata — `summary`, `description`, `tags` — is taken
+// from `routes.yaml` (the `summary:`, `description:`, `tags:` fields
+// on each route). Keep documentation declarative alongside the
+// route definition; the builder is reserved for typed Go schemas.
 type HandlerSchemaBuilder struct {
 	name      string
 	body      any
 	query     any
 	headers   any
 	responses map[int]any
-	// Description / Summary overrides per-handler (optional).
-	description string
-	summary     string
 }
 
 // OnHandler returns (or creates) the schema builder for the handler
@@ -112,19 +114,6 @@ func (b *HandlerSchemaBuilder) Headers(model any) *HandlerSchemaBuilder {
 // pass `nil` to advertise an empty body.
 func (b *HandlerSchemaBuilder) Response(status int, model any) *HandlerSchemaBuilder {
 	b.responses[status] = model
-	return b
-}
-
-// Summary sets the operation's `summary` field (short one-line title).
-func (b *HandlerSchemaBuilder) Summary(s string) *HandlerSchemaBuilder {
-	b.summary = s
-	return b
-}
-
-// Description overrides the operation's `description` (defaults to
-// the route's YAML description).
-func (b *HandlerSchemaBuilder) Description(s string) *HandlerSchemaBuilder {
-	b.description = s
 	return b
 }
 
@@ -192,6 +181,7 @@ func (g *Generator[T]) validateConfig() error {
 func (g *Generator[T]) buildOperation(r fibermap.RouteInfo, components *Components) (*Operation, error) {
 	op := &Operation{
 		OperationID: r.Name,
+		Summary:     r.Summary,
 		Description: r.Description,
 		Tags:        append([]string(nil), r.Tags...),
 		Responses:   map[string]Response{},
@@ -219,12 +209,6 @@ func (g *Generator[T]) buildOperation(r fibermap.RouteInfo, components *Componen
 
 	// Optional typed schemas for the handler.
 	if b, ok := g.handlerSchemas[r.Handler]; ok {
-		if b.summary != "" {
-			op.Summary = b.summary
-		}
-		if b.description != "" {
-			op.Description = b.description
-		}
 		if b.body != nil {
 			schema, err := g.reflectSchema(b.body, components)
 			if err != nil {
