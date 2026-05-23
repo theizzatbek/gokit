@@ -187,6 +187,11 @@ func (e *Engine[T]) Run(opts ...RunOption) error {
 		routesPath:      "routes.yaml",
 		shutdownTimeout: 10 * time.Second,
 	}
+	// Engine-wide defaults first (set by fibermap.Default[T]); explicit
+	// options later so callers can always override.
+	for _, opt := range e.defaultRunOpts {
+		opt(&cfg)
+	}
 	for _, opt := range opts {
 		opt(&cfg)
 	}

@@ -1,11 +1,12 @@
 // Package bind provides typed request parse + validation helpers for
 // fibermap (or any Fiber) handlers.
 //
-// Three symmetric one-liners are exposed:
+// Four symmetric one-liners are exposed:
 //
 //   - Body[T]   — parse JSON/form body via Fiber's BodyParser
 //   - Query[T]  — parse query string via Fiber's QueryParser
 //   - Params[T] — parse route params (:id, :slug, …) via Fiber's ParamsParser
+//   - Header[T] — parse request headers via Fiber's ReqHeaderParser
 //
 // Each accepts a Validator (typically *validator.Validate from
 // github.com/go-playground/validator/v10) — pass nil to skip validation.
@@ -40,6 +41,7 @@
 //   - ErrParseBody    / ErrValidateBody
 //   - ErrParseQuery   / ErrValidateQuery
 //   - ErrParseParams  / ErrValidateParams
+//   - ErrParseHeader  / ErrValidateHeader
 package bind
 
 import (
@@ -71,6 +73,12 @@ type ParamsParser interface {
 	ParamsParser(out any) error
 }
 
+// ReqHeaderParser is the minimal contract for Header[T]. Both *fiber.Ctx
+// and (by embedding) *fibermap.Context[T] satisfy it.
+type ReqHeaderParser interface {
+	ReqHeaderParser(out any) error
+}
+
 // ErrParseBody wraps a body-parsing failure.
 var ErrParseBody = errors.New("bind: parse body")
 
@@ -88,6 +96,12 @@ var ErrParseParams = errors.New("bind: parse params")
 
 // ErrValidateParams wraps a route-param validation failure.
 var ErrValidateParams = errors.New("bind: validate params")
+
+// ErrParseHeader wraps a request-header parsing failure.
+var ErrParseHeader = errors.New("bind: parse header")
+
+// ErrValidateHeader wraps a request-header validation failure.
+var ErrValidateHeader = errors.New("bind: validate header")
 
 // Body parses the request body into a fresh T and runs the validator
 // over the result. Returns the populated T on success.
@@ -143,4 +157,26 @@ func Params[T any](c ParamsParser, v Validator) (T, error) {
 		}
 	}
 	return p, nil
+}
+
+// Header parses request headers into a fresh T and runs the validator
+// over the result. Struct fields use the `reqHeader:"X-Name"` tag (the
+// convention Fiber's ReqHeaderParser expects).
+//
+// Common targets: `Authorization`, `X-Idempotency-Key`, `Accept`,
+// `Accept-Language`, custom tenant headers.
+//
+// On parse failure the returned error wraps ErrParseHeader; on
+// validation failure it wraps ErrValidateHeader.
+func Header[T any](c ReqHeaderParser, v Validator) (T, error) {
+	var h T
+	if err := c.ReqHeaderParser(&h); err != nil {
+		return h, fmt.Errorf("%w: %v", ErrParseHeader, err)
+	}
+	if v != nil {
+		if err := v.Struct(&h); err != nil {
+			return h, fmt.Errorf("%w: %v", ErrValidateHeader, err)
+		}
+	}
+	return h, nil
 }

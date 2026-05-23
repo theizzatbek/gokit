@@ -49,6 +49,14 @@ type CacheDefaults[T any] struct {
 	MaxBytes uint
 }
 
+// programmaticRoute is one route added via Engine.Add — outside the
+// YAML route tree.
+type programmaticRoute[T any] struct {
+	Method, Path, Name, Description string
+	Tags                            []string
+	Handler                         HandlerFunc[T]
+}
+
 // Engine is the build-once-mount-once configurator. It is parameterized by T,
 // the per-request payload type produced by ContextBuilder.
 type Engine[T any] struct {
@@ -62,6 +70,13 @@ type Engine[T any] struct {
 
 	cfg     *rawConfig
 	cfgFile string
+
+	programmatic []programmaticRoute[T]
+
+	// defaultRunOpts are prepended to user-supplied options inside
+	// Run. fibermap.Default[T] populates this with the ops bundle so
+	// `eng.Run()` ships with sensible production defaults.
+	defaultRunOpts []RunOption
 
 	routes  []RouteInfo
 	mounted bool
@@ -82,6 +97,72 @@ func New[T any]() *Engine[T] {
 // SetContextBuilder installs the function that builds the per-request Data.
 // Calling more than once silently overwrites.
 func (e *Engine[T]) SetContextBuilder(fn ContextBuilder[T]) { e.builder = fn }
+
+// AddOpts collects the optional metadata for Engine.Add. Pass at most
+// one to keep call sites readable:
+//
+//	eng.Add("GET", "/debug/pprof/heap", "debug.heap", pprofHeap,
+//	    fibermap.AddOpts{Tags: []string{"debug", "ops"}})
+type AddOpts struct {
+	Description string
+	Tags        []string
+}
+
+// Add registers a route programmatically — outside the YAML route
+// tree. Useful for routes that don't fit the declarative model:
+// debug/pprof endpoints, dynamic admin handlers, embedded UIs, etc.
+//
+// The handler goes through the same per-request Context[T] wrapper as
+// YAML routes; the engine's root middleware (contextInit) still
+// populates `Context[T].Data` for the request.
+//
+// Programmatic routes do NOT support middleware/timeout/cache via
+// this API — those features are intentionally YAML-only to keep the
+// declarative surface authoritative. If you need a programmatic route
+// with middleware, install it directly on the fiber.App via
+// WithConfigureApp.
+//
+// Routes added via Add are surfaced on Engine.Routes() with
+// Source = SourceProgrammatic, so introspection and `fibermaptest`
+// see them.
+//
+// Panics with *Error / CodeRegisterAfterMount if called after Mount.
+// Panics with CodeInvalidHTTPMethod for unsupported methods. Empty
+// name, empty path, or nil handler panic as a programmer error.
+func (e *Engine[T]) Add(method, path, name string, h HandlerFunc[T], opts ...AddOpts) {
+	if e.mounted {
+		panic(&Error{Stage: "register", Code: CodeRegisterAfterMount,
+			Message: "cannot Add route " + method + " " + path + " after Mount"})
+	}
+	if _, ok := validHTTPMethods[method]; !ok {
+		panic(&Error{Stage: "register", Code: CodeInvalidHTTPMethod,
+			Message: "Add: unsupported HTTP method " + method})
+	}
+	if name == "" {
+		panic(&Error{Stage: "register", Code: CodeMissingField,
+			Message: "Add: name is required (used for introspection / tests)"})
+	}
+	if path == "" {
+		panic(&Error{Stage: "register", Code: CodeMissingField,
+			Message: "Add: path is required"})
+	}
+	if h == nil {
+		panic(&Error{Stage: "register", Code: CodeMissingField,
+			Message: "Add: handler is nil"})
+	}
+
+	pr := programmaticRoute[T]{
+		Method:  method,
+		Path:    path,
+		Name:    name,
+		Handler: h,
+	}
+	if len(opts) > 0 {
+		pr.Description = opts[0].Description
+		pr.Tags = append([]string(nil), opts[0].Tags...)
+	}
+	e.programmatic = append(e.programmatic, pr)
+}
 
 // SetContextErrorHandler overrides the default response when ContextBuilder
 // returns an error.
@@ -507,6 +588,24 @@ func (e *Engine[T]) installPlan(router fiber.Router, plan []plannedRoute) error 
 			Tags:        r.Tags,
 			Timeout:     r.TimeoutSpec,
 			Cache:       toCacheInfo(r.Cache),
+			Source:      SourceYAML,
+		})
+	}
+
+	// Programmatic routes (Engine.Add): no middleware chain, no cache,
+	// no timeout — just the typed handler going through the same
+	// per-request Context[T] wrapper as YAML routes. They share the
+	// route-conflict table so an Add() colliding with a YAML route
+	// surfaces here as a Fiber-level panic (duplicate route).
+	for _, pr := range e.programmatic {
+		router.Add(pr.Method, pr.Path, e.wrapHandler(pr.Handler))
+		e.routes = append(e.routes, RouteInfo{
+			Method:      pr.Method,
+			Path:        pr.Path,
+			Handler:     pr.Name,
+			Description: pr.Description,
+			Tags:        append([]string(nil), pr.Tags...),
+			Source:      SourceProgrammatic,
 		})
 	}
 	return nil
