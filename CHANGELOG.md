@@ -10,6 +10,47 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 _Nothing yet._
 
+## [v0.8.0] - 2026-05-23
+
+Removes the last bit of binding boilerplate. Handlers can now take a
+typed request body as a second parameter; fibermap parses + validates
++ feeds it in before invocation. The body schema is auto-attached for
+OpenAPI — the request type appears once at the call site instead of
+three times (handler signature + bind.Body call + WithBody option).
+
+### Added
+- `fibermap.RegisterHandler(eng, name, h, opts...)`,
+  `fibermap.RegisterMiddleware(eng, name, m)`, and
+  `fibermap.RegisterMiddlewareFactory(eng, name, f)` —
+  package-level forms of the existing `Engine.Register*` methods.
+  Exist so callers can use a uniform `fibermap.Register*(eng, ...)`
+  style throughout — including with the new typed-body helpers
+  below, which CAN'T be methods because Go disallows generic
+  methods. The original `Engine.Register*` methods remain; both
+  forms are exported and equivalent.
+- `fibermap.RegisterHandlerWithBody[T, Req any](eng, name, h, opts...)` — wraps
+  a typed handler `func(*Context[T], Req) error` into a
+  `HandlerFunc[T]` that parses the body via `bind.Body[Req]`, runs
+  the engine's validator, and invokes `h` with the result. Schema is
+  auto-attached via `WithBody(*new(Req))`.
+- `fibermap.RegisterHandlerWithQuery` / `RegisterHandlerWithParams` / `RegisterHandlerWithHeaders` —
+  same shape for the other bind locations, reading from the
+  `query:` / `params:` / `reqHeader:` struct tags. Auto-attach the
+  matching schema where applicable.
+- `Engine.SetValidator(v bind.Validator)` — engine-wide validator
+  used by the Register* helpers. nil disables validation (matches
+  the bind helpers' nil-validator behaviour).
+- `Engine.SetBindErrorHandler(fn BindErrorFunc[T])` — customizes the
+  response when a Register*-wrapped handler hits a parse / validate
+  error. Default returns 400 with `{"error": err.Error()}`. Inspect
+  the error with `errors.Is(err, bind.ErrParseBody)` etc to branch.
+- `fibermap.BindErrorFunc[T]` — public type for the bind error
+  handler signature.
+- `examples/tasks` migrates `tasks.create` and `tasks.update` to
+  `fibermap.RegisterHandlerWithBody` — handler signatures gain a typed `req`
+  parameter and the per-handler `bind.Body` + `badBody` branching
+  disappears. Net ~15 lines fewer in the example.
+
 ## [v0.7.0] - 2026-05-23
 
 OpenAPI ergonomics pass:

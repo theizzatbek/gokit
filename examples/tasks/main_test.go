@@ -30,18 +30,20 @@ func buildEngine(t *testing.T) *fibermap.Engine[appctx.AppCtx] {
 	eng.SetContextBuilder(func(c *fiber.Ctx) (appctx.AppCtx, error) {
 		return appctx.AppCtx{Log: logger}, nil
 	})
-	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
+	fibermap.RegisterMiddlewareFactory(eng, "require_role", auth.RequireRole)
 	eng.SetCacheDefaults(fibermap.CacheDefaults[appctx.AppCtx]{
 		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
 	})
 
-	taskH := tasks.New(store, validator.New())
-	eng.RegisterHandler("tasks.list", taskH.List)
-	eng.RegisterHandler("tasks.get", taskH.Get)
-	eng.RegisterHandler("tasks.create", taskH.Create)
-	eng.RegisterHandler("tasks.update", taskH.Update)
-	eng.RegisterHandler("tasks.delete", taskH.Delete)
-	eng.RegisterHandler("admin.routes", admin.Routes(eng))
+	valid := validator.New(validator.WithRequiredStructEnabled())
+	eng.SetValidator(valid)
+	taskH := tasks.New(store, valid)
+	fibermap.RegisterHandler(eng, "tasks.list", taskH.List)
+	fibermap.RegisterHandler(eng, "tasks.get", taskH.Get)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.create", taskH.Create)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.update", taskH.Update)
+	fibermap.RegisterHandler(eng, "tasks.delete", taskH.Delete)
+	fibermap.RegisterHandler(eng, "admin.routes", admin.Routes(eng))
 
 	if err := eng.LoadFS(routesFS, "routes.yaml"); err != nil {
 		t.Fatal(err)
@@ -97,17 +99,19 @@ func TestCreateThenList(t *testing.T) {
 		role, _ := c.Locals("role").(string)
 		return appctx.AppCtx{UserID: uid, Role: role, Log: logger}, nil
 	})
-	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
+	fibermap.RegisterMiddlewareFactory(eng, "require_role", auth.RequireRole)
 	eng.SetCacheDefaults(fibermap.CacheDefaults[appctx.AppCtx]{
 		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
 	})
-	taskH := tasks.New(store, validator.New())
-	eng.RegisterHandler("tasks.list", taskH.List)
-	eng.RegisterHandler("tasks.get", taskH.Get)
-	eng.RegisterHandler("tasks.create", taskH.Create)
-	eng.RegisterHandler("tasks.update", taskH.Update)
-	eng.RegisterHandler("tasks.delete", taskH.Delete)
-	eng.RegisterHandler("admin.routes", admin.Routes(eng))
+	valid := validator.New(validator.WithRequiredStructEnabled())
+	eng.SetValidator(valid)
+	taskH := tasks.New(store, valid)
+	fibermap.RegisterHandler(eng, "tasks.list", taskH.List)
+	fibermap.RegisterHandler(eng, "tasks.get", taskH.Get)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.create", taskH.Create)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.update", taskH.Update)
+	fibermap.RegisterHandler(eng, "tasks.delete", taskH.Delete)
+	fibermap.RegisterHandler(eng, "admin.routes", admin.Routes(eng))
 	if err := eng.LoadFS(routesFS, "routes.yaml"); err != nil {
 		t.Fatal(err)
 	}
@@ -164,17 +168,19 @@ func TestCacheIsolatesByUser(t *testing.T) {
 		role, _ := c.Locals("role").(string)
 		return appctx.AppCtx{UserID: uid, Role: role, Log: logger}, nil
 	})
-	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
+	fibermap.RegisterMiddlewareFactory(eng, "require_role", auth.RequireRole)
 	eng.SetCacheDefaults(fibermap.CacheDefaults[appctx.AppCtx]{
 		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
 	})
-	taskH := tasks.New(store, validator.New())
-	eng.RegisterHandler("tasks.list", taskH.List)
-	eng.RegisterHandler("tasks.get", taskH.Get)
-	eng.RegisterHandler("tasks.create", taskH.Create)
-	eng.RegisterHandler("tasks.update", taskH.Update)
-	eng.RegisterHandler("tasks.delete", taskH.Delete)
-	eng.RegisterHandler("admin.routes", admin.Routes(eng))
+	valid := validator.New(validator.WithRequiredStructEnabled())
+	eng.SetValidator(valid)
+	taskH := tasks.New(store, valid)
+	fibermap.RegisterHandler(eng, "tasks.list", taskH.List)
+	fibermap.RegisterHandler(eng, "tasks.get", taskH.Get)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.create", taskH.Create)
+	fibermap.RegisterHandlerWithBody(eng, "tasks.update", taskH.Update)
+	fibermap.RegisterHandler(eng, "tasks.delete", taskH.Delete)
+	fibermap.RegisterHandler(eng, "admin.routes", admin.Routes(eng))
 	if err := eng.LoadFS(routesFS, "routes.yaml"); err != nil {
 		t.Fatal(err)
 	}

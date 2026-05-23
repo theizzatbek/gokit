@@ -91,7 +91,11 @@ func main() {
 		}, nil
 	})
 
-	eng.RegisterMiddlewareFactory("require_role", auth.RequireRole)
+	fibermap.RegisterMiddlewareFactory(eng, "require_role", auth.RequireRole)
+
+	// Engine-wide validator — fibermap.RegisterHandlerWithBody and friends pass
+	// the parsed struct through it before calling the handler.
+	eng.SetValidator(valid)
 
 	// Engine-wide cache defaults. The built-in cache (declared per-route
 	// in routes.yaml via `cache: ...`) uses these for storage + key
@@ -107,24 +111,23 @@ func main() {
 		KeyBy: func(c *appctx.Ctx) string { return c.Data.UserID },
 	})
 
-	// Handlers carry their typed request/response schemas at
-	// registration. Routes only declare HAPPY paths and unusual
-	// status codes — the universal errors (400/401/403/404/500) are
-	// declared once on the generator via WithDefaultResponse below.
+	// Body-binding handlers use fibermap.RegisterHandlerWithBody — the request
+	// type appears once (in the handler signature) and is auto-parsed
+	// + validated before the handler runs. The body schema is also
+	// auto-attached for OpenAPI. Other handlers use the symmetric
+	// fibermap.RegisterHandler — same shape, just no typed body.
 	taskH := tasks.New(store, valid)
-	eng.RegisterHandler("tasks.list", taskH.List,
+	fibermap.RegisterHandler(eng, "tasks.list", taskH.List,
 		fibermap.WithResponse(fiber.StatusOK, fiber.Map{"tasks": []tasks.Task{}}))
-	eng.RegisterHandler("tasks.get", taskH.Get,
+	fibermap.RegisterHandler(eng, "tasks.get", taskH.Get,
 		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
-	eng.RegisterHandler("tasks.create", taskH.Create,
-		fibermap.WithBody(tasks.CreateReq{}),
+	fibermap.RegisterHandlerWithBody(eng, "tasks.create", taskH.Create,
 		fibermap.WithResponse(fiber.StatusCreated, tasks.Task{}))
-	eng.RegisterHandler("tasks.update", taskH.Update,
-		fibermap.WithBody(tasks.UpdateReq{}),
+	fibermap.RegisterHandlerWithBody(eng, "tasks.update", taskH.Update,
 		fibermap.WithResponse(fiber.StatusOK, tasks.Task{}))
-	eng.RegisterHandler("tasks.delete", taskH.Delete,
+	fibermap.RegisterHandler(eng, "tasks.delete", taskH.Delete,
 		fibermap.WithResponse(fiber.StatusNoContent, nil))
-	eng.RegisterHandler("admin.routes", admin.Routes(eng))
+	fibermap.RegisterHandler(eng, "admin.routes", admin.Routes(eng))
 
 	// OpenAPI 3.0 spec — generated from Engine.Routes() + the handler
 	// schemas attached above. The generator reads from the engine,

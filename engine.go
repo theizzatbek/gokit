@@ -11,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cache"
 	"github.com/gofiber/fiber/v2/middleware/timeout"
+	"github.com/theizzatbek/fibermap/bind"
 )
 
 type (
@@ -60,6 +61,13 @@ type programmaticRoute[T any] struct {
 
 // Engine is the build-once-mount-once configurator. It is parameterized by T,
 // the per-request payload type produced by ContextBuilder.
+// BindErrorFunc renders a bind (parse / validate) error as an HTTP
+// response. Returned from [Engine.SetBindErrorHandler]; the default
+// emits a 400 with `{"error": err.Error()}`. Inspect specific
+// failure modes via errors.Is against bind.ErrParse* / ErrValidate*
+// sentinels.
+type BindErrorFunc[T any] func(c *Context[T], err error) error
+
 type Engine[T any] struct {
 	builder     ContextBuilder[T]
 	handlers    map[string]HandlerFunc[T]
@@ -67,6 +75,9 @@ type Engine[T any] struct {
 	middlewares map[string]MiddlewareFunc[T]
 	factories   map[string]MiddlewareFactoryFunc[T]
 	ctxError    ContextErrorFunc
+
+	validator bind.Validator
+	bindError BindErrorFunc[T]
 
 	cacheDefaults CacheDefaults[T]
 
@@ -95,7 +106,16 @@ func New[T any]() *Engine[T] {
 		middlewares: map[string]MiddlewareFunc[T]{},
 		factories:   map[string]MiddlewareFactoryFunc[T]{},
 		ctxError:    defaultContextError,
+		bindError:   defaultBindError[T],
 	}
+}
+
+// defaultBindError is the out-of-the-box rendering for parse /
+// validate failures inside [RegisterBody] and friends: 400 with a
+// JSON `{"error": "..."}` body containing the wrapped error
+// message. Override via [Engine.SetBindErrorHandler].
+func defaultBindError[T any](c *Context[T], err error) error {
+	return c.Status(fiber.StatusBadRequest).JSON(map[string]string{"error": err.Error()})
 }
 
 // SetContextBuilder installs the function that builds the per-request Data.
@@ -171,6 +191,30 @@ func (e *Engine[T]) Add(method, path, name string, h HandlerFunc[T], opts ...Add
 // SetContextErrorHandler overrides the default response when ContextBuilder
 // returns an error.
 func (e *Engine[T]) SetContextErrorHandler(h ContextErrorFunc) { e.ctxError = h }
+
+// SetValidator installs the validator used by [RegisterBody],
+// [RegisterQuery], [RegisterParams], and [RegisterHeaders]. nil
+// disables validation (the parse step still runs; the validate
+// step is skipped — same behaviour as bind.Body with a nil
+// validator).
+//
+//	eng.SetValidator(validator.New(validator.WithRequiredStructEnabled()))
+func (e *Engine[T]) SetValidator(v bind.Validator) { e.validator = v }
+
+// SetBindErrorHandler customises how parse / validate failures
+// inside [RegisterBody] / [RegisterQuery] / [RegisterParams] /
+// [RegisterHeaders] are turned into responses. Default returns
+// 400 with `{"error": err.Error()}`.
+//
+// Inspect the error with errors.Is against bind.ErrParseBody /
+// bind.ErrValidateBody (and the Query/Params/Header variants) to
+// branch on parse vs validate.
+func (e *Engine[T]) SetBindErrorHandler(fn BindErrorFunc[T]) {
+	if fn == nil {
+		fn = defaultBindError[T]
+	}
+	e.bindError = fn
+}
 
 // SetCacheDefaults installs engine-wide defaults for routes that
 // declare `cache:` in YAML. Call once before Mount; later calls
