@@ -27,6 +27,7 @@ type rawRoute struct {
 	MiddlewareSet string   `yaml:"middleware_set"`
 	Name          string   `yaml:"name"`
 	Tags          []string `yaml:"tags"`
+	Summary       string   `yaml:"summary"`
 	Description   string   `yaml:"description"`
 	// Timeout is a Go duration string ("5s", "300ms"). Empty means no
 	// per-route timeout. Parsed at LoadFile/LoadBytes time;
@@ -92,6 +93,7 @@ type RouteInfo struct {
 	Path        string          `json:"path"`
 	Handler     string          `json:"handler"`
 	Name        string          `json:"name,omitempty"`
+	Summary     string          `json:"summary,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Middleware  []MiddlewareRef `json:"middleware,omitempty"`
 	Tags        []string        `json:"tags,omitempty"`

@@ -95,6 +95,10 @@
           "type": "string",
           "description": "Free-form identifier. Not interpreted by fibermap; surfaced via Engine.Routes() and Walk() for OpenAPI/docs tooling."
         },
+        "summary": {
+          "type": "string",
+          "description": "Short one-line title. Surfaced via Routes()/Walk() — OpenAPI generation maps it to operation.summary."
+        },
         "tags": {
           "type": "array",
           "items": { "type": "string" },

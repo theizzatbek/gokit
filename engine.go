@@ -322,12 +322,12 @@ func (e *Engine[T]) Mount(router fiber.Router) error {
 // plannedRoute is the fully resolved description of one route ready to be
 // installed on Fiber.
 type plannedRoute struct {
-	Method, Path, Handler, Name, Description string
-	Chain                                    []mwRef
-	Tags                                     []string
-	Timeout                                  time.Duration
-	TimeoutSpec                              string
-	Cache                                    *plannedCache
+	Method, Path, Handler, Name, Summary, Description string
+	Chain                                             []mwRef
+	Tags                                              []string
+	Timeout                                           time.Duration
+	TimeoutSpec                                       string
+	Cache                                             *plannedCache
 }
 
 // plannedCache is the validated, parsed form of a route's cache YAML.
@@ -468,6 +468,7 @@ func (e *Engine[T]) buildPlan() ([]plannedRoute, []error) {
 					Path:        routePath,
 					Handler:     r.Handler,
 					Name:        r.Name,
+					Summary:     r.Summary,
 					Description: r.Description,
 					Chain:       chain,
 					Tags:        r.Tags,
@@ -585,6 +586,7 @@ func (e *Engine[T]) installPlan(router fiber.Router, plan []plannedRoute) error 
 			Path:        r.Path,
 			Handler:     r.Handler,
 			Name:        r.Name,
+			Summary:     r.Summary,
 			Description: r.Description,
 			Middleware:  toPublicChain(r.Chain),
 			Tags:        r.Tags,

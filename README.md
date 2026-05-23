@@ -367,14 +367,16 @@ Route:
 | `handler`        | string      | Required. Name registered via `RegisterHandler`.      |
 | `middleware`     | `[]MWRef`   | Appended after ancestor chain. Plain or parameterized. |
 | `middleware_set` | string      |                                                       |
-| `name`           | string      | Free-form identifier; surfaced via `Routes()`.        |
-| `tags`           | `[]string`  | Free-form; surfaced via `Routes()`.                   |
-| `description`    | string      | Free-form; surfaced via `Routes()`.                   |
+| `name`           | string      | Free-form identifier; surfaced via `Routes()`. OpenAPI: `operationId`. |
+| `summary`        | string      | Short one-line title; surfaced via `Routes()`. OpenAPI: `operation.summary`. |
+| `description`    | string      | Free-form longer description; surfaced via `Routes()`. OpenAPI: `operation.description`. |
+| `tags`           | `[]string`  | Free-form; surfaced via `Routes()`. OpenAPI: `operation.tags`. |
 | `timeout`        | duration    | Go duration string (`"5s"`, `"300ms"`). When set, the route is wrapped with Fiber's `timeout.NewWithContext`: the handler's `UserContext()` deadline is set to this duration; on deadline a `context.DeadlineExceeded` returned from the handler surfaces as **408 Request Timeout**. Empty (default) means no per-route timeout. |
 | `cache`          | duration / map | Enables built-in response caching. See "Response cache" below. |
 
-`name`, `tags`, and `description` are not interpreted — they exist for
-introspection tooling (see below).
+`name`, `summary`, `description`, and `tags` are not interpreted by
+the engine — they exist for introspection tooling and OpenAPI
+generation.
 
 ## Middleware sets
 
@@ -593,6 +595,93 @@ zero / negative `ttl` or empty `vary_header` entries fail at
 
 The cache config is surfaced on `RouteInfo.Cache` for introspection
 (JSON-friendly).
+
+## OpenAPI 3.0 spec generation
+
+Subpackage `fibermap/openapi` builds an OpenAPI 3.0 document from the
+engine's introspection API — paths, methods, tags, descriptions,
+and `operationId`s are pulled straight from `routes.yaml`. Per-handler
+request/response types are attached via a fluent builder so the spec
+becomes a single source of truth for both routing AND API
+documentation:
+
+```yaml
+# routes.yaml — text-side metadata lives here
+- method: POST
+  path: /tasks
+  handler: tasks.create
+  name: tasks.create
+  summary: Create a task
+  description: Create a task for the caller
+  tags: [tasks, write]
+```
+
+```go
+// Go — typed schemas live here
+import "github.com/theizzatbek/fibermap/openapi"
+
+gen := openapi.NewGenerator(eng,
+    openapi.WithInfo(openapi.Info{Title: "Tasks API", Version: "1.0.0"}),
+    openapi.WithServer("https://api.example.com", "production"),
+    openapi.WithSecurity("BearerAuth", openapi.HTTPBearer("JWT")),
+    openapi.MapMiddlewareToSecurity("auth", "BearerAuth"),
+)
+
+gen.OnHandler("tasks.create").
+    Body(CreateTaskReq{}).
+    Response(201, Task{}).
+    Response(400, ErrorResponse{})
+
+spec, err := gen.Generate()         // []byte JSON
+```
+
+What's automatic — pulled straight from the route's YAML:
+
+- `Path` translated from Fiber syntax to OpenAPI:
+  `/users/:id/posts/:postId` → `/users/{id}/posts/{postId}` with the
+  path parameters declared and marked `required: true`.
+- `Name` → `operationId`.
+- `Summary`, `Description`, `Tags` → operation metadata.
+- Routes whose chain includes a middleware mapped via
+  `MapMiddlewareToSecurity` get `security: [{name: []}]` attached.
+
+What's opt-in via the builder:
+
+- Request body schema — `OnHandler("name").Body(MyReq{})`.
+- Query / header schemas — `.Query(...)` / `.Headers(...)`.
+- Response schemas per status — `.Response(201, Task{})`. Pass `nil`
+  to advertise an empty body (e.g. `Response(204, nil)`).
+
+Text fields (`summary`, `description`, `tags`) are intentionally NOT
+in the builder — they live in `routes.yaml`, alongside the route they
+describe, so the YAML stays the single source of truth.
+
+Schema reflection uses
+[`invopop/jsonschema`](https://github.com/invopop/jsonschema) — Go
+struct fields' `json:`, `validate:`, and `description` tags are
+honoured. Reflected types are hoisted into
+`components.schemas` and referenced via `$ref`.
+
+To serve the spec at `/openapi.json`, combine with `Engine.Add`:
+
+```go
+var (
+    once     sync.Once
+    cached   []byte
+    cacheErr error
+)
+eng.Add("GET", "/openapi.json", "openapi.spec",
+    func(c *fibermap.Context[AppCtx]) error {
+        once.Do(func() { cached, cacheErr = gen.Generate() })
+        if cacheErr != nil { /* ... */ }
+        c.Set("Content-Type", "application/json")
+        return c.Send(cached)
+    },
+)
+```
+
+See [`examples/tasks/main.go`](./examples/tasks/main.go) for the full
+wire-up.
 
 ## Ready-made middleware factories
 

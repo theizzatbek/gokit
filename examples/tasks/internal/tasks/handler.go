@@ -44,16 +44,17 @@ func (h *Handler) Get(c *appctx.Ctx) error {
 	return c.JSON(t)
 }
 
-// createReq is the POST /tasks body. validate: tags do the work via
+// CreateReq is the POST /tasks body. validate: tags do the work via
 // go-playground/validator; bind.Body[T] is the one-liner that parses
-// and validates.
-type createReq struct {
+// and validates. Exported so external code (e.g. main.go's OpenAPI
+// generator wiring) can reference the type.
+type CreateReq struct {
 	Title string `json:"title" validate:"required,min=1,max=200"`
 }
 
 // Create handles POST /tasks.
 func (h *Handler) Create(c *appctx.Ctx) error {
-	req, err := bind.Body[createReq](c.Ctx, h.Validator)
+	req, err := bind.Body[CreateReq](c.Ctx, h.Validator)
 	if err != nil {
 		return badBody(c, err)
 	}
@@ -64,18 +65,18 @@ func (h *Handler) Create(c *appctx.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(t)
 }
 
-// updateReq is the PATCH /tasks/:id body. Pointer fields let us
+// UpdateReq is the PATCH /tasks/:id body. Pointer fields let us
 // distinguish "not provided" from "set to zero value" — important
 // because PATCH semantics are "update only the fields present".
 // `omitempty` on validate skips the rule when the pointer is nil.
-type updateReq struct {
+type UpdateReq struct {
 	Title *string `json:"title,omitempty" validate:"omitempty,min=1,max=200"`
 	Done  *bool   `json:"done,omitempty"`
 }
 
 // Update handles PATCH /tasks/:id.
 func (h *Handler) Update(c *appctx.Ctx) error {
-	req, err := bind.Body[updateReq](c.Ctx, h.Validator)
+	req, err := bind.Body[UpdateReq](c.Ctx, h.Validator)
 	if err != nil {
 		return badBody(c, err)
 	}

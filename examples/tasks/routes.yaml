@@ -15,6 +15,7 @@ groups:
             path: ""
             handler: tasks.list
             tags: [tasks, read]
+            summary: List tasks
             description: List the caller's tasks
             # Built-in response cache. Scoped per-user via the
             # KeyBy(c.Data.UserID) wired up in main.go via
@@ -32,11 +33,13 @@ groups:
             path: ""
             handler: tasks.create
             tags: [tasks, write]
+            summary: Create a task
             description: Create a task for the caller
           - method: GET
             path: /:id
             handler: tasks.get
             tags: [tasks, read]
+            summary: Get one task
             description: Get one of the caller's tasks
             # Scalar form: just TTL, no extra knobs.
             cache: 10s
@@ -44,11 +47,13 @@ groups:
             path: /:id
             handler: tasks.update
             tags: [tasks, write]
+            summary: Update a task (partial)
             description: Update fields of an existing task
           - method: DELETE
             path: /:id
             handler: tasks.delete
             tags: [tasks, admin]
+            summary: Delete a task (admin only)
             description: Delete a task — admin only
             middleware:
               - require_role: [admin]
