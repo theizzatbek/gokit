@@ -82,6 +82,11 @@ type MiddlewareRef struct {
 // Timeout is the verbatim YAML duration string ("5s") — empty when no
 // per-route timeout was declared. Kept as a string so JSON
 // admin-endpoint output stays human-readable.
+//
+// Source identifies where the route came from: "yaml" for routes
+// declared in routes.yaml, "programmatic" for routes added via
+// Engine.Add. Useful for ops tools that want to distinguish
+// declarative from imperative routes.
 type RouteInfo struct {
 	Method      string          `json:"method"`
 	Path        string          `json:"path"`
@@ -92,7 +97,14 @@ type RouteInfo struct {
 	Tags        []string        `json:"tags,omitempty"`
 	Timeout     string          `json:"timeout,omitempty"`
 	Cache       *CacheInfo      `json:"cache,omitempty"`
+	Source      string          `json:"source,omitempty"`
 }
+
+// Route source constants used in RouteInfo.Source.
+const (
+	SourceYAML         = "yaml"
+	SourceProgrammatic = "programmatic"
+)
 
 // CacheInfo is the public introspection form of a route's cache
 // configuration. nil → no cache.

@@ -983,3 +983,127 @@ groups:
 		t.Errorf("vary_header = %v", r.Cache.VaryHeader)
 	}
 }
+
+func TestAdd_RoutesServeWithTypedContext(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) {
+		return engCtx{UserID: "u-123", Role: "admin"}, nil
+	})
+	e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error { return c.SendString("pong") })
+
+	// Programmatic — handler receives the typed Context[T].
+	e.Add("GET", "/debug/whoami", "debug.whoami", func(c *Context[engCtx]) error {
+		return c.SendString(c.Data.UserID + "/" + c.Data.Role)
+	}, AddOpts{
+		Description: "Echo the current caller's identity",
+		Tags:        []string{"debug", "ops"},
+	})
+
+	if err := e.LoadFile(filepath.Join("testdata", "basic.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	app := fiber.New()
+	if err := e.Mount(app); err != nil {
+		t.Fatal(err)
+	}
+
+	// YAML route still works.
+	if resp, _ := app.Test(httptest.NewRequest("GET", "/v1/ping", nil)); resp.StatusCode != 200 {
+		t.Errorf("yaml /v1/ping status = %d", resp.StatusCode)
+	}
+
+	// Programmatic route works AND its handler sees Context[T].Data.
+	resp, _ := app.Test(httptest.NewRequest("GET", "/debug/whoami", nil))
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || string(body) != "u-123/admin" {
+		t.Errorf("programmatic status=%d body=%q", resp.StatusCode, string(body))
+	}
+}
+
+func TestAdd_ShowsInRoutesWithSource(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error { return c.SendString("pong") })
+	e.Add("GET", "/dbg", "dbg.foo", func(c *Context[engCtx]) error { return c.SendString("x") },
+		AddOpts{Tags: []string{"debug"}})
+
+	if err := e.LoadFile(filepath.Join("testdata", "basic.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Fatal(err)
+	}
+
+	yamlSeen, progSeen := false, false
+	for _, r := range e.Routes() {
+		switch r.Source {
+		case SourceYAML:
+			yamlSeen = true
+		case SourceProgrammatic:
+			progSeen = true
+			if r.Path != "/dbg" || r.Handler != "dbg.foo" {
+				t.Errorf("programmatic info wrong: %+v", r)
+			}
+			if len(r.Tags) != 1 || r.Tags[0] != "debug" {
+				t.Errorf("programmatic tags = %v", r.Tags)
+			}
+		default:
+			t.Errorf("unexpected source %q on %+v", r.Source, r)
+		}
+	}
+	if !yamlSeen {
+		t.Error("no yaml routes saw Source=yaml")
+	}
+	if !progSeen {
+		t.Error("programmatic route missing from Routes()")
+	}
+}
+
+func TestAdd_PanicsAfterMount(t *testing.T) {
+	e := newTestEngine()
+	e.SetContextBuilder(func(c *fiber.Ctx) (engCtx, error) { return engCtx{}, nil })
+	e.RegisterHandler("ping.handle", func(c *Context[engCtx]) error { return nil })
+	if err := e.LoadFile(filepath.Join("testdata", "basic.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Mount(fiber.New()); err != nil {
+		t.Fatal(err)
+	}
+
+	fe := expectRegisterPanic(t, func() {
+		e.Add("GET", "/late", "late", func(c *Context[engCtx]) error { return nil })
+	})
+	if fe.Code != CodeRegisterAfterMount {
+		t.Errorf("code = %q, want CodeRegisterAfterMount", fe.Code)
+	}
+}
+
+func TestAdd_PanicsOnInvalidMethod(t *testing.T) {
+	e := newTestEngine()
+	fe := expectRegisterPanic(t, func() {
+		e.Add("FOO", "/x", "x", func(c *Context[engCtx]) error { return nil })
+	})
+	if fe.Code != CodeInvalidHTTPMethod {
+		t.Errorf("code = %q", fe.Code)
+	}
+}
+
+func TestAdd_PanicsOnMissingFields(t *testing.T) {
+	e := newTestEngine()
+	cases := []struct {
+		label string
+		fn    func()
+	}{
+		{"empty name", func() { e.Add("GET", "/x", "", func(c *Context[engCtx]) error { return nil }) }},
+		{"empty path", func() { e.Add("GET", "", "x", func(c *Context[engCtx]) error { return nil }) }},
+		{"nil handler", func() { e.Add("GET", "/x", "x", nil) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			fe := expectRegisterPanic(t, tc.fn)
+			if fe.Code != CodeMissingField {
+				t.Errorf("code = %q, want CodeMissingField", fe.Code)
+			}
+		})
+	}
+}

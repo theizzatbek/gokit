@@ -11,15 +11,18 @@ import (
 	"github.com/theizzatbek/fibermap/bind"
 )
 
-// fakeCtx is a BodyParser/QueryParser/ParamsParser that returns canned data.
+// fakeCtx is a BodyParser/QueryParser/ParamsParser/ReqHeaderParser
+// that returns canned data.
 type fakeCtx struct {
 	body []byte
 	err  error
 
-	query  url.Values
-	qerr   error
-	params map[string]string
-	perr   error
+	query   url.Values
+	qerr    error
+	params  map[string]string
+	perr    error
+	headers map[string]string
+	herr    error
 }
 
 func (f fakeCtx) BodyParser(out any) error {
@@ -208,5 +211,65 @@ func TestParams_NilValidator_Skips(t *testing.T) {
 	}
 	if p.ID != "abc" {
 		t.Errorf("ID = %q, want abc", p.ID)
+	}
+}
+
+// fakeCtx already implements BodyParser/QueryParser/ParamsParser via
+// generic decodeKV. Add a ReqHeaderParser by reusing the same path.
+func (f fakeCtx) ReqHeaderParser(out any) error {
+	if f.herr != nil {
+		return f.herr
+	}
+	values := url.Values{}
+	for k, v := range f.headers {
+		values.Set(k, v)
+	}
+	return decodeKV(values, out, "reqHeader")
+}
+
+type authHeader struct {
+	Authorization string `reqHeader:"Authorization"`
+	TraceID       string `reqHeader:"X-Trace-Id"`
+}
+
+func TestHeader_Happy(t *testing.T) {
+	c := fakeCtx{headers: map[string]string{
+		"Authorization": "Bearer abc",
+		"X-Trace-Id":    "trace-123",
+	}}
+	h, err := bind.Header[authHeader](c, fakeValidator{})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if h.Authorization != "Bearer abc" || h.TraceID != "trace-123" {
+		t.Errorf("got %+v", h)
+	}
+}
+
+func TestHeader_ParseError(t *testing.T) {
+	c := fakeCtx{herr: errors.New("bad header")}
+	_, err := bind.Header[authHeader](c, fakeValidator{})
+	if !errors.Is(err, bind.ErrParseHeader) {
+		t.Errorf("err = %v, want wrap of ErrParseHeader", err)
+	}
+}
+
+func TestHeader_ValidationError(t *testing.T) {
+	c := fakeCtx{headers: map[string]string{"Authorization": ""}}
+	v := fakeValidator{err: errors.New("Authorization required")}
+	_, err := bind.Header[authHeader](c, v)
+	if !errors.Is(err, bind.ErrValidateHeader) {
+		t.Errorf("err = %v, want wrap of ErrValidateHeader", err)
+	}
+}
+
+func TestHeader_NilValidator_Skips(t *testing.T) {
+	c := fakeCtx{headers: map[string]string{"Authorization": "anything"}}
+	h, err := bind.Header[authHeader](c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Authorization != "anything" {
+		t.Errorf("Authorization = %q", h.Authorization)
 	}
 }

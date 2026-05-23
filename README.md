@@ -77,7 +77,8 @@ Two runnable examples — pick the one matching how you intend to use the lib:
 ## Lifecycle
 
 ```
-New → SetContextBuilder
+New (or Default for the ops bundle)
+    → SetContextBuilder
     → RegisterHandler / RegisterMiddleware / RegisterMiddlewareFactory
     → LoadFile / LoadBytes / LoadFS       (optional with Run — see below)
     → Validate                            (optional dry-run, no router needed)
@@ -198,6 +199,57 @@ What you get:
   and `fibermap_http_requests_in_flight` gauge. The `route` label is
   the Fiber route template (`/v1/tasks/:id`) — bounded cardinality,
   not per-URL.
+
+### `fibermap.Default[T]()` — the bundle in one constructor
+
+If you just want a working service with `Recover + RequestID +
+RequestLogger + HealthCheck + Metrics` enabled — `Default[T]()`
+returns an `Engine` pre-wired with all of them, so `Run()` ships them
+without any per-option boilerplate:
+
+```go
+eng := fibermap.Default[AppCtx]()
+eng.SetContextBuilder(...)
+eng.RegisterHandler(...)
+eng.RegisterMiddlewareFactory(...)
+eng.Run(fibermap.WithUse(auth.Bearer()))   // bearer appended after the default RequestID
+```
+
+Defaults are applied BEFORE the options you pass to `Run`, so any
+explicit option overrides the default — `Run(WithMetrics(""))`
+disables metrics, `Run(WithHealthCheck("/_health"))` moves the
+endpoint. Use `New[T]()` instead when you want zero defaults.
+
+### Programmatic routes via `Engine.Add`
+
+Use `Engine.Add(method, path, name, handler, [AddOpts{...}])` for
+routes that don't fit the declarative YAML model — debug/pprof,
+dynamic admin handlers, embedded UIs:
+
+```go
+eng.Add("GET", "/debug/whoami", "debug.whoami",
+    func(c *fibermap.Context[AppCtx]) error {
+        return c.JSON(fiber.Map{"user_id": c.Data.UserID, "role": c.Data.Role})
+    },
+    fibermap.AddOpts{
+        Description: "Echo the current caller's identity",
+        Tags:        []string{"debug", "ops"},
+    },
+)
+```
+
+Programmatic routes go through the same per-request `Context[T]`
+wrapper as YAML routes. They show up in `Engine.Routes()` with
+`Source = SourceProgrammatic` so introspection tools, `fibermaptest`,
+and OpenAPI generation see them.
+
+Add does not accept middleware / cache / timeout — those features
+are intentionally YAML-only to keep the declarative surface
+authoritative. If you need middleware on a programmatic route, mount
+it directly on the `*fiber.App` via `WithConfigureApp`.
+
+Add panics (programmer error) on: invalid HTTP method, empty
+name/path, nil handler, or being called after `Mount`.
 
 If you need anything Run can't express (multiple servers, custom
 signal sets, hot-reload), stick with the manual `LoadFile → Mount →
@@ -465,6 +517,19 @@ with `errors.Is`:
 | `bind.Body[T]`   | `bind.ErrParseBody`   | `bind.ErrValidateBody`   |
 | `bind.Query[T]`  | `bind.ErrParseQuery`  | `bind.ErrValidateQuery`  |
 | `bind.Params[T]` | `bind.ErrParseParams` | `bind.ErrValidateParams` |
+| `bind.Header[T]` | `bind.ErrParseHeader` | `bind.ErrValidateHeader` |
+
+For headers, use the `reqHeader:` struct tag (the convention Fiber's
+`ReqHeaderParser` expects):
+
+```go
+type AuthHeader struct {
+    Authorization string `reqHeader:"Authorization" validate:"required"`
+    TraceID       string `reqHeader:"X-Trace-Id"`
+}
+
+h, err := bind.Header[AuthHeader](c.Ctx, v)
+```
 
 ## Response cache
 
