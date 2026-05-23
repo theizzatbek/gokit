@@ -24,6 +24,11 @@
 //	curl -H "Authorization: Bearer alice-token" http://localhost:3000/api/v1/tasks   # miss
 //	curl -H "Authorization: Bearer alice-token" http://localhost:3000/api/v1/tasks   # cache hit
 //	curl -H "Authorization: Bearer bob-token"   http://localhost:3000/api/v1/tasks   # separate KeyBy bucket → miss
+//
+//	# Run wires the production-ops bundle: panic recovery, k8s
+//	# health check, structured access log, Prometheus metrics.
+//	curl http://localhost:3000/healthz       # 200 ok, no auth needed
+//	curl http://localhost:3000/metrics       # Prometheus text format
 package main
 
 import (
@@ -94,11 +99,16 @@ func main() {
 	eng.RegisterHandler("tasks.delete", taskH.Delete)
 	eng.RegisterHandler("admin.routes", admin.Routes(eng))
 
-	// One call wraps fiber.New (with custom config), app.Use for the
-	// two Fiber-level middlewares (order matters: request_id then
-	// auth — both run BEFORE fibermap's ContextBuilder), LoadFS from
-	// the embedded routes.yaml, Mount, Listen on :3000, and graceful
-	// shutdown on SIGINT/SIGTERM with a 10s drain (the default).
+	// One Run call covers everything a production service typically
+	// needs:
+	//   - fiber.New with custom ErrorHandler
+	//   - Recover catches handler panics (logged with stack, returns 500)
+	//   - /healthz unauthenticated (k8s livenessProbe)
+	//   - structured access log (skip the noisy probe + metrics paths)
+	//   - Prometheus /metrics
+	//   - RequestID + Bearer auth installed BEFORE the ContextBuilder
+	//   - embedded routes.yaml, Mount, Listen on :3000 (or $PORT)
+	//   - SIGINT/SIGTERM graceful shutdown with a 10s drain (the default)
 	logger.Info("listening", "addr", ":3000")
 	err := eng.Run(
 		fibermap.WithFiberConfig(fiber.Config{
@@ -109,6 +119,10 @@ func main() {
 					JSON(fiber.Map{"error": "internal server error"})
 			},
 		}),
+		fibermap.WithRecover(logger),
+		fibermap.WithHealthCheck("/healthz"),
+		fibermap.WithRequestLogger(logger, "/healthz", "/metrics"),
+		fibermap.WithMetrics("/metrics"),
 		fibermap.WithUse(fibermap.RequestID(), auth.Bearer()),
 		fibermap.WithRoutesFS(routesFS),
 	)

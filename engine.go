@@ -426,7 +426,12 @@ func joinPath(prefix, path string) string {
 	return prefix + path
 }
 
-const ctxKey = "__fibermap_ctx__"
+// ctxKey is a unique sentinel used as the Fiber Locals key under
+// which the per-request *Context[T] is stashed. A pointer is cheaper
+// to compare than a string when Fiber walks the Locals slice on
+// every Locals(key) call, and it eliminates any chance of a user
+// accidentally setting a colliding string key.
+var ctxKey = new(byte)
 
 // ContextFrom retrieves the per-request *Context[T] that fibermap's
 // root middleware stashed on the given *fiber.Ctx. Returns
