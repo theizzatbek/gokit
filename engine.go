@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"iter"
 	"strings"
 	"time"
 
@@ -79,6 +80,7 @@ type Engine[T any] struct {
 	defaultRunOpts []RunOption
 
 	routes  []RouteInfo
+	lookup  map[string]int // method+" "+path → index into routes; built at Mount.
 	mounted bool
 }
 
@@ -608,6 +610,15 @@ func (e *Engine[T]) installPlan(router fiber.Router, plan []plannedRoute) error 
 			Source:      SourceProgrammatic,
 		})
 	}
+
+	// Build the (method, path) → index map for O(1) Lookup. The
+	// routes slice stays the source of truth for Walk / Routes
+	// (insertion order matters there); the map is just an
+	// indexed-access side-channel.
+	e.lookup = make(map[string]int, len(e.routes))
+	for i, r := range e.routes {
+		e.lookup[r.Method+" "+r.Path] = i
+	}
 	return nil
 }
 
@@ -709,6 +720,32 @@ func (e *Engine[T]) Routes() []RouteInfo {
 	return out
 }
 
+// All returns a range-over-func iterator over every route registered
+// during Mount, in Mount order. Each yielded RouteInfo is a defensive
+// copy — safe to mutate without affecting engine state. Stop the
+// iteration by returning from your loop body normally (break/return):
+//
+//	for r := range eng.All() {
+//	    if strings.HasPrefix(r.Path, "/internal/") {
+//	        continue
+//	    }
+//	    fmt.Println(r.Method, r.Path)
+//	}
+//
+// Prefer All over Walk when targeting Go 1.23+ — it is idiomatic
+// (no ErrStopWalk sentinel needed) and supports break / continue
+// natively. Walk stays for callers that need an error-propagating
+// callback shape.
+func (e *Engine[T]) All() iter.Seq[RouteInfo] {
+	return func(yield func(RouteInfo) bool) {
+		for _, r := range e.routes {
+			if !yield(copyRouteInfo(r)) {
+				return
+			}
+		}
+	}
+}
+
 // Walk invokes fn for every route registered during Mount, in Mount
 // order. Returning ErrStopWalk from fn ends the walk without propagating
 // an error; any other non-nil error from fn is returned to the caller.
@@ -717,6 +754,7 @@ func (e *Engine[T]) Routes() []RouteInfo {
 // Walk is the building block for introspection consumers (OpenAPI
 // generators, route-table CLIs, test helpers); use it instead of
 // iterating Routes() when you might want to early-stop or filter.
+// On Go 1.23+, prefer All() for idiomatic range-over-func.
 func (e *Engine[T]) Walk(fn func(r RouteInfo) error) error {
 	for _, r := range e.routes {
 		if err := fn(copyRouteInfo(r)); err != nil {
@@ -734,11 +772,13 @@ func (e *Engine[T]) Walk(fn func(r RouteInfo) error) error {
 // exactly (case-sensitive); path matches the resolved path (including
 // any inherited prefix) exactly. The returned RouteInfo is a defensive
 // copy.
+//
+// O(1) — the (method, path) → index map is built at Mount and consulted
+// for every Lookup call. Walk and Routes still iterate the underlying
+// slice in insertion order.
 func (e *Engine[T]) Lookup(method, path string) (RouteInfo, bool) {
-	for _, r := range e.routes {
-		if r.Method == method && r.Path == path {
-			return copyRouteInfo(r), true
-		}
+	if i, ok := e.lookup[method+" "+path]; ok {
+		return copyRouteInfo(e.routes[i]), true
 	}
 	return RouteInfo{}, false
 }
