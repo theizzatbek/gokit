@@ -10,6 +10,32 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 _Nothing yet._
 
+## [v0.8.1] - 2026-05-23
+
+Documentation fix for the example. No library API changes — only
+`examples/tasks` got typed response wrappers so the generated
+OpenAPI spec advertises proper schemas.
+
+### Fixed
+- `examples/tasks` was using `fiber.Map{...}` for the list-response
+  and error-response shapes in `WithResponse` / `WithDefaultResponse`
+  calls. `fiber.Map` is `map[string]any`, so invopop/jsonschema
+  produced an opaque `{type: object}` schema with no field info —
+  Swagger UI / Scalar showed empty bodies. Replaced with typed
+  structs:
+  - new `tasks.ListResponse{Tasks []Task}` for `GET /tasks`
+  - new `tasks.ErrorResponse{Error string}` for every 4xx/5xx
+  - `Handler.List` returns `ListResponse{...}` instead of
+    `fiber.Map{"tasks": ...}`
+  - the internal `notFound` / `badRequest` helpers and the 500
+    fallback all now emit `ErrorResponse`
+  - `main.go` uses `tasks.ListResponse{}` and
+    `tasks.ErrorResponse{}` in the generator options
+  Pattern guidance for users: any type you advertise via
+  `WithResponse` / `WithDefaultResponse` (or `WithBody` /
+  `WithQuery` etc) should be a concrete struct, not an
+  un-typed map.
+
 ## [v0.8.0] - 2026-05-23
 
 Removes the last bit of binding boilerplate. Handlers can now take a
