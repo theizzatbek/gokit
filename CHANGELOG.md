@@ -8,6 +8,18 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [v0.2.0] - 2026-05-23
+
+A "less boilerplate" release. Headline features: a one-call `Engine.Run`
+launcher that hides `fiber.New`/`LoadFile`/`Mount`/`Listen`/graceful
+shutdown; first-class `cache:` and `timeout:` YAML fields; the
+`fibermap/factory` subpackage of ready-made role/scope guards and
+Fiber-handler adapters; query + path-param binding helpers symmetric
+to `bind.Body[T]`; and a built-in `fibermap.RequestID()` middleware
+so projects stop copying the same eight lines.
+
 ### Added
 - `fibermap.RequestID()` — built-in Fiber middleware that ensures
   every request carries `X-Request-ID`: reads incoming, generates a
