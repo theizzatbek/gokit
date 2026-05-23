@@ -10,6 +10,43 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 _Nothing yet._
 
+## [v0.6.0] - 2026-05-23
+
+OpenAPI 3.0 spec generation. Most users of declarative routers pick
+them because of this feature — fibermap now ships it as a subpackage
+that reads the engine's introspection API and emits a valid OpenAPI
+document.
+
+### Added
+- New subpackage `fibermap/openapi`:
+  - `Generator[T]` with fluent `OnHandler(name).Body / .Query /
+    .Headers / .Response / .Summary / .Description` builder.
+  - Options: `WithInfo`, `WithServer`, `WithSecurity`,
+    `MapMiddlewareToSecurity`.
+  - Security helpers: `HTTPBearer`, `HTTPBasic`, `APIKey`.
+  - `Generate() ([]byte, error)` returns JSON-formatted OpenAPI 3.0.3.
+  - Auto-translation of Fiber path params (`:id` → `{id}`),
+    auto-declaration of path parameters, security mapped from the
+    middleware chain on each route.
+  - Schema reflection via
+    [`invopop/jsonschema`](https://github.com/invopop/jsonschema) —
+    honours `json:`, `validate:`, and `description:` struct tags.
+    Referenced types live under `components.schemas` and are
+    referenced via `$ref`.
+- `examples/tasks` serves the generated spec at `/openapi.json` via
+  `Engine.Add` + `sync.Once` cache; demonstrates typed Body /
+  Response declarations for create / update / get / list / delete.
+
+### Changed
+- `examples/tasks/internal/tasks`: the per-request body types
+  `createReq` and `updateReq` are renamed to exported `CreateReq` /
+  `UpdateReq` so external code (`main.go`'s OpenAPI wiring) can
+  reference them. No behaviour change.
+
+### Deps
+- Adds `github.com/invopop/jsonschema` (and its transitive deps:
+  `pb33f/ordered-map`, `go.yaml.in/yaml/v4`) to the dependency graph.
+
 ## [v0.5.0] - 2026-05-23
 
 A "smart defaults" release: most of the v0.3 ops bundle is now ON BY
