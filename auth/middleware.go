@@ -141,3 +141,86 @@ func containsString(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// MiddlewareFactoryRegistrar is matched by *fibermap.Engine[T].RegisterMiddlewareFactory.
+// auth/ declares it locally so the package does not import fibermap (which keeps
+// the dependency direction outward and makes testing easier — see auth_test.go).
+type MiddlewareFactoryRegistrar interface {
+	RegisterMiddlewareFactory(name string, fn func([]any) (fiber.Handler, error))
+}
+
+// BearerFactory adapts Bearer to fibermap's middleware-factory signature.
+// Accepts zero or one argument:
+//
+//	[]any{}             → BearerRequired (default)
+//	[]any{"required"}   → BearerRequired
+//	[]any{"optional"}   → BearerOptional
+//
+// Any other value → *errs.Error{Code: CodeInvalidFactoryArgs}, surfaced at Mount.
+func (a *Auth[C]) BearerFactory(args []any) (fiber.Handler, error) {
+	mode := BearerRequired
+	switch len(args) {
+	case 0:
+		// keep required
+	case 1:
+		s, ok := args[0].(string)
+		if !ok {
+			return nil, xerrs.Internalf(CodeInvalidFactoryArgs, "bearer: expected string arg, got %T", args[0])
+		}
+		switch s {
+		case "required":
+			mode = BearerRequired
+		case "optional":
+			mode = BearerOptional
+		default:
+			return nil, xerrs.Internalf(CodeInvalidFactoryArgs, "bearer: unknown mode %q", s)
+		}
+	default:
+		return nil, xerrs.Internalf(CodeInvalidFactoryArgs, "bearer: expected 0 or 1 args, got %d", len(args))
+	}
+	return a.Bearer(mode), nil
+}
+
+// RequireScopeFactory adapts RequireScope to fibermap's factory signature.
+// Args are scope strings (>=1). AND semantics.
+func (a *Auth[C]) RequireScopeFactory(args []any) (fiber.Handler, error) {
+	scopes, err := stringSliceArgs("require_scope", args)
+	if err != nil {
+		return nil, err
+	}
+	return a.RequireScope(scopes...), nil
+}
+
+// RequireRoleFactory adapts RequireRole. Args are role strings (>=1).
+func (a *Auth[C]) RequireRoleFactory(args []any) (fiber.Handler, error) {
+	roles, err := stringSliceArgs("require_role", args)
+	if err != nil {
+		return nil, err
+	}
+	return a.RequireRole(roles...), nil
+}
+
+func stringSliceArgs(name string, args []any) ([]string, error) {
+	if len(args) == 0 {
+		return nil, xerrs.Internalf(CodeInvalidFactoryArgs, "%s: at least one arg required", name)
+	}
+	out := make([]string, 0, len(args))
+	for i, a := range args {
+		s, ok := a.(string)
+		if !ok {
+			return nil, xerrs.Internalf(CodeInvalidFactoryArgs, "%s: arg %d is %T, want string", name, i, a)
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// MountMiddlewareFactories registers bearer / require_scope / require_role
+// on reg in one call. Names are fixed; for custom names call the individual
+// *Factory methods directly.
+func (a *Auth[C]) MountMiddlewareFactories(reg MiddlewareFactoryRegistrar) error {
+	reg.RegisterMiddlewareFactory("bearer", a.BearerFactory)
+	reg.RegisterMiddlewareFactory("require_scope", a.RequireScopeFactory)
+	reg.RegisterMiddlewareFactory("require_role", a.RequireRoleFactory)
+	return nil
+}

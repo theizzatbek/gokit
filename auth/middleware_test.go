@@ -178,3 +178,74 @@ func TestRequireRole_MissingRoleReturns403(t *testing.T) {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
 }
+
+func TestBearerFactory_ParsesRequired(t *testing.T) {
+	a := mustNewAuth(t)
+	h, err := a.BearerFactory([]any{"required"})
+	if err != nil || h == nil {
+		t.Fatalf("BearerFactory(required) err=%v h=%v", err, h)
+	}
+}
+
+func TestBearerFactory_ParsesOptional(t *testing.T) {
+	a := mustNewAuth(t)
+	h, err := a.BearerFactory([]any{"optional"})
+	if err != nil || h == nil {
+		t.Fatalf("BearerFactory(optional) err=%v h=%v", err, h)
+	}
+}
+
+func TestBearerFactory_DefaultsToRequiredWhenEmpty(t *testing.T) {
+	a := mustNewAuth(t)
+	if _, err := a.BearerFactory(nil); err != nil {
+		t.Fatalf("BearerFactory(nil) err=%v", err)
+	}
+}
+
+func TestBearerFactory_RejectsUnknownMode(t *testing.T) {
+	a := mustNewAuth(t)
+	_, err := a.BearerFactory([]any{"sometimes"})
+	var e *errs.Error
+	if !errors.As(err, &e) || e.Code != CodeInvalidFactoryArgs {
+		t.Fatalf("err=%v, want CodeInvalidFactoryArgs", err)
+	}
+}
+
+func TestRequireScopeFactory_RejectsEmpty(t *testing.T) {
+	a := mustNewAuth(t)
+	_, err := a.RequireScopeFactory(nil)
+	var e *errs.Error
+	if !errors.As(err, &e) || e.Code != CodeInvalidFactoryArgs {
+		t.Fatalf("err=%v, want CodeInvalidFactoryArgs", err)
+	}
+}
+
+func TestRequireScopeFactory_AcceptsStrings(t *testing.T) {
+	a := mustNewAuth(t)
+	if _, err := a.RequireScopeFactory([]any{"posts:read", "posts:write"}); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+type fakeRegistrar struct{ got map[string]fiber.Handler }
+
+func (f *fakeRegistrar) RegisterMiddlewareFactory(name string, fn func([]any) (fiber.Handler, error)) {
+	if f.got == nil {
+		f.got = map[string]fiber.Handler{}
+	}
+	h, _ := fn(nil)
+	f.got[name] = h
+}
+
+func TestMountMiddlewareFactories_RegistersAllThree(t *testing.T) {
+	a := mustNewAuth(t)
+	r := &fakeRegistrar{}
+	if err := a.MountMiddlewareFactories(r); err != nil {
+		t.Fatalf("Mount: %v", err)
+	}
+	for _, name := range []string{"bearer", "require_scope", "require_role"} {
+		if _, ok := r.got[name]; !ok {
+			t.Errorf("factory %q not registered", name)
+		}
+	}
+}
