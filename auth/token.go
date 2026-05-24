@@ -3,8 +3,8 @@ package auth
 import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -113,6 +113,80 @@ func signingMaterial(s signingKey) any {
 	}
 }
 
-// Keep references to imported names that the Verify half (Task 6) will use.
-var _ = errors.Is
-var _ = fmt.Sprintf
+// verify parses tok, runs all required validations against engineConfig, and
+// returns the typed Claims[C] on success. Errors carry the appropriate Code
+// constant from errors.go so middleware can map them to a WWW-Authenticate
+// challenge.
+func (e *engine[C]) verify(tok string) (Claims[C], error) {
+	parser := jwt.NewParser(
+		jwt.WithValidMethods([]string{e.cfg.Keys.activeAlg()}),
+		jwt.WithLeeway(e.cfg.Leeway),
+		// We control iss/aud/exp checks ourselves so we can return Code-coded errors.
+		jwt.WithoutClaimsValidation(),
+	)
+
+	keyFunc := func(t *jwt.Token) (any, error) {
+		kid, _ := t.Header["kid"].(string)
+		if kid == "" {
+			return nil, xerrs.Unauthorized(CodeInvalidToken, "token missing kid header")
+		}
+		entry, ok := e.cfg.Keys.verifierFor(kid)
+		if !ok {
+			return nil, xerrs.Unauthorizedf(CodeKeyNotLoaded, "kid %q not loaded", kid)
+		}
+		if alg, _ := t.Header["alg"].(string); alg != entry.Alg {
+			return nil, xerrs.Unauthorizedf(CodeInvalidToken, "alg mismatch: header %q vs key %q", alg, entry.Alg)
+		}
+		return entry.Pub, nil
+	}
+
+	var raw jwt.MapClaims
+	_, err := parser.ParseWithClaims(tok, &raw, keyFunc)
+	if err != nil {
+		var existing *xerrs.Error
+		if errors.As(err, &existing) {
+			return Claims[C]{}, existing
+		}
+		return Claims[C]{}, xerrs.Wrap(err, xerrs.KindUnauthorized, CodeInvalidToken, "token verification failed")
+	}
+
+	// Hand the body back through Claims[C].UnmarshalJSON so generic Custom is filled.
+	body, err := jsonMarshalMap(raw)
+	if err != nil {
+		return Claims[C]{}, xerrs.Wrap(err, xerrs.KindInternal, "claims_decode_failed", "re-marshal claims")
+	}
+	var out Claims[C]
+	if err := out.UnmarshalJSON(body); err != nil {
+		return Claims[C]{}, xerrs.Wrap(err, xerrs.KindInternal, "claims_decode_failed", "decode claims")
+	}
+
+	now := e.cfg.Now()
+	if out.ExpiresAt == 0 || time.Unix(out.ExpiresAt, 0).Before(now.Add(-e.cfg.Leeway)) {
+		return Claims[C]{}, xerrs.Unauthorized(CodeExpiredToken, "token expired")
+	}
+	if out.NotBefore != 0 && time.Unix(out.NotBefore, 0).After(now.Add(e.cfg.Leeway)) {
+		return Claims[C]{}, xerrs.Unauthorized(CodeInvalidToken, "token not yet valid")
+	}
+	if e.cfg.Issuer != "" && out.Issuer != e.cfg.Issuer {
+		return Claims[C]{}, xerrs.Unauthorizedf(CodeInvalidToken, "issuer %q rejected", out.Issuer)
+	}
+	if len(e.cfg.Audience) > 0 && !intersects(out.Audience, e.cfg.Audience) {
+		return Claims[C]{}, xerrs.Unauthorized(CodeInvalidToken, "audience mismatch")
+	}
+	return out, nil
+}
+
+func intersects(a, b []string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func jsonMarshalMap(m jwt.MapClaims) ([]byte, error) {
+	return json.Marshal(map[string]any(m))
+}
