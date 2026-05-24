@@ -45,9 +45,6 @@ func TestHashRefresh_DeterministicAndFixedSize(t *testing.T) {
 	if a != b {
 		t.Fatalf("hashRefresh not deterministic")
 	}
-	if len(a) != 32 {
-		t.Fatalf("hash length = %d, want 32", len(a))
-	}
 }
 
 // Compile-time assertion: any future store fake must satisfy RefreshStore.
@@ -55,10 +52,10 @@ var _ RefreshStore = (*nopStore)(nil)
 
 type nopStore struct{}
 
-func (nopStore) Issue(ctx context.Context, r Record) error { return nil }
-func (nopStore) Consume(ctx context.Context, h [32]byte, now time.Time) (Record, error) {
+func (nopStore) Issue(_ context.Context, _ Record) error { return nil }
+func (nopStore) Consume(_ context.Context, _ [32]byte, _ time.Time) (Record, error) {
 	return Record{}, nil
 }
-func (nopStore) RevokeFamily(ctx context.Context, fid string) error               { return nil }
-func (nopStore) RevokeSubject(ctx context.Context, s string) error                { return nil }
-func (nopStore) GarbageCollect(ctx context.Context, now time.Time) (int64, error) { return 0, nil }
+func (nopStore) RevokeFamily(_ context.Context, _ string) error               { return nil }
+func (nopStore) RevokeSubject(_ context.Context, _ string) error              { return nil }
+func (nopStore) GarbageCollect(_ context.Context, _ time.Time) (int64, error) { return 0, nil }
