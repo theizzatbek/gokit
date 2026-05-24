@@ -66,3 +66,52 @@ func findDetail(ds []errs.FieldError, field string) *errs.FieldError {
 	}
 	return nil
 }
+
+// TestFromValidatorHumanMessages exercises every branch of humanMessage so the
+// per-tag wording stays covered as new rules are added.
+type humanMsgReq struct {
+	Name     string `validate:"required"`
+	Username string `validate:"max=5"`
+	Code     string `validate:"len=4"`
+	Role     string `validate:"oneof=admin user"`
+	Age      int    `validate:"gte=18"`
+}
+
+func TestFromValidatorHumanMessages(t *testing.T) {
+	v := validator.New()
+	// Provide values that violate every rule above. Name empty triggers required;
+	// Username too long triggers max; Code wrong length triggers len; Role not in
+	// list triggers oneof; Age below 18 triggers gte (the default branch).
+	err := v.Struct(humanMsgReq{
+		Name:     "",
+		Username: "too-long-username",
+		Code:     "xx",
+		Role:     "guest",
+		Age:      10,
+	})
+	if err == nil {
+		t.Fatal("expected validation errors")
+	}
+	got := errsval.FromValidator(err)
+	var e *errs.Error
+	if !errors.As(got, &e) {
+		t.Fatalf("FromValidator returned %T, want *errs.Error", got)
+	}
+	want := map[string]string{
+		"humanMsgReq.Name":     "Name is required",
+		"humanMsgReq.Username": "Username must be at most 5",
+		"humanMsgReq.Code":     "Code must be exactly 4 in length",
+		"humanMsgReq.Role":     "Role must be one of: admin user",
+		"humanMsgReq.Age":      "Age failed gte validation",
+	}
+	for field, wantMsg := range want {
+		d := findDetail(e.Details, field)
+		if d == nil {
+			t.Errorf("missing detail for %s", field)
+			continue
+		}
+		if d.Message != wantMsg {
+			t.Errorf("%s message = %q, want %q", field, d.Message, wantMsg)
+		}
+	}
+}
