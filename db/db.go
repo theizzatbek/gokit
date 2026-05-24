@@ -83,3 +83,21 @@ func (d *DB) Close() {
 // COPY, custom isolation). Errors via this path are NOT funneled through
 // mapPgxErr — the caller owns mapping.
 func (d *DB) Pool() *pgxpool.Pool { return d.pool }
+
+// Query executes sql and returns the rows. The error is funneled through mapPgxErr.
+func (d *DB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return doQuery(ctx, d.pool, sql, args...)
+}
+
+// QueryRow executes sql and returns a single row. The row's Scan error is
+// funneled through mapPgxErr.
+func (d *DB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return doQueryRow(ctx, d.pool, sql, args...)
+}
+
+// Exec executes sql. The error is funneled through mapPgxErr.
+func (d *DB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	return doExec(ctx, d.pool, sql, args...)
+}
+
+var _ Querier = (*DB)(nil)
