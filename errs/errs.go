@@ -170,3 +170,10 @@ func Timeoutf(code, format string, args ...any) *Error {
 func Internalf(code, format string, args ...any) *Error {
 	return Internal(code, fmt.Sprintf(format, args...))
 }
+
+// WithDetails appends details to e and returns e for chaining.
+// Useful for the Sprintf-flavored constructors which take no details argument.
+func (e *Error) WithDetails(details ...FieldError) *Error {
+	e.Details = append(e.Details, details...)
+	return e
+}

@@ -169,3 +169,19 @@ func TestNotFoundfFormat(t *testing.T) {
 		t.Errorf("Message = %q, want %q", e.Message, want)
 	}
 }
+
+func TestWithDetailsAccumulates(t *testing.T) {
+	d1 := errs.FieldError{Field: "a", Rule: "required", Message: "a"}
+	d2 := errs.FieldError{Field: "b", Rule: "min", Param: "1", Message: "b"}
+	e := errs.Validationf("invalid", "bad").WithDetails(d1).WithDetails(d2)
+	if len(e.Details) != 2 || e.Details[0] != d1 || e.Details[1] != d2 {
+		t.Errorf("Details = %v, want [%v %v]", e.Details, d1, d2)
+	}
+}
+
+func TestWithDetailsReturnsReceiver(t *testing.T) {
+	e := errs.Validationf("x", "y")
+	if e.WithDetails() != e {
+		t.Error("WithDetails should return the receiver for chaining")
+	}
+}
