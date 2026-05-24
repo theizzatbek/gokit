@@ -69,3 +69,12 @@ func TestHash_TwoCallsProduceDifferentSalts(t *testing.T) {
 		t.Fatalf("two hashes equal — salt not randomised")
 	}
 }
+
+func TestHash_ZeroParamsReturnsError(t *testing.T) {
+	h := NewHasher(Params{}) // zero-valued
+	_, err := h.Hash("x")
+	var e *errs.Error
+	if !errors.As(err, &e) || e.Kind != errs.KindInternal || e.Code != "invalid_params" {
+		t.Fatalf("expected invalid_params, got %v", err)
+	}
+}

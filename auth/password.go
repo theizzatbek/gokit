@@ -49,6 +49,9 @@ var DefaultHasher = NewHasher(DefaultParams())
 //
 //	$argon2id$v=19$m=<KiB>,t=<iter>,p=<para>$<b64salt>$<b64hash>
 func (h *Hasher) Hash(password string) (string, error) {
+	if err := h.validateParams(); err != nil {
+		return "", err
+	}
 	salt := make([]byte, h.params.SaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", xerrs.Wrap(err, xerrs.KindInternal, "rand_failed", "read salt")
@@ -74,6 +77,25 @@ func (h *Hasher) Verify(encoded, password string) error {
 	cmp := argon2.IDKey([]byte(password), salt, p.Iterations, p.Memory, p.Parallelism, uint32(len(key)))
 	if subtle.ConstantTimeCompare(cmp, key) != 1 {
 		return xerrs.Unauthorized(CodeInvalidCredentials, "invalid login or password")
+	}
+	return nil
+}
+
+// validateParams returns nil if the Hasher's Params are usable, otherwise a
+// typed *errs.Error{KindInternal, "invalid_params"}. Catches the common misuse
+// of building a Hasher from a partially-populated Params struct.
+func (h *Hasher) validateParams() error {
+	switch {
+	case h.params.KeyLen < 4:
+		return xerrs.Internalf("invalid_params", "Hasher.params.KeyLen=%d, must be >= 4", h.params.KeyLen)
+	case h.params.SaltLen < 8:
+		return xerrs.Internalf("invalid_params", "Hasher.params.SaltLen=%d, must be >= 8", h.params.SaltLen)
+	case h.params.Memory < 8:
+		return xerrs.Internalf("invalid_params", "Hasher.params.Memory=%d KiB, must be >= 8", h.params.Memory)
+	case h.params.Iterations < 1:
+		return xerrs.Internalf("invalid_params", "Hasher.params.Iterations=%d, must be >= 1", h.params.Iterations)
+	case h.params.Parallelism < 1:
+		return xerrs.Internalf("invalid_params", "Hasher.params.Parallelism=%d, must be >= 1", h.params.Parallelism)
 	}
 	return nil
 }
