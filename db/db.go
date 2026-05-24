@@ -66,6 +66,10 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 		return nil, errs.Wrap(err, errs.KindUnavailable, "db_unavailable", "could not open db pool")
 	}
 
+	if o.metrics != nil {
+		o.metrics.attach(pool)
+	}
+
 	pingCtx := ctx
 	if cfg.ConnectTimeout > 0 {
 		var cancel context.CancelFunc

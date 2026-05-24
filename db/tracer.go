@@ -34,8 +34,9 @@ func (t *tracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQ
 	}
 	elapsed := time.Since(span.start)
 
-	// (Metrics observation is added in Task 9.)
-	// if t.metrics != nil { t.metrics.observe(elapsed, data.Err) }
+	if t.metrics != nil {
+		t.metrics.observe(elapsed, data.Err)
+	}
 
 	if t.logger == nil {
 		return

@@ -3,6 +3,8 @@ package db
 import (
 	"log/slog"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Option configures Connect.
@@ -29,4 +31,13 @@ func WithLogger(logger *slog.Logger) Option {
 // at Warn level (only effective alongside WithLogger). Default: 500ms.
 func WithSlowQueryThreshold(d time.Duration) Option {
 	return func(o *options) { o.slowThreshold = d }
+}
+
+// WithMetrics registers Prometheus collectors on reg:
+//   - db_pool_size_total{state="acquired|idle|max|total"} (gauge)
+//   - db_query_duration_seconds{outcome="success|error"}  (histogram)
+//
+// Without this option, no collectors are created (zero Prometheus footprint).
+func WithMetrics(reg prometheus.Registerer) Option {
+	return func(o *options) { o.metrics = newMetricsCollector(reg) }
 }
