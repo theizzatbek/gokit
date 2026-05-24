@@ -39,3 +39,11 @@ func (k Kind) String() string {
 	}
 	return "unknown"
 }
+
+// FieldError describes a single field-level failure (typically from input validation).
+type FieldError struct {
+	Field   string `json:"field"`
+	Rule    string `json:"rule"`
+	Param   string `json:"param,omitempty"`
+	Message string `json:"message"`
+}
