@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/gofiber/fiber/v2"
+
 	xerrs "github.com/theizzatbek/fibermap/errs"
 )
 
@@ -113,3 +115,16 @@ func (a *Auth[C]) SetCredentialsVerifier(v CredentialsVerifier[C]) { a.verifier 
 
 // SetClaimsRefresher registers an optional callback for refresh-time claim updates.
 func (a *Auth[C]) SetClaimsRefresher(r ClaimsRefresher[C]) { a.refresher = r }
+
+// From is a method shortcut so callers can write a.From(c) without an explicit
+// type parameter on the free function.
+func (a *Auth[C]) From(c *fiber.Ctx) (*Principal[C], bool) { return From[C](c) }
+
+// MustFrom is the panicking-on-error variant — same shortcut.
+func (a *Auth[C]) MustFrom(c *fiber.Ctx) (*Principal[C], error) { return MustFrom[C](c) }
+
+// Subject is the method-shortcut convenience.
+func (a *Auth[C]) Subject(c *fiber.Ctx) string { return Subject[C](c) }
+
+// HasScope is the method-shortcut convenience.
+func (a *Auth[C]) HasScope(c *fiber.Ctx, s string) bool { return HasScope[C](c, s) }
