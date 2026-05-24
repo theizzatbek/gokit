@@ -8,7 +8,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
-	"fmt"
 
 	"github.com/theizzatbek/fibermap/errs"
 )
@@ -134,6 +133,3 @@ func (ks *KeySet) verifierFor(kid string) (signingKey, bool) {
 
 // activeAlg returns the algorithm header value to put on freshly-signed tokens.
 func (ks *KeySet) activeAlg() string { return ks.active.Alg }
-
-// Workaround for unused-imports lint when the package is empty otherwise.
-var _ = fmt.Sprintf
