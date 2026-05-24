@@ -78,3 +78,26 @@ func TestHash_ZeroParamsReturnsError(t *testing.T) {
 		t.Fatalf("expected invalid_params, got %v", err)
 	}
 }
+
+func TestNeedsRehash_FalseWhenParamsMatch(t *testing.T) {
+	h := NewHasher(DefaultParams())
+	enc, _ := h.Hash("x")
+	if h.NeedsRehash(enc) {
+		t.Fatalf("same-params hash flagged as needing rehash")
+	}
+}
+
+func TestNeedsRehash_TrueWhenStoredParamsAreWeaker(t *testing.T) {
+	weak := NewHasher(Params{Memory: 1024, Iterations: 1, Parallelism: 1, SaltLen: 16, KeyLen: 32})
+	strong := NewHasher(Params{Memory: 19 * 1024, Iterations: 2, Parallelism: 1, SaltLen: 16, KeyLen: 32})
+	enc, _ := weak.Hash("x")
+	if !strong.NeedsRehash(enc) {
+		t.Fatalf("weaker hash should need rehash under stronger hasher")
+	}
+}
+
+func TestNeedsRehash_FalseOnCorruptInput(t *testing.T) {
+	if NewHasher(DefaultParams()).NeedsRehash("garbage") {
+		t.Fatalf("corrupt encoded must not trigger rehash — caller would loop forever")
+	}
+}

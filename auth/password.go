@@ -100,6 +100,29 @@ func (h *Hasher) validateParams() error {
 	return nil
 }
 
+// NeedsRehash returns true iff encoded was produced with weaker cost than the
+// Hasher's current params. False on corrupt encoded — callers must NOT loop
+// rehash attempts on broken inputs.
+func (h *Hasher) NeedsRehash(encoded string) bool {
+	p, _, _, err := decodePHC(encoded)
+	if err != nil {
+		return false
+	}
+	if p.Memory < h.params.Memory {
+		return true
+	}
+	if p.Iterations < h.params.Iterations {
+		return true
+	}
+	if p.Parallelism < h.params.Parallelism {
+		return true
+	}
+	if p.KeyLen < h.params.KeyLen {
+		return true
+	}
+	return false
+}
+
 func decodePHC(encoded string) (Params, []byte, []byte, error) {
 	parts := strings.Split(encoded, "$")
 	// Expected shape: ["", "argon2id", "v=19", "m=...,t=...,p=...", "<salt>", "<key>"]
