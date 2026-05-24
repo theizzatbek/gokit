@@ -87,3 +87,50 @@ func TestTx_SatisfiesQuerier(t *testing.T) {
 		t.Fatalf("count = %d, want 1", got)
 	}
 }
+
+func TestTx_NestedSavepoint_Commit(t *testing.T) {
+	d := startTestDB(t)
+	setupKV(t, d)
+	err := d.Tx(context.Background(), func(outer *db.Tx) error {
+		if _, err := outer.Exec(context.Background(), `INSERT INTO kv VALUES ('outer','1')`); err != nil {
+			return err
+		}
+		return outer.Tx(context.Background(), func(inner *db.Tx) error {
+			_, err := inner.Exec(context.Background(), `INSERT INTO kv VALUES ('inner','2')`)
+			return err
+		})
+	})
+	if err != nil {
+		t.Fatalf("Tx: %v", err)
+	}
+	if got := countKV(t, d); got != 2 {
+		t.Fatalf("count = %d, want 2", got)
+	}
+}
+
+func TestTx_NestedSavepoint_RollbackInnerKeepsOuter(t *testing.T) {
+	d := startTestDB(t)
+	setupKV(t, d)
+	want := errors.New("inner-fail")
+	err := d.Tx(context.Background(), func(outer *db.Tx) error {
+		if _, err := outer.Exec(context.Background(), `INSERT INTO kv VALUES ('outer','1')`); err != nil {
+			return err
+		}
+		innerErr := outer.Tx(context.Background(), func(inner *db.Tx) error {
+			if _, err := inner.Exec(context.Background(), `INSERT INTO kv VALUES ('inner','2')`); err != nil {
+				return err
+			}
+			return want
+		})
+		if !errors.Is(innerErr, want) {
+			t.Fatalf("inner err = %v, want %v", innerErr, want)
+		}
+		return nil // outer still commits
+	})
+	if err != nil {
+		t.Fatalf("outer Tx: %v", err)
+	}
+	if got := countKV(t, d); got != 1 {
+		t.Fatalf("count = %d, want 1 (only outer persisted)", got)
+	}
+}

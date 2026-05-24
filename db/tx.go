@@ -54,4 +54,14 @@ func (t *Tx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandT
 	return doExec(ctx, t.tx, sql, args...)
 }
 
+// Tx opens a savepoint inside the current transaction, runs fn, and releases
+// the savepoint on nil return / rolls back to it on non-nil. Nestable.
+func (t *Tx) Tx(ctx context.Context, fn func(*Tx) error) error {
+	inner, err := t.tx.Begin(ctx) // pgx implements this as SAVEPOINT
+	if err != nil {
+		return mapPgxErr(err)
+	}
+	return runInTx(ctx, inner, fn)
+}
+
 var _ Querier = (*Tx)(nil)
