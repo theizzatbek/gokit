@@ -93,3 +93,51 @@ func (a *Auth[C]) maybeSecurityLog(c *fiber.Ctx, event string, err error) {
 		"path", c.Path(),
 	)
 }
+
+// RequireScope returns a Fiber middleware that lets the request through only if
+// the principal carries every named scope (AND semantics). Missing principal
+// → 500 (programmer error — bearer middleware was not installed upstream).
+func (a *Auth[C]) RequireScope(scopes ...string) fiber.Handler {
+	required := append([]string(nil), scopes...)
+	return func(c *fiber.Ctx) error {
+		p, err := MustFrom[C](c)
+		if err != nil {
+			return err
+		}
+		for _, want := range required {
+			if !containsString(p.Scopes, want) {
+				return xerrs.Permission(CodeMissingScope, "missing required scope").
+					WithDetails(xerrs.FieldError{Field: "scope", Rule: "required", Param: want, Message: "required scope not present"})
+			}
+		}
+		return c.Next()
+	}
+}
+
+// RequireRole is RequireScope but reading from principal.Roles. Same AND
+// semantics, same 403 on miss.
+func (a *Auth[C]) RequireRole(roles ...string) fiber.Handler {
+	required := append([]string(nil), roles...)
+	return func(c *fiber.Ctx) error {
+		p, err := MustFrom[C](c)
+		if err != nil {
+			return err
+		}
+		for _, want := range required {
+			if !containsString(p.Roles, want) {
+				return xerrs.Permission(CodeMissingRole, "missing required role").
+					WithDetails(xerrs.FieldError{Field: "role", Rule: "required", Param: want, Message: "required role not present"})
+			}
+		}
+		return c.Next()
+	}
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}

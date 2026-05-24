@@ -107,3 +107,74 @@ func TestBearer_Optional_BadToken_StillRejects(t *testing.T) {
 		t.Fatalf("optional must still reject present-but-invalid; got %d", resp.StatusCode)
 	}
 }
+
+func TestRequireScope_AllPresentPasses(t *testing.T) {
+	a := mustNewAuth(t)
+	app := fiber.New(fiber.Config{ErrorHandler: testErrHandler})
+	app.Use(func(c *fiber.Ctx) error {
+		c.Locals(principalKey{}, &Principal[testClaims]{Scopes: []string{"a", "b", "c"}})
+		return c.Next()
+	})
+	app.Use(a.RequireScope("a", "b"))
+	app.Get("/", func(c *fiber.Ctx) error { return c.SendStatus(http.StatusOK) })
+	resp, _ := app.Test(httptest.NewRequest("GET", "/", nil))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestRequireScope_MissingScopeReturns403(t *testing.T) {
+	a := mustNewAuth(t)
+	app := fiber.New(fiber.Config{ErrorHandler: testErrHandler})
+	app.Use(func(c *fiber.Ctx) error {
+		c.Locals(principalKey{}, &Principal[testClaims]{Scopes: []string{"a"}})
+		return c.Next()
+	})
+	app.Use(a.RequireScope("a", "missing"))
+	app.Get("/", func(c *fiber.Ctx) error { return c.SendStatus(http.StatusOK) })
+	resp, _ := app.Test(httptest.NewRequest("GET", "/", nil))
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestRequireScope_NoPrincipalReturns500(t *testing.T) {
+	a := mustNewAuth(t)
+	app := fiber.New(fiber.Config{ErrorHandler: testErrHandler})
+	app.Use(a.RequireScope("a"))
+	app.Get("/", func(c *fiber.Ctx) error { return c.SendStatus(http.StatusOK) })
+	resp, _ := app.Test(httptest.NewRequest("GET", "/", nil))
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (programmer error)", resp.StatusCode)
+	}
+}
+
+func TestRequireRole_AllPresentPasses(t *testing.T) {
+	a := mustNewAuth(t)
+	app := fiber.New(fiber.Config{ErrorHandler: testErrHandler})
+	app.Use(func(c *fiber.Ctx) error {
+		c.Locals(principalKey{}, &Principal[testClaims]{Roles: []string{"admin"}})
+		return c.Next()
+	})
+	app.Use(a.RequireRole("admin"))
+	app.Get("/", func(c *fiber.Ctx) error { return c.SendStatus(http.StatusOK) })
+	resp, _ := app.Test(httptest.NewRequest("GET", "/", nil))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestRequireRole_MissingRoleReturns403(t *testing.T) {
+	a := mustNewAuth(t)
+	app := fiber.New(fiber.Config{ErrorHandler: testErrHandler})
+	app.Use(func(c *fiber.Ctx) error {
+		c.Locals(principalKey{}, &Principal[testClaims]{Roles: []string{"user"}})
+		return c.Next()
+	})
+	app.Use(a.RequireRole("admin"))
+	app.Get("/", func(c *fiber.Ctx) error { return c.SendStatus(http.StatusOK) })
+	resp, _ := app.Test(httptest.NewRequest("GET", "/", nil))
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+}
