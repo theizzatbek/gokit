@@ -6,6 +6,7 @@ package refreshpg
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/theizzatbek/fibermap/auth"
 	"github.com/theizzatbek/fibermap/db"
@@ -45,4 +46,94 @@ func (s *Store) Issue(ctx context.Context, r auth.Record) error {
 	return nil
 }
 
-// Consume / RevokeFamily / RevokeSubject / GarbageCollect are added in Tasks 20+21.
+// Consume atomically marks a refresh token consumed if it is live, valid, and
+// not expired; otherwise it diagnoses the failure mode and (for reuse) revokes
+// the whole family before returning the error.
+//
+// The implementation is two queries: a single UPDATE ... RETURNING that
+// succeeds for the live-and-valid case, and a follow-up SELECT only in the
+// failure case to disambiguate not_found / expired / reused.
+func (s *Store) Consume(ctx context.Context, tokenHash [32]byte, now time.Time) (auth.Record, error) {
+	const update = `
+		UPDATE auth_refresh_tokens
+		SET    consumed_at = $2
+		WHERE  token_hash = $1
+		  AND  consumed_at IS NULL
+		  AND  revoked_at  IS NULL
+		  AND  expires_at  > $2
+		RETURNING token_hash, family_id, parent_hash, subject, issued_at, expires_at,
+		          user_agent, COALESCE(host(ip), '')
+	`
+	rec, ok, err := scanOne(s.q.QueryRow(ctx, update, tokenHash[:], now))
+	if err != nil {
+		return auth.Record{}, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "refresh consume failed")
+	}
+	if ok {
+		return rec, nil
+	}
+	// Diagnose the failure mode.
+	const diag = `
+		SELECT consumed_at IS NOT NULL OR revoked_at IS NOT NULL AS used,
+		       expires_at <= $2                                  AS expired,
+		       family_id
+		FROM   auth_refresh_tokens
+		WHERE  token_hash = $1
+	`
+	var used, expired bool
+	var familyID string
+	if err := s.q.QueryRow(ctx, diag, tokenHash[:], now).Scan(&used, &expired, &familyID); err != nil {
+		var e *errs.Error
+		if errors.As(err, &e) && e.Kind == errs.KindNotFound {
+			return auth.Record{}, errs.Unauthorized(auth.CodeRefreshInvalid, "refresh token unknown")
+		}
+		return auth.Record{}, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "refresh diag failed")
+	}
+	switch {
+	case used:
+		if err := s.RevokeFamily(ctx, familyID); err != nil {
+			return auth.Record{}, err
+		}
+		return auth.Record{}, errs.Unauthorized(auth.CodeRefreshReused, "refresh token reused")
+	case expired:
+		return auth.Record{}, errs.Unauthorized(auth.CodeRefreshExpired, "refresh token expired")
+	default:
+		return auth.Record{}, errs.Unauthorized(auth.CodeRefreshInvalid, "refresh token unknown")
+	}
+}
+
+// RevokeFamily marks every live token in the family as revoked. Idempotent
+// via `COALESCE(revoked_at, now())` + `WHERE revoked_at IS NULL`.
+func (s *Store) RevokeFamily(ctx context.Context, familyID string) error {
+	const q = `
+		UPDATE auth_refresh_tokens
+		SET    revoked_at = COALESCE(revoked_at, now())
+		WHERE  family_id  = $1
+		  AND  revoked_at IS NULL
+	`
+	if _, err := s.q.Exec(ctx, q, familyID); err != nil {
+		return errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "refresh family revoke failed")
+	}
+	return nil
+}
+
+func scanOne(row interface{ Scan(...any) error }) (auth.Record, bool, error) {
+	var r auth.Record
+	var ip string
+	tokenHash := make([]byte, 0, 32)
+	parentHash := make([]byte, 0, 32)
+	err := row.Scan(&tokenHash, &r.FamilyID, &parentHash, &r.Subject,
+		&r.IssuedAt, &r.ExpiresAt, &r.UserAgent, &ip)
+	if err != nil {
+		var e *errs.Error
+		if errors.As(err, &e) && e.Kind == errs.KindNotFound {
+			return auth.Record{}, false, nil
+		}
+		return auth.Record{}, false, err
+	}
+	copy(r.TokenHash[:], tokenHash)
+	copy(r.ParentHash[:], parentHash)
+	r.IP = ip
+	return r, true, nil
+}
+
+// RevokeSubject / GarbageCollect are added in Task 21.

@@ -147,3 +147,92 @@ func TestIssue_DuplicateHashIsConflict(t *testing.T) {
 		t.Fatalf("second issue Kind = %v, want AlreadyExists", e.Kind)
 	}
 }
+
+func TestConsume_RoundTrip(t *testing.T) {
+	if testing.Short() || testDB == nil {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	_, _ = testDB.Exec(ctx, "TRUNCATE auth_refresh_tokens")
+	s := New(testDB)
+	now := time.Now().UTC().Truncate(time.Second)
+	var h [32]byte
+	h[0] = 1
+	_ = s.Issue(ctx, auth.Record{
+		TokenHash: h, Subject: "u-1", FamilyID: "11111111-1111-1111-1111-111111111111",
+		IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+	})
+	got, err := s.Consume(ctx, h, now)
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if got.Subject != "u-1" {
+		t.Fatalf("subject = %q", got.Subject)
+	}
+}
+
+func TestConsume_NotFound(t *testing.T) {
+	if testing.Short() || testDB == nil {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	_, _ = testDB.Exec(ctx, "TRUNCATE auth_refresh_tokens")
+	_, err := New(testDB).Consume(ctx, [32]byte{0xFF}, time.Now())
+	assertCode(t, err, auth.CodeRefreshInvalid)
+}
+
+func TestConsume_Expired(t *testing.T) {
+	if testing.Short() || testDB == nil {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	_, _ = testDB.Exec(ctx, "TRUNCATE auth_refresh_tokens")
+	s := New(testDB)
+	now := time.Now().UTC()
+	var h [32]byte
+	h[0] = 1
+	_ = s.Issue(ctx, auth.Record{
+		TokenHash: h, Subject: "u-1", FamilyID: "22222222-2222-2222-2222-222222222222",
+		IssuedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(-time.Hour),
+	})
+	_, err := s.Consume(ctx, h, now)
+	assertCode(t, err, auth.CodeRefreshExpired)
+}
+
+func TestConsume_ReusedRevokesFamily(t *testing.T) {
+	if testing.Short() || testDB == nil {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	_, _ = testDB.Exec(ctx, "TRUNCATE auth_refresh_tokens")
+	s := New(testDB)
+	now := time.Now().UTC()
+	fam := "33333333-3333-3333-3333-333333333333"
+	var h1, h2 [32]byte
+	h1[0] = 1
+	h2[0] = 2
+	_ = s.Issue(ctx, auth.Record{TokenHash: h1, FamilyID: fam, Subject: "u", IssuedAt: now, ExpiresAt: now.Add(time.Hour)})
+	_ = s.Issue(ctx, auth.Record{TokenHash: h2, FamilyID: fam, Subject: "u", IssuedAt: now, ExpiresAt: now.Add(time.Hour)})
+	if _, err := s.Consume(ctx, h1, now); err != nil {
+		t.Fatalf("first consume: %v", err)
+	}
+	_, err := s.Consume(ctx, h1, now)
+	assertCode(t, err, auth.CodeRefreshReused)
+	// h2 should now be revoked too — Consume on it returns reused.
+	_, err2 := s.Consume(ctx, h2, now)
+	assertCode(t, err2, auth.CodeRefreshReused)
+}
+
+func assertCode(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected code %q, got nil", want)
+	}
+	var e *errs.Error
+	if !errors.As(err, &e) {
+		t.Fatalf("err not *errs.Error: %v", err)
+	}
+	if e.Code != want {
+		t.Fatalf("code = %q, want %q", e.Code, want)
+	}
+}
