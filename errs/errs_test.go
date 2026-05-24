@@ -92,3 +92,43 @@ func TestErrorUnwrap(t *testing.T) {
 		t.Errorf("Unwrap = %v, want %v", got, cause)
 	}
 }
+
+func TestConstructors(t *testing.T) {
+	cases := []struct {
+		name string
+		got  *errs.Error
+		kind errs.Kind
+	}{
+		{"NotFound", errs.NotFound("user_not_found", "user 42 not found"), errs.KindNotFound},
+		{"AlreadyExists", errs.AlreadyExists("user_exists", "duplicate"), errs.KindAlreadyExists},
+		{"Conflict", errs.Conflict("stale", "version mismatch"), errs.KindConflict},
+		{"Validation", errs.Validation("invalid", "bad input"), errs.KindValidation},
+		{"Unauthorized", errs.Unauthorized("token_missing", "no token"), errs.KindUnauthorized},
+		{"Permission", errs.Permission("forbidden", "admin only"), errs.KindPermission},
+		{"RateLimited", errs.RateLimited("too_many", "slow down"), errs.KindRateLimited},
+		{"Unavailable", errs.Unavailable("db_down", "db unreachable"), errs.KindUnavailable},
+		{"Timeout", errs.Timeout("upstream_slow", "deadline exceeded"), errs.KindTimeout},
+		{"Internal", errs.Internal("panic", "boom"), errs.KindInternal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got == nil {
+				t.Fatal("constructor returned nil")
+			}
+			if tc.got.Kind != tc.kind {
+				t.Errorf("Kind = %v, want %v", tc.got.Kind, tc.kind)
+			}
+			if tc.got.Code == "" || tc.got.Message == "" {
+				t.Error("Code or Message empty")
+			}
+		})
+	}
+}
+
+func TestValidationWithInlineDetails(t *testing.T) {
+	d := errs.FieldError{Field: "x", Rule: "required", Message: "required"}
+	e := errs.Validation("invalid", "bad", d)
+	if len(e.Details) != 1 || e.Details[0] != d {
+		t.Errorf("Details = %v, want [%v]", e.Details, d)
+	}
+}
