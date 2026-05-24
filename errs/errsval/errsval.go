@@ -4,6 +4,7 @@
 package errsval
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/go-playground/validator/v10"
@@ -20,7 +21,8 @@ func FromValidator(err error) error {
 	if err == nil {
 		return nil
 	}
-	vErrs, ok := err.(validator.ValidationErrors)
+	var vErrs validator.ValidationErrors
+	ok := errors.As(err, &vErrs)
 	if !ok {
 		return err
 	}

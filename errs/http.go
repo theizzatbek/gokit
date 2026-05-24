@@ -32,8 +32,7 @@ func HTTP(err error) (int, Response) {
 	if err == nil {
 		return 200, Response{}
 	}
-	var e *Error
-	if errors.As(err, &e) {
+	if e, ok2 := errors.AsType[*Error](err); ok2 {
 		status, ok := kindStatus[e.Kind]
 		if !ok {
 			status = 500
