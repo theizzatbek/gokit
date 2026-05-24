@@ -44,6 +44,12 @@ Every error returned by the library is `*Error` (errors.go) with `Stage` (`parse
 
 Register stage is the one exception that does **not** return an error: `Register{Handler,Middleware,MiddlewareFactory}` panic with `*Error` on duplicate-name conflicts (within or across the plain/factory registries). This is intentional — duplicate registration is a programmer error at startup and the `MustCompile` convention keeps call sites uncluttered. Tests that exercise this use `defer recover()` (see `expectRegisterPanic` in engine_test.go).
 
+### Subpackages
+
+- `errs/` — typed domain errors + HTTP mapping. `*errs.Error{Kind, Code, Message, Details, Cause}` carries a closed-enum `Kind`, a stable string `Code`, optional `Details` for field-level failures, and the wrapped `Cause`. Per-`Kind` constructors (`errs.NotFound`, `errs.Validation`, …) and `…f` Sprintf variants. `errs.Wrap(err, kind, code, msg)` lifts an underlying error. `errs.HTTP(err) (status, body)` produces the wire shape `{code, message, details?}`. `*Error` implements `slog.LogValuer` so `logger.Error("...", "err", e)` emits structured attrs. Stdlib-only — no Fiber, no validator deps.
+- `errs/errsval/` — converts `validator.ValidationErrors` into `*errs.Error` of `KindValidation` with populated `Details`. Depends on `go-playground/validator/v10`. Kept in a subpackage so `errs/` stays stdlib-only.
+- Root helper `fibermap.ErrorHandler(logger *slog.Logger) fiber.ErrorHandler` (in `error_handler.go`) wires `errs.HTTP` into Fiber and falls back to `*fiber.Error`'s own code for router-level errors (404/405). Auto-logs 5xx responses via the passed logger; 4xx is silent by default. Pass `nil` logger to use `slog.Default()`.
+
 ## YAML shape
 
 Defined by the unexported structs in `spec.go` (`rawConfig`, `rawGroup`, `rawRoute`, `mwRef`). Groups nest. Both groups and routes accept a single `middleware_set:` name plus an explicit `middleware:` list — `combineSetAndList` prepends the set name and `resolveChain` expands it. `middleware:` items are heterogeneous: scalar string → `mwRef{Name}` (plain), single-key map `{name: [args...]}` → `mwRef{Name, Args}` (factory). Decoded by `mwRef.UnmarshalYAML` in yaml.go. Only the methods in `validHTTPMethods` (yaml.go) are accepted. `testdata/*.yaml` covers the supported shapes (nested groups, sets, factories, duplicate-route detection, cycle detection).
