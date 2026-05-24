@@ -120,7 +120,6 @@ func signingMaterial(s signingKey) any {
 func (e *engine[C]) verify(tok string) (Claims[C], error) {
 	parser := jwt.NewParser(
 		jwt.WithValidMethods([]string{e.cfg.Keys.activeAlg()}),
-		jwt.WithLeeway(e.cfg.Leeway),
 		// We control iss/aud/exp checks ourselves so we can return Code-coded errors.
 		jwt.WithoutClaimsValidation(),
 	)
@@ -143,8 +142,7 @@ func (e *engine[C]) verify(tok string) (Claims[C], error) {
 	var raw jwt.MapClaims
 	_, err := parser.ParseWithClaims(tok, &raw, keyFunc)
 	if err != nil {
-		var existing *xerrs.Error
-		if errors.As(err, &existing) {
+		if existing, ok := errors.AsType[*xerrs.Error](err); ok {
 			return Claims[C]{}, existing
 		}
 		return Claims[C]{}, xerrs.Wrap(err, xerrs.KindUnauthorized, CodeInvalidToken, "token verification failed")
@@ -161,7 +159,10 @@ func (e *engine[C]) verify(tok string) (Claims[C], error) {
 	}
 
 	now := e.cfg.Now()
-	if out.ExpiresAt == 0 || time.Unix(out.ExpiresAt, 0).Before(now.Add(-e.cfg.Leeway)) {
+	if out.ExpiresAt == 0 {
+		return Claims[C]{}, xerrs.Unauthorized(CodeInvalidToken, "token missing exp")
+	}
+	if time.Unix(out.ExpiresAt, 0).Before(now.Add(-e.cfg.Leeway)) {
 		return Claims[C]{}, xerrs.Unauthorized(CodeExpiredToken, "token expired")
 	}
 	if out.NotBefore != 0 && time.Unix(out.NotBefore, 0).After(now.Add(e.cfg.Leeway)) {

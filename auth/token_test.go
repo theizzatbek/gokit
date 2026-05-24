@@ -95,9 +95,7 @@ func TestVerify_RejectsAlgConfusion(t *testing.T) {
 	forgedHeader := `{"alg":"HS256","typ":"JWT","kid":"k1"}`
 	forged := base64URL([]byte(forgedHeader)) + "." + parts[1] + "." + parts[2]
 	_, err := e.verify(forged)
-	if err == nil {
-		t.Fatalf("expected alg-confusion rejection")
-	}
+	assertErrCode(t, err, CodeInvalidToken)
 }
 
 func TestVerify_UnknownKID(t *testing.T) {
@@ -106,9 +104,7 @@ func TestVerify_UnknownKID(t *testing.T) {
 	parts := strings.Split(tok, ".")
 	swapped := base64URL([]byte(`{"alg":"EdDSA","typ":"JWT","kid":"unknown"}`)) + "." + parts[1] + "." + parts[2]
 	_, err := e.verify(swapped)
-	if err == nil {
-		t.Fatalf("expected unknown-kid rejection")
-	}
+	assertErrCode(t, err, CodeKeyNotLoaded)
 }
 
 func TestVerify_Expired(t *testing.T) {
@@ -118,6 +114,20 @@ func TestVerify_Expired(t *testing.T) {
 	})
 	_, err := e.verify(tok)
 	assertErrCode(t, err, CodeExpiredToken)
+}
+
+func TestVerify_MissingExpIsInvalid(t *testing.T) {
+	e := newTestEngine(t)
+	tok, err := e.sign(Claims[testClaims]{
+		Subject:  "u",
+		IssuedAt: 1_700_000_000,
+		// ExpiresAt left as zero → exp is omitted from the JWT body.
+	})
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	_, err = e.verify(tok)
+	assertErrCode(t, err, CodeInvalidToken)
 }
 
 func TestVerify_NotYetValid(t *testing.T) {
