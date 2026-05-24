@@ -1,6 +1,7 @@
 package errs_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -183,5 +184,47 @@ func TestWithDetailsReturnsReceiver(t *testing.T) {
 	e := errs.Validationf("x", "y")
 	if e.WithDetails() != e {
 		t.Error("WithDetails should return the receiver for chaining")
+	}
+}
+
+func TestWrapNilReturnsNil(t *testing.T) {
+	if errs.Wrap(nil, errs.KindInternal, "x", "y") != nil {
+		t.Error("Wrap(nil, ...) should return nil")
+	}
+}
+
+func TestWrapSetsFields(t *testing.T) {
+	cause := errors.New("inner")
+	e := errs.Wrap(cause, errs.KindInternal, "boom", "msg")
+	if e.Kind != errs.KindInternal || e.Code != "boom" || e.Message != "msg" || e.Cause != cause {
+		t.Errorf("Wrap fields wrong: %+v", e)
+	}
+}
+
+func TestWrapfFormats(t *testing.T) {
+	cause := errors.New("inner")
+	e := errs.Wrapf(cause, errs.KindInternal, "boom", "value=%d", 7)
+	if e.Message != "value=7" || e.Cause != cause {
+		t.Errorf("Wrapf: msg=%q cause=%v", e.Message, e.Cause)
+	}
+}
+
+func TestWrapErrorsIsWalksChain(t *testing.T) {
+	cause := sql.ErrNoRows
+	e := errs.Wrap(cause, errs.KindNotFound, "user_not_found", "...")
+	if !errors.Is(e, sql.ErrNoRows) {
+		t.Error("errors.Is should walk through Cause")
+	}
+}
+
+func TestWrapErrorsAsFindsOuter(t *testing.T) {
+	inner := errs.NotFound("inner", "i")
+	outer := errs.Wrap(inner, errs.KindInternal, "outer", "o")
+	var target *errs.Error
+	if !errors.As(outer, &target) {
+		t.Fatal("errors.As did not find *Error")
+	}
+	if target.Kind != errs.KindInternal || target.Code != "outer" {
+		t.Errorf("As found %+v, expected outer", target)
 	}
 }

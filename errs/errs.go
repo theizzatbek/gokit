@@ -177,3 +177,24 @@ func (e *Error) WithDetails(details ...FieldError) *Error {
 	e.Details = append(e.Details, details...)
 	return e
 }
+
+// Wrap returns a new *Error of the given kind/code/msg whose Cause is err.
+// If err is nil, Wrap returns nil (matching fmt.Errorf("%w", err) semantics).
+//
+// Wrap does NOT clobber an existing *Error: if err is already *Error, the new
+// outer error simply wraps it, and errors.As walks to the inner one. Callers
+// who want to RE-kind an existing *Error should construct a new *Error directly.
+func Wrap(err error, kind Kind, code, msg string) *Error {
+	if err == nil {
+		return nil
+	}
+	return &Error{Kind: kind, Code: code, Message: msg, Cause: err}
+}
+
+// Wrapf is the Sprintf-flavored Wrap.
+func Wrapf(err error, kind Kind, code, format string, args ...any) *Error {
+	if err == nil {
+		return nil
+	}
+	return Wrap(err, kind, code, fmt.Sprintf(format, args...))
+}
