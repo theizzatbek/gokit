@@ -1,4 +1,3 @@
-// Package errs defines typed domain errors and their HTTP mapping.
 package errs
 
 import "fmt"
