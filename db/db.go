@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -49,8 +50,16 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 	for _, fn := range opts {
 		fn(&o)
 	}
-	// Options that configure pgx (e.g. tracer) are applied in Task 8.
-	// For now the slot is reserved.
+	if o.logger != nil || o.metrics != nil {
+		if o.slowThreshold == 0 {
+			o.slowThreshold = 500 * time.Millisecond
+		}
+		pgxCfg.ConnConfig.Tracer = &tracer{
+			logger:        o.logger,
+			metrics:       o.metrics,
+			slowThreshold: o.slowThreshold,
+		}
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, pgxCfg)
 	if err != nil {

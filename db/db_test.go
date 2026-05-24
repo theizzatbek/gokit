@@ -1,8 +1,11 @@
 package db_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/theizzatbek/fibermap/db"
@@ -84,5 +87,27 @@ func TestDB_QueryRow_ErrNoRows_KindNotFound(t *testing.T) {
 	var e *errs.Error
 	if !errors.As(err, &e) || e.Kind != errs.KindNotFound {
 		t.Fatalf("want KindNotFound, got %v (%T)", e, err)
+	}
+}
+
+func TestConnect_WithLogger_LogsQueries(t *testing.T) {
+	buf := &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	pgOnce.Do(initPostgresContainer)
+	if pgErr != nil {
+		t.Fatalf("postgres: %v", pgErr)
+	}
+	d, err := db.Connect(context.Background(), pgCfg, db.WithLogger(logger))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(d.Close)
+
+	if _, err := d.Exec(context.Background(), "SELECT 1"); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if !strings.Contains(buf.String(), "db query") {
+		t.Fatalf("expected tracer log, got %q", buf.String())
 	}
 }
