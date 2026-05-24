@@ -120,3 +120,53 @@ func Timeout(code, msg string) *Error {
 func Internal(code, msg string) *Error {
 	return &Error{Kind: KindInternal, Code: code, Message: msg}
 }
+
+// NotFoundf is the Sprintf-flavored NotFound.
+func NotFoundf(code, format string, args ...any) *Error {
+	return NotFound(code, fmt.Sprintf(format, args...))
+}
+
+// AlreadyExistsf is the Sprintf-flavored AlreadyExists.
+func AlreadyExistsf(code, format string, args ...any) *Error {
+	return AlreadyExists(code, fmt.Sprintf(format, args...))
+}
+
+// Conflictf is the Sprintf-flavored Conflict.
+func Conflictf(code, format string, args ...any) *Error {
+	return Conflict(code, fmt.Sprintf(format, args...))
+}
+
+// Validationf is the Sprintf-flavored Validation. Details are added later via WithDetails.
+func Validationf(code, format string, args ...any) *Error {
+	return Validation(code, fmt.Sprintf(format, args...))
+}
+
+// Unauthorizedf is the Sprintf-flavored Unauthorized.
+func Unauthorizedf(code, format string, args ...any) *Error {
+	return Unauthorized(code, fmt.Sprintf(format, args...))
+}
+
+// Permissionf is the Sprintf-flavored Permission.
+func Permissionf(code, format string, args ...any) *Error {
+	return Permission(code, fmt.Sprintf(format, args...))
+}
+
+// RateLimitedf is the Sprintf-flavored RateLimited.
+func RateLimitedf(code, format string, args ...any) *Error {
+	return RateLimited(code, fmt.Sprintf(format, args...))
+}
+
+// Unavailablef is the Sprintf-flavored Unavailable.
+func Unavailablef(code, format string, args ...any) *Error {
+	return Unavailable(code, fmt.Sprintf(format, args...))
+}
+
+// Timeoutf is the Sprintf-flavored Timeout.
+func Timeoutf(code, format string, args ...any) *Error {
+	return Timeout(code, fmt.Sprintf(format, args...))
+}
+
+// Internalf is the Sprintf-flavored Internal.
+func Internalf(code, format string, args ...any) *Error {
+	return Internal(code, fmt.Sprintf(format, args...))
+}

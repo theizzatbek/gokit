@@ -132,3 +132,40 @@ func TestValidationWithInlineDetails(t *testing.T) {
 		t.Errorf("Details = %v, want [%v]", e.Details, d)
 	}
 }
+
+func TestFConstructors(t *testing.T) {
+	cases := []struct {
+		name string
+		got  *errs.Error
+		kind errs.Kind
+	}{
+		{"NotFoundf", errs.NotFoundf("user_not_found", "user %d not found", 42), errs.KindNotFound},
+		{"AlreadyExistsf", errs.AlreadyExistsf("dup", "duplicate %s", "alice"), errs.KindAlreadyExists},
+		{"Conflictf", errs.Conflictf("stale", "version %d mismatch", 3), errs.KindConflict},
+		{"Validationf", errs.Validationf("invalid", "bad %s", "input"), errs.KindValidation},
+		{"Unauthorizedf", errs.Unauthorizedf("token", "missing %s", "bearer"), errs.KindUnauthorized},
+		{"Permissionf", errs.Permissionf("forbidden", "role %s not allowed", "user"), errs.KindPermission},
+		{"RateLimitedf", errs.RateLimitedf("too_many", "max %d req/s", 100), errs.KindRateLimited},
+		{"Unavailablef", errs.Unavailablef("db", "%s unreachable", "postgres"), errs.KindUnavailable},
+		{"Timeoutf", errs.Timeoutf("upstream", "deadline %s", "10s"), errs.KindTimeout},
+		{"Internalf", errs.Internalf("panic", "boom %s", "now"), errs.KindInternal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got.Kind != tc.kind {
+				t.Errorf("Kind = %v, want %v", tc.got.Kind, tc.kind)
+			}
+			if tc.got.Message == "" || tc.got.Code == "" {
+				t.Error("empty Code or Message")
+			}
+		})
+	}
+}
+
+func TestNotFoundfFormat(t *testing.T) {
+	e := errs.NotFoundf("user_not_found", "user %d not found", 42)
+	want := "user 42 not found"
+	if e.Message != want {
+		t.Errorf("Message = %q, want %q", e.Message, want)
+	}
+}
