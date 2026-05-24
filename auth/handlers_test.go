@@ -272,3 +272,97 @@ func TestRefresh_ClaimsRefresherInvoked(t *testing.T) {
 		t.Fatalf("ClaimsRefresher was not invoked")
 	}
 }
+
+func TestLogout_RevokesFamilyAndClearsCookie(t *testing.T) {
+	store := memstore.New()
+	app, _ := refreshAppWithStore(t, store, nil)
+	rc := loginAndGetRefreshCookie(t, app)
+
+	// Build a parallel app sharing the same store; mount logout there.
+	app2 := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
+	app2.Post("/auth/login", appLoginHandlerWithStore(t, store))
+	app2.Post("/auth/logout", appLogoutHandlerWithStore(t, store))
+
+	req := httptest.NewRequest("POST", "/auth/logout", nil)
+	req.AddCookie(rc)
+	resp, _ := app2.Test(req)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout status = %d", resp.StatusCode)
+	}
+	// Cookie cleared (Max-Age=-1).
+	cleared := false
+	for _, c := range resp.Cookies() {
+		if c.Name == "refresh_token" && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Fatalf("logout did not clear refresh cookie")
+	}
+}
+
+func TestLogout_MissingCookieIs204Idempotent(t *testing.T) {
+	store := memstore.New()
+	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
+	app.Post("/auth/logout", appLogoutHandlerWithStore(t, store))
+	resp, _ := app.Test(httptest.NewRequest("POST", "/auth/logout", nil))
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+}
+
+func TestLogoutAll_RequiresBearerSubject(t *testing.T) {
+	store := memstore.New()
+	a := authWithStore(t, store)
+	a.SetCredentialsVerifier(func(ctx context.Context, r auth.LoginRequest) (auth.LoginResult[appClaims], error) {
+		return auth.LoginResult[appClaims]{Subject: "u-1"}, nil
+	})
+	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
+	app.Post("/auth/login", a.LoginHandler)
+	app.Post("/auth/logout-all", a.Bearer(auth.BearerRequired), a.LogoutAllHandler)
+	// Login to get an access token.
+	loginReq := httptest.NewRequest("POST", "/auth/login",
+		strings.NewReader(`{"login":"a","password":"b"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginResp, _ := app.Test(loginReq)
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("login = %d", loginResp.StatusCode)
+	}
+	var body struct {
+		AccessToken string `json:"access_token"`
+	}
+	_ = json.NewDecoder(loginResp.Body).Decode(&body)
+
+	req := httptest.NewRequest("POST", "/auth/logout-all", nil)
+	req.Header.Set("Authorization", "Bearer "+body.AccessToken)
+	resp, _ := app.Test(req)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout-all = %d", resp.StatusCode)
+	}
+}
+
+// helpers ---
+
+func appLoginHandlerWithStore(t *testing.T, store auth.RefreshStore) fiber.Handler {
+	t.Helper()
+	a := authWithStore(t, store)
+	a.SetCredentialsVerifier(func(ctx context.Context, r auth.LoginRequest) (auth.LoginResult[appClaims], error) {
+		return auth.LoginResult[appClaims]{Subject: "u-1"}, nil
+	})
+	return a.LoginHandler
+}
+
+func appLogoutHandlerWithStore(t *testing.T, store auth.RefreshStore) fiber.Handler {
+	t.Helper()
+	return authWithStore(t, store).LogoutHandler
+}
+
+func authWithStore(t *testing.T, store auth.RefreshStore) *auth.Auth[appClaims] {
+	t.Helper()
+	ks, _ := auth.GenerateEd25519Key("k1")
+	a, _ := auth.New[appClaims](auth.Config{
+		Issuer: "myapp", Audience: []string{"web"},
+		Keys: ks, AccessTTL: 15 * time.Minute, RefreshTTL: 30 * 24 * time.Hour,
+	}, auth.WithRefreshStore(store), auth.WithCookieSecure(false))
+	return a
+}

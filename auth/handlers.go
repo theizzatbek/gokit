@@ -199,3 +199,44 @@ func (a *Auth[C]) clearRefreshCookie(c *fiber.Ctx) {
 		SameSite: "Strict",
 	})
 }
+
+// LogoutHandler revokes the entire token family of the supplied refresh cookie
+// and clears the cookie. Idempotent: a missing or already-revoked cookie still
+// returns 204.
+func (a *Auth[C]) LogoutHandler(c *fiber.Ctx) error {
+	raw := c.Cookies(refreshCookieName)
+	if raw == "" {
+		return c.SendStatus(http.StatusNoContent)
+	}
+	if a.store == nil {
+		a.clearRefreshCookie(c)
+		return c.SendStatus(http.StatusNoContent)
+	}
+	hash := hashRefresh(raw)
+	// Consume reveals FamilyID even when the record is already consumed/revoked
+	// (it errors but the side-effect is a family revoke). For a clean logout we
+	// prefer a direct lookup: try a no-op Consume; ignore the error.
+	rec, err := a.store.Consume(c.UserContext(), hash, a.now())
+	if err == nil {
+		_ = a.store.RevokeFamily(c.UserContext(), rec.FamilyID)
+	}
+	a.clearRefreshCookie(c)
+	return c.SendStatus(http.StatusNoContent)
+}
+
+// LogoutAllHandler revokes every refresh token belonging to the current
+// principal's Subject. Must be mounted behind Bearer middleware so principal
+// is available.
+func (a *Auth[C]) LogoutAllHandler(c *fiber.Ctx) error {
+	p, err := MustFrom[C](c)
+	if err != nil {
+		return err
+	}
+	if a.store != nil {
+		if err := a.store.RevokeSubject(c.UserContext(), p.Subject); err != nil {
+			return xerrs.Wrap(err, xerrs.KindUnavailable, CodeStoreUnavailable, "refresh store unavailable")
+		}
+	}
+	a.clearRefreshCookie(c)
+	return c.SendStatus(http.StatusNoContent)
+}
