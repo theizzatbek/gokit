@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -91,6 +92,83 @@ func (a *Auth[C]) LoginHandler(c *fiber.Ctx) error {
 		TokenType:   "Bearer",
 		ExpiresIn:   int64(a.accessTTL.Seconds()),
 		Subject:     res.Subject,
+	})
+}
+
+// RefreshHandler reads the refresh cookie, atomically rotates it through the
+// store, and returns a new access token + a fresh refresh cookie.
+//
+// On reuse detection (already-consumed/revoked), the store has already revoked
+// the whole token family by the time it returns the error — this handler just
+// clears the bad cookie and 401s.
+func (a *Auth[C]) RefreshHandler(c *fiber.Ctx) error {
+	if a.store == nil {
+		return xerrs.Internal("store_unset", "auth: WithRefreshStore option was not provided")
+	}
+	raw := c.Cookies(refreshCookieName)
+	if raw == "" {
+		return xerrs.Unauthorized(CodeMissingRefresh, "missing refresh cookie")
+	}
+	oldHash := hashRefresh(raw)
+	now := a.now()
+	rec, err := a.store.Consume(c.UserContext(), oldHash, now)
+	if err != nil {
+		if e, ok := errors.AsType[*xerrs.Error](err); ok && e.Code == CodeRefreshReused {
+			a.maybeSecurityLog(c, "refresh_reused", err)
+		}
+		a.clearRefreshCookie(c)
+		return err
+	}
+
+	// Re-read fresh claims if a refresher is registered; otherwise carry only
+	// the subject from the rotated record.
+	result := LoginResult[C]{Subject: rec.Subject}
+	if a.refresher != nil {
+		fresh, err := a.refresher(c.UserContext(), rec.Subject)
+		if err != nil {
+			return err
+		}
+		result = fresh
+		if result.Subject == "" {
+			result.Subject = rec.Subject
+		}
+	}
+
+	claims := Claims[C]{
+		Subject:   result.Subject,
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(a.accessTTL).Unix(),
+		JTI:       uuid.NewString(),
+		Scopes:    result.Scopes,
+		Roles:     result.Roles,
+		Custom:    result.Custom,
+	}
+	access, err := a.eng.sign(claims)
+	if err != nil {
+		return err
+	}
+	newRaw, newHash, err := newRawRefresh()
+	if err != nil {
+		return err
+	}
+	if err := a.store.Issue(c.UserContext(), Record{
+		TokenHash:  newHash,
+		Subject:    rec.Subject,
+		FamilyID:   rec.FamilyID,
+		ParentHash: oldHash,
+		IssuedAt:   now,
+		ExpiresAt:  now.Add(a.refreshTTL),
+		UserAgent:  c.Get(fiber.HeaderUserAgent),
+		IP:         c.IP(),
+	}); err != nil {
+		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeStoreUnavailable, "refresh store unavailable")
+	}
+	a.setRefreshCookie(c, newRaw, now.Add(a.refreshTTL))
+	return c.Status(http.StatusOK).JSON(loginResponse{
+		AccessToken: access,
+		TokenType:   "Bearer",
+		ExpiresIn:   int64(a.accessTTL.Seconds()),
+		Subject:     rec.Subject,
 	})
 }
 

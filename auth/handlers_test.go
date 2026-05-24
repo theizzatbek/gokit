@@ -148,3 +148,127 @@ func TestLogin_NoVerifierIs500(t *testing.T) {
 		t.Fatalf("status = %d, want 500", resp.StatusCode)
 	}
 }
+
+func refreshAppWithStore(t *testing.T, store auth.RefreshStore, refresher auth.ClaimsRefresher[appClaims]) (*fiber.App, *auth.Auth[appClaims]) {
+	t.Helper()
+	ks, _ := auth.GenerateEd25519Key("k1")
+	a, _ := auth.New[appClaims](auth.Config{
+		Issuer: "myapp", Audience: []string{"web"},
+		Keys: ks, AccessTTL: 15 * time.Minute, RefreshTTL: 30 * 24 * time.Hour,
+	}, auth.WithRefreshStore(store), auth.WithCookieSecure(false))
+	a.SetCredentialsVerifier(func(ctx context.Context, r auth.LoginRequest) (auth.LoginResult[appClaims], error) {
+		return auth.LoginResult[appClaims]{Subject: "u-1"}, nil
+	})
+	if refresher != nil {
+		a.SetClaimsRefresher(refresher)
+	}
+	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
+	app.Post("/auth/login", a.LoginHandler)
+	app.Post("/auth/refresh", a.RefreshHandler)
+	return app, a
+}
+
+func loginAndGetRefreshCookie(t *testing.T, app *fiber.App) *http.Cookie {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/auth/login",
+		strings.NewReader(`{"login":"a","password":"b"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := app.Test(req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login status = %d", resp.StatusCode)
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == "refresh_token" {
+			return c
+		}
+	}
+	t.Fatalf("login did not return refresh cookie")
+	return nil
+}
+
+func TestRefresh_RotatesAndIssuesNewPair(t *testing.T) {
+	store := memstore.New()
+	app, _ := refreshAppWithStore(t, store, nil)
+	rc := loginAndGetRefreshCookie(t, app)
+
+	req := httptest.NewRequest("POST", "/auth/refresh", nil)
+	req.AddCookie(rc)
+	resp, _ := app.Test(req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh status = %d", resp.StatusCode)
+	}
+	// New refresh cookie issued, value differs from the original.
+	var newRC *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "refresh_token" {
+			newRC = c
+		}
+	}
+	if newRC == nil {
+		t.Fatalf("refresh did not set new cookie")
+	}
+	if newRC.Value == rc.Value {
+		t.Fatalf("refresh value did not rotate")
+	}
+}
+
+func TestRefresh_ReuseDetected_RevokesFamily(t *testing.T) {
+	store := memstore.New()
+	app, _ := refreshAppWithStore(t, store, nil)
+	rc := loginAndGetRefreshCookie(t, app)
+
+	// First refresh: ok.
+	req := httptest.NewRequest("POST", "/auth/refresh", nil)
+	req.AddCookie(rc)
+	resp1, _ := app.Test(req)
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first refresh = %d", resp1.StatusCode)
+	}
+	// Second refresh with the OLD cookie: store sees already-consumed, must
+	// 401 with refresh_reused and revoke the family — so the new cookie also
+	// stops working on its next /refresh.
+	req2 := httptest.NewRequest("POST", "/auth/refresh", nil)
+	req2.AddCookie(rc)
+	resp2, _ := app.Test(req2)
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("reuse status = %d, want 401", resp2.StatusCode)
+	}
+	// And the NEW cookie issued in resp1 must now fail because its family was revoked.
+	var newRC *http.Cookie
+	for _, c := range resp1.Cookies() {
+		if c.Name == "refresh_token" {
+			newRC = c
+		}
+	}
+	req3 := httptest.NewRequest("POST", "/auth/refresh", nil)
+	req3.AddCookie(newRC)
+	resp3, _ := app.Test(req3)
+	if resp3.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("post-revoke refresh = %d, want 401", resp3.StatusCode)
+	}
+}
+
+func TestRefresh_MissingCookieIs401(t *testing.T) {
+	store := memstore.New()
+	app, _ := refreshAppWithStore(t, store, nil)
+	resp, _ := app.Test(httptest.NewRequest("POST", "/auth/refresh", nil))
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestRefresh_ClaimsRefresherInvoked(t *testing.T) {
+	store := memstore.New()
+	var called bool
+	app, _ := refreshAppWithStore(t, store, func(ctx context.Context, sub string) (auth.LoginResult[appClaims], error) {
+		called = true
+		return auth.LoginResult[appClaims]{Subject: sub, Scopes: []string{"refreshed"}}, nil
+	})
+	rc := loginAndGetRefreshCookie(t, app)
+	req := httptest.NewRequest("POST", "/auth/refresh", nil)
+	req.AddCookie(rc)
+	app.Test(req)
+	if !called {
+		t.Fatalf("ClaimsRefresher was not invoked")
+	}
+}
