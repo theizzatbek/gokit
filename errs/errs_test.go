@@ -2,6 +2,7 @@ package errs_test
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/theizzatbek/fibermap/errs"
@@ -64,5 +65,30 @@ func TestFieldErrorJSON(t *testing.T) {
 				t.Errorf("got %s, want %s", b, tc.want)
 			}
 		})
+	}
+}
+
+func TestErrorErrorMethod(t *testing.T) {
+	e := &errs.Error{Kind: errs.KindNotFound, Code: "user_not_found", Message: "user 42 not found"}
+	want := "not_found: user_not_found: user 42 not found"
+	if got := e.Error(); got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestErrorErrorMethodWithCause(t *testing.T) {
+	cause := errors.New("sql: no rows")
+	e := &errs.Error{Kind: errs.KindNotFound, Code: "user_not_found", Message: "user 42 not found", Cause: cause}
+	want := "not_found: user_not_found: user 42 not found: sql: no rows"
+	if got := e.Error(); got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestErrorUnwrap(t *testing.T) {
+	cause := errors.New("inner")
+	e := &errs.Error{Cause: cause}
+	if got := errors.Unwrap(e); got != cause {
+		t.Errorf("Unwrap = %v, want %v", got, cause)
 	}
 }
