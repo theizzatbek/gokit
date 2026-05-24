@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"strings"
 	"testing"
 	"time"
@@ -15,11 +16,15 @@ func TestNewRawRefresh_PrefixAndLength(t *testing.T) {
 	if !strings.HasPrefix(raw, "rt_") {
 		t.Errorf("raw missing rt_ prefix: %q", raw)
 	}
-	if len(raw) < 40 { // "rt_" + base64url(32B) ≈ 47
-		t.Errorf("raw too short: %d bytes", len(raw))
+	if len(raw) != 46 { // "rt_" (3) + base64.RawURLEncoding.EncodedLen(32) (43)
+		t.Errorf("raw length = %d, want 46", len(raw))
 	}
 	if got := hashRefresh(raw); got != hash {
 		t.Errorf("hashRefresh(raw) != hash returned from newRawRefresh")
+	}
+	want := sha256.Sum256([]byte(raw))
+	if hash != want {
+		t.Errorf("hash != sha256.Sum256(raw)")
 	}
 }
 
