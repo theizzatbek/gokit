@@ -9,15 +9,14 @@ import (
 type Option func(*options)
 
 type options struct {
-	refreshStore    RefreshStore
-	logger          *slog.Logger
-	securityLogger  *slog.Logger
-	cookieDomain    string
-	cookiePath      string
-	cookieSecure    *bool // tri-state: nil = default (true)
-	claimsRefresher any   // *ClaimsRefresher[C] erased; auth.go re-types
-	leewayOverride  time.Duration
-	now             func() time.Time
+	refreshStore   RefreshStore
+	logger         *slog.Logger
+	securityLogger *slog.Logger
+	cookieDomain   string
+	cookiePath     string
+	cookieSecure   *bool // tri-state: nil = default (true)
+	leewayOverride time.Duration
+	now            func() time.Time
 }
 
 // WithRefreshStore wires the persistence backend for refresh tokens.

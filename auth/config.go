@@ -28,7 +28,6 @@ type Config struct {
 	Issuer     string
 	Audience   []string
 	Keys       *KeySet
-	Alg        Alg
 	AccessTTL  time.Duration
 	RefreshTTL time.Duration
 	Leeway     time.Duration // 0 = use default (1 minute)
