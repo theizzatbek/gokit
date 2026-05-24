@@ -120,7 +120,9 @@ func (a *Auth[C]) SetClaimsRefresher(r ClaimsRefresher[C]) { a.refresher = r }
 // type parameter on the free function.
 func (a *Auth[C]) From(c *fiber.Ctx) (*Principal[C], bool) { return From[C](c) }
 
-// MustFrom is the panicking-on-error variant — same shortcut.
+// MustFrom is the method-shortcut for MustFrom[C](c): returns a typed
+// *errs.Error{KindInternal} when the principal is absent (programmer error).
+// Despite the "Must" prefix, it does NOT panic — returns an error instead.
 func (a *Auth[C]) MustFrom(c *fiber.Ctx) (*Principal[C], error) { return MustFrom[C](c) }
 
 // Subject is the method-shortcut convenience.
