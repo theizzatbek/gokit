@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 func TestParseBytes_Minimal(t *testing.T) {

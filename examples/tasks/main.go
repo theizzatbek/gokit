@@ -60,13 +60,13 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/helmet"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
-	"github.com/theizzatbek/fibermap"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/admin"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/appctx"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/auth"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/config"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/tasks"
-	"github.com/theizzatbek/fibermap/openapi"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/admin"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/appctx"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/auth"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/config"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/tasks"
+	"github.com/theizzatbek/gokit/fibermap"
+	"github.com/theizzatbek/gokit/fibermap/openapi"
 )
 
 // Embed routes.yaml into the binary so the deploy is a single artifact.

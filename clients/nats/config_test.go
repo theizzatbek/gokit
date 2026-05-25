@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func TestConfig_ValidateOK(t *testing.T) {

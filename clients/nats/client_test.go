@@ -7,7 +7,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func TestConnect_RejectsMissingURL(t *testing.T) {

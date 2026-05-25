@@ -10,8 +10,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/theizzatbek/fibermap/auth"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 // Store is a Redis-backed RefreshStore. Client ownership stays with the caller.

@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/theizzatbek/fibermap/bind"
+	"github.com/theizzatbek/gokit/fibermap/bind"
 )
 
 // fakeCtx is a BodyParser/QueryParser/ParamsParser/ReqHeaderParser

@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/theizzatbek/fibermap/db"
+	"github.com/theizzatbek/gokit/db"
 )
 
 // Builder is squirrel's statement builder preconfigured for Postgres

@@ -7,8 +7,8 @@ package fibermount
 import (
 	"github.com/gofiber/fiber/v2"
 
-	"github.com/theizzatbek/fibermap"
-	"github.com/theizzatbek/fibermap/auth"
+	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/fibermap"
 )
 
 // MountMiddlewareFactories registers bearer / require_scope / require_role

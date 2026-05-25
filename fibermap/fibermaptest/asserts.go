@@ -15,7 +15,7 @@
 //	}
 package fibermaptest
 
-import "github.com/theizzatbek/fibermap"
+import "github.com/theizzatbek/gokit/fibermap"
 
 // RouteFinder is the minimal contract every fibermap.Engine[T] satisfies.
 // Helpers in this package take a RouteFinder so they work uniformly across

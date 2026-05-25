@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func TestFrom_ReturnsNilWhenAbsent(t *testing.T) {

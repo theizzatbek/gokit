@@ -7,7 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Auth[C] is the wired auth bundle for a service. It owns the token engine,

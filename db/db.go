@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 // Querier is implemented by both *DB and *Tx so repository functions can be

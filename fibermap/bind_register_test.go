@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap/bind"
+	"github.com/theizzatbek/gokit/fibermap/bind"
 )
 
 type registerCtx struct{ UserID string }

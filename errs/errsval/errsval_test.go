@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/theizzatbek/fibermap/errs"
-	"github.com/theizzatbek/fibermap/errs/errsval"
+	"github.com/theizzatbek/gokit/errs"
+	"github.com/theizzatbek/gokit/errs/errsval"
 )
 
 type signupReq struct {

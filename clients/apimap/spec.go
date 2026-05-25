@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // rawConfig mirrors the top-level YAML document. Multi-file loads

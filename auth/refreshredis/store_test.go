@@ -12,8 +12,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
-	"github.com/theizzatbek/fibermap/auth"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 var testRedis *redis.Client

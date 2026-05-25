@@ -9,7 +9,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // engineConfig is the internal projection of auth.Config used by the token engine.

@@ -11,7 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cache"
 	"github.com/gofiber/fiber/v2/middleware/timeout"
-	"github.com/theizzatbek/fibermap/bind"
+	"github.com/theizzatbek/gokit/fibermap/bind"
 )
 
 type (

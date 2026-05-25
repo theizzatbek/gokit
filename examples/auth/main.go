@@ -14,10 +14,10 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	"github.com/theizzatbek/fibermap"
-	"github.com/theizzatbek/fibermap/auth"
-	"github.com/theizzatbek/fibermap/auth/fibermount"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/auth/fibermount"
+	"github.com/theizzatbek/gokit/errs"
+	"github.com/theizzatbek/gokit/fibermap"
 )
 
 //go:embed routes.yaml

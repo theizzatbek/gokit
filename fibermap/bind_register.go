@@ -1,6 +1,6 @@
 package fibermap
 
-import "github.com/theizzatbek/fibermap/bind"
+import "github.com/theizzatbek/gokit/fibermap/bind"
 
 // RegisterHandler is the package-level form of
 // [Engine.RegisterHandler]. It exists so callers can use a uniform

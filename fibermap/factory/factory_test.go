@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap"
-	"github.com/theizzatbek/fibermap/factory"
+	"github.com/theizzatbek/gokit/fibermap"
+	"github.com/theizzatbek/gokit/fibermap/factory"
 )
 
 type appCtx struct {

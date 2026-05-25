@@ -8,9 +8,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/theizzatbek/fibermap/auth"
-	"github.com/theizzatbek/fibermap/db"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 // Store is the Postgres-backed RefreshStore. Pool ownership stays with the caller.

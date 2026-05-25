@@ -19,8 +19,8 @@
 //
 //	import (
 //	    "github.com/gofiber/fiber/v2/middleware/requestid"
-//	    "github.com/theizzatbek/fibermap"
-//	    "github.com/theizzatbek/fibermap/factory"
+//	    "github.com/theizzatbek/gokit/fibermap"
+//	    "github.com/theizzatbek/gokit/fibermap/factory"
 //	)
 //
 //	type AppCtx struct{ Role string; Scopes []string }
@@ -45,7 +45,7 @@ import (
 	"errors"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap"
+	"github.com/theizzatbek/gokit/fibermap"
 )
 
 // Option customizes the response a guard returns when access is denied.

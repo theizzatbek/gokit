@@ -6,7 +6,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // BearerMode controls whether a missing token is fatal.

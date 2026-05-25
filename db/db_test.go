@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theizzatbek/fibermap/db"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func TestConnect_BadCredentials_KindUnavailable(t *testing.T) {

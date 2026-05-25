@@ -3,7 +3,7 @@ package apimap
 import (
 	"testing"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 func TestStatusToKind(t *testing.T) {

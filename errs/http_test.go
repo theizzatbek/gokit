@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func TestHTTPMapping(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Storage selects JetStream's storage backend.

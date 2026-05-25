@@ -8,7 +8,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Msg is what a Subscribe handler receives — the decoded payload plus JetStream

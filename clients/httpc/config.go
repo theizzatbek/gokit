@@ -3,7 +3,7 @@ package httpc
 import (
 	"time"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Config controls the retry transport's behaviour. All fields are optional;

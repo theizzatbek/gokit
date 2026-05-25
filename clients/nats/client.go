@@ -6,7 +6,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Client wraps a *nats.Conn plus a JetStream context. One Client per
