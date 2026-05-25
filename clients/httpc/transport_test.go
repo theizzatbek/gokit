@@ -6,6 +6,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -397,6 +400,83 @@ func TestRetryTransport_RetryAfterCapped(t *testing.T) {
 	if elapsed > 200*time.Millisecond {
 		t.Errorf("elapsed = %v, want < 200ms (Retry-After should be capped at 4*BackoffMax=40ms)", elapsed)
 	}
+}
+
+func TestRetryTransport_NoGetBody_NoRetryAfterFirstAttempt(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&n, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := fastCfg()
+	cfg.MaxRetries = 3
+	rt := newRetryTransport(t, cfg)
+	// Build a PUT with a body but no GetBody (simulates a streaming body).
+	// PUT is idempotent so it would otherwise retry on 503.
+	req := &http.Request{
+		Method: "PUT",
+		URL:    mustParseURL(t, srv.URL),
+		Body:   io.NopCloser(strings.NewReader("payload")),
+		Header: http.Header{},
+		// GetBody intentionally nil.
+	}
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if got := atomic.LoadInt32(&n); got != 1 {
+		t.Errorf("server saw %d requests, want 1 (no GetBody → no retry)", got)
+	}
+}
+
+func TestRetryTransport_GetBodyReplayed(t *testing.T) {
+	var bodies []string
+	var mu sync.Mutex
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&n, 1)
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		if count < 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := fastCfg()
+	cfg.MaxRetries = 2
+	rt := newRetryTransport(t, cfg)
+	// http.NewRequest with strings.Reader sets GetBody automatically.
+	req, _ := http.NewRequest("PUT", srv.URL, strings.NewReader("payload"))
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 || bodies[0] != "payload" || bodies[1] != "payload" {
+		t.Errorf("bodies = %v, want both = \"payload\"", bodies)
+	}
+}
+
+func mustParseURL(t *testing.T, s string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
 
 func TestRetryTransport_MethodCaseInsensitive(t *testing.T) {

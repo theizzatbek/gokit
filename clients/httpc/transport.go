@@ -124,6 +124,28 @@ func retryAfter(resp *http.Response) time.Duration {
 	return 0
 }
 
+// canReplay reports whether the request body can be rewound for a retry.
+// Bodies set via http.NewRequest with strings.Reader, bytes.Buffer, or
+// bytes.Reader have GetBody set automatically; streaming bodies (manually
+// constructed Request with Body but no GetBody) cannot be replayed.
+func canReplay(req *http.Request) bool {
+	return req.Body == nil || req.GetBody != nil
+}
+
+// rewindBody invokes req.GetBody to produce a fresh Body for the next
+// attempt. Caller must ensure canReplay(req) returned true.
+func rewindBody(req *http.Request) error {
+	if req.Body == nil || req.GetBody == nil {
+		return nil
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return err
+	}
+	req.Body = body
+	return nil
+}
+
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	maxAttempts := t.maxRetries
 	if !isIdempotent(req.Method) {
@@ -133,12 +155,24 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err := req.Context().Err(); err != nil {
 			return nil, err
 		}
+		// Body replay: on retries (attempt > 0) with a non-nil request body,
+		// call GetBody to produce a fresh reader. rewindBody is a no-op when
+		// Body is nil; canReplay guards guarantee GetBody is non-nil here.
+		if attempt > 0 {
+			if err := rewindBody(req); err != nil {
+				return nil, err
+			}
+		}
 		ctx, cancel := context.WithTimeout(req.Context(), t.timeout)
 		attemptReq := req.Clone(ctx)
 		resp, err := t.base.RoundTrip(attemptReq)
 		if err != nil {
 			cancel()
 			if attempt >= maxAttempts {
+				return nil, err
+			}
+			// If the body cannot be replayed, stop retrying and return the error.
+			if !canReplay(req) {
 				return nil, err
 			}
 			delay := computeBackoff(attempt, t.backoffBase, t.backoffMax)
@@ -159,6 +193,11 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if attempt == maxAttempts {
 			// Exhausted: return drained response so callers can still inspect
 			// StatusCode/Headers.
+			resp.Body = io.NopCloser(bytes.NewReader(nil))
+			return resp, nil
+		}
+		// If the body cannot be replayed, stop retrying and return what we have.
+		if !canReplay(req) {
 			resp.Body = io.NopCloser(bytes.NewReader(nil))
 			return resp, nil
 		}
