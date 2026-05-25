@@ -35,3 +35,19 @@ func WithLogger(l *slog.Logger) Option { return func(o *options) { o.logger = l 
 func WithMetrics(reg prometheus.Registerer) Option {
 	return func(o *options) { o.metrics = reg }
 }
+
+// WithReconnectHandler fires after each successful reconnect.
+func WithReconnectHandler(fn func(*nats.Conn)) Option {
+	return func(o *options) { o.reconnectHandler = fn }
+}
+
+// WithDisconnectErrHandler fires on each disconnect, with the cause if any.
+func WithDisconnectErrHandler(fn func(*nats.Conn, error)) Option {
+	return func(o *options) { o.disconnectErrHandler = fn }
+}
+
+// WithClosedHandler fires when the connection is permanently closed (e.g.
+// MaxReconnects exhausted).
+func WithClosedHandler(fn func(*nats.Conn)) Option {
+	return func(o *options) { o.closedHandler = fn }
+}

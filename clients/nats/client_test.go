@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/theizzatbek/fibermap/errs"
 )
 
@@ -34,5 +36,17 @@ func TestConnect_FailsOnUnreachableAddress(t *testing.T) {
 	var e *errs.Error
 	if !errors.As(err, &e) || e.Code != CodeConnectFailed {
 		t.Fatalf("err code = %v, want %s", err, CodeConnectFailed)
+	}
+}
+
+func TestOptions_ReconnectHandlersCompile(t *testing.T) {
+	c, err := Connect(context.Background(), Config{URL: "nats://127.0.0.1:1"},
+		WithReconnectHandler(func(*nats.Conn) {}),
+		WithDisconnectErrHandler(func(*nats.Conn, error) {}),
+		WithClosedHandler(func(*nats.Conn) {}),
+	)
+	if err == nil {
+		c.Close()
+		t.Fatal("expected error connecting to dead address")
 	}
 }
