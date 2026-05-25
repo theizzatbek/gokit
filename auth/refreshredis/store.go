@@ -178,7 +178,7 @@ func (s *Store) RevokeSubject(ctx context.Context, subject string) error {
 // GarbageCollect is a best-effort sweeper for stale entries in family/subject
 // sets. The records themselves are already removed by Redis EXPIREAT; this
 // method just trims dangling set members. Returns the number of trimmed members.
-func (s *Store) GarbageCollect(ctx context.Context, now time.Time) (int64, error) {
+func (s *Store) GarbageCollect(ctx context.Context, _ time.Time) (int64, error) {
 	var removed int64
 	// SCAN through all refresh:family:* and refresh:subject:* sets, drop members
 	// whose hash key no longer EXISTS.
