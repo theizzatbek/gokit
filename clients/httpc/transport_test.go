@@ -272,6 +272,70 @@ func TestRetryTransport_NetworkErrorRetried(t *testing.T) {
 	// TestRetryTransport_ExhaustsRetries for the status path.
 }
 
+func TestRetryTransport_BackoffRespected(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&n, 1)
+		if count < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := Config{
+		Timeout:     time.Second,
+		MaxRetries:  3,
+		BackoffBase: 20 * time.Millisecond,
+		BackoffMax:  50 * time.Millisecond,
+	}
+	rt := newRetryTransport(t, cfg)
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	start := time.Now()
+	resp, err := rt.RoundTrip(req)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("elapsed = %v, want < 500ms", elapsed)
+	}
+}
+
+func TestRetryTransport_ContextCancelDuringBackoff(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := Config{
+		Timeout:     time.Second,
+		MaxRetries:  10,
+		BackoffBase: 200 * time.Millisecond,
+		BackoffMax:  time.Second,
+	}
+	rt := newRetryTransport(t, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL, nil)
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := rt.RoundTrip(req)
+	elapsed := time.Since(start)
+	if err != context.Canceled {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if elapsed > 250*time.Millisecond {
+		t.Errorf("elapsed = %v, want < 250ms (cancel should abort backoff)", elapsed)
+	}
+}
+
 func TestRetryTransport_MethodCaseInsensitive(t *testing.T) {
 	var n int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
