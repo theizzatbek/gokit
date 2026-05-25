@@ -116,7 +116,7 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*Client, error) {
 	if cfg.NKeySeed != "" {
 		opt, err := nats.NkeyOptionFromSeed(cfg.NKeySeed)
 		if err != nil {
-			return nil, xerrs.Wrap(err, xerrs.KindValidation, "invalid_nkey", "natsclient: NKeySeed invalid")
+			return nil, xerrs.Wrap(err, xerrs.KindValidation, CodeInvalidNKey, "natsclient: NKeySeed invalid")
 		}
 		natsOpts = append(natsOpts, opt)
 	}

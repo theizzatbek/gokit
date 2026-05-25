@@ -12,4 +12,7 @@ const (
 	CodeConsumerOpFailed     = "consumer_op_failed"
 	CodePublishFailed        = "publish_failed"
 	CodeDecodeFailed         = "decode_failed"
+	CodeMissingURL           = "missing_url"
+	CodeInvalidNKey          = "invalid_nkey"
+	CodeEncodeFailed         = "encode_failed"
 )

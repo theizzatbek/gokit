@@ -13,6 +13,9 @@ func TestErrorCodes_AreStableStrings(t *testing.T) {
 		"consumer_op_failed":    CodeConsumerOpFailed,
 		"publish_failed":        CodePublishFailed,
 		"decode_failed":         CodeDecodeFailed,
+		"missing_url":           CodeMissingURL,
+		"invalid_nkey":          CodeInvalidNKey,
+		"encode_failed":         CodeEncodeFailed,
 	}
 	for want, got := range cases {
 		if got != want {

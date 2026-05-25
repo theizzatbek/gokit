@@ -34,7 +34,7 @@ func (p *Publisher[T]) Publish(ctx context.Context, subject string, msg T) error
 func (p *Publisher[T]) PublishWithHeaders(ctx context.Context, subject string, msg T, headers map[string][]string) error {
 	body, err := p.codec.Marshal(msg)
 	if err != nil {
-		return xerrs.Wrap(err, xerrs.KindValidation, "encode_failed", "natsclient: payload encode")
+		return xerrs.Wrap(err, xerrs.KindValidation, CodeEncodeFailed, "natsclient: payload encode")
 	}
 	m := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
 	for k, v := range headers {

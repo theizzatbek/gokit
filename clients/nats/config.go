@@ -30,7 +30,7 @@ type Config struct {
 // validate checks the Config for misuse. Returns *errs.Error on failure.
 func (c Config) validate() error {
 	if c.URL == "" {
-		return xerrs.Validation("missing_url", "natsclient.Config.URL is required")
+		return xerrs.Validation(CodeMissingURL, "natsclient.Config.URL is required")
 	}
 	// "basic" = User+Password as one method.
 	basic := c.User != "" || c.Password != ""
