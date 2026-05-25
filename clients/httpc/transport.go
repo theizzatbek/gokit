@@ -46,7 +46,6 @@ func isRetryableStatus(status int) bool {
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	var lastResp *http.Response
 	for attempt := 0; attempt <= t.maxRetries; attempt++ {
 		if err := req.Context().Err(); err != nil {
 			return nil, err
@@ -65,15 +64,18 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return resp, nil
 		}
 		// Retryable status: drain + close body, release per-attempt ctx.
-		// Loop continues until attempts exhausted; post-loop return handles
-		// the last retryable response.
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		cancel()
-		lastResp = resp
+		if attempt == t.maxRetries {
+			// Exhausted: return drained response so callers can still inspect
+			// StatusCode/Headers.
+			resp.Body = io.NopCloser(bytes.NewReader(nil))
+			return resp, nil
+		}
 	}
-	// All attempts returned a retryable status. Replace the drained body
-	// with a no-op closer so callers can still inspect StatusCode/Headers.
-	lastResp.Body = io.NopCloser(bytes.NewReader(nil))
-	return lastResp, nil
+	// Unreachable: the for-loop runs attempts [0, maxRetries] and every
+	// iteration returns. The compiler can't see this; the panic guards
+	// against future refactors that might break the invariant.
+	panic("httpc: unreachable")
 }
