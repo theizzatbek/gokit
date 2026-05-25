@@ -2,9 +2,12 @@ package apimap
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"reflect"
+	"strconv"
 
 	xerrs "github.com/theizzatbek/fibermap/errs"
 )
@@ -115,4 +118,126 @@ func (c *Client) buildRequest(ctx context.Context, endpoint string, call Call, b
 		req.Header.Set("Content-Type", contentType)
 	}
 	return req, nil
+}
+
+const maxErrorBodyBytes = 4096 // truncate body included in *errs.Error.Details
+
+// Decode runs endpoint, decodes the response according to endpoint.decode,
+// and returns the typed Resp. Non-2xx status maps to *errs.Error with
+// Kind derived from the status code.
+func Decode[Resp any](ctx context.Context, c *Client, endpoint string, call Call) (Resp, error) {
+	var zero Resp
+	resp, err := c.Do(ctx, endpoint, call)
+	if err != nil {
+		return zero, err
+	}
+	defer resp.Body.Close()
+	ep := c.endpoints[endpoint]
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		out, derr := decodeInto[Resp](resp, ep.decode)
+		if derr != nil {
+			return zero, derr
+		}
+		return out, nil
+	}
+	return zero, errorForResponse(ep, resp)
+}
+
+// Exchange combines encoding the typed request body with Decode for the
+// response. The body argument supersedes call.Body.
+func Exchange[Req, Resp any](ctx context.Context, c *Client, endpoint string, body Req, call Call) (Resp, error) {
+	var zero Resp
+	req, err := c.buildRequest(ctx, endpoint, call, body)
+	if err != nil {
+		return zero, err
+	}
+	ep, ok := c.endpoints[endpoint]
+	if !ok {
+		return zero, xerrs.NotFoundf(CodeUnknownEndpoint, "apimap: unknown endpoint %q", endpoint)
+	}
+	resp, err := ep.httpClient.Do(req)
+	if err != nil {
+		return zero, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		out, derr := decodeInto[Resp](resp, ep.decode)
+		if derr != nil {
+			return zero, derr
+		}
+		return out, nil
+	}
+	return zero, errorForResponse(ep, resp)
+}
+
+// decodeInto reads resp.Body per the decode mode and returns the typed
+// Resp value.
+func decodeInto[Resp any](resp *http.Response, mode string) (Resp, error) {
+	var zero Resp
+	switch mode {
+	case "", "none":
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return zero, nil
+	case "json":
+		var out Resp
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return zero, xerrs.Wrap(err, xerrs.KindInternal, CodeDecodeFailed,
+				"apimap: json decode failed")
+		}
+		return out, nil
+	case "raw":
+		var out Resp
+		switch p := any(&out).(type) {
+		case *[]byte:
+			b, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return zero, xerrs.Wrap(err, xerrs.KindInternal, CodeDecodeFailed,
+					"apimap: raw read failed")
+			}
+			*p = b
+		case *io.ReadCloser:
+			*p = resp.Body
+		default:
+			return zero, xerrs.Validationf(CodeUnsupportedDecodeType,
+				"apimap: raw decode requires []byte or io.ReadCloser, got %T", out)
+		}
+		return out, nil
+	}
+	return zero, xerrs.Validationf(CodeInvalidDecode,
+		"apimap: unsupported decode mode %q", mode)
+}
+
+// errorForResponse builds the *errs.Error for a non-2xx response,
+// including status/url/body in Details.
+func errorForResponse(ep resolvedEndpoint, resp *http.Response) error {
+	code := codeForEndpointStatus(ep.clientName, ep.endpointName, resp.StatusCode)
+	kind := statusToKind(resp.StatusCode)
+	msg := "apimap: " + resp.Status + " from " + ep.clientName + "." + ep.endpointName
+
+	bodySnippet := readBodySnippet(resp)
+	return &xerrs.Error{
+		Kind:    kind,
+		Code:    code,
+		Message: msg,
+		Details: []xerrs.FieldError{
+			{Field: "status", Message: strconv.Itoa(resp.StatusCode)},
+			{Field: "url", Message: resp.Request.URL.String()},
+			{Field: "body", Message: bodySnippet},
+		},
+	}
+}
+
+// readBodySnippet reads up to maxErrorBodyBytes from resp.Body for
+// inclusion in the error Details. Best-effort; failures result in an
+// empty snippet.
+func readBodySnippet(resp *http.Response) string {
+	if resp.Body == nil {
+		return ""
+	}
+	limited := io.LimitReader(resp.Body, maxErrorBodyBytes)
+	b, err := io.ReadAll(limited)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

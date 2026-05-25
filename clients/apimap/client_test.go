@@ -314,3 +314,214 @@ func TestClient_Do_PerEndpointHTTPClient_Used(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Typed Decode / Exchange tests
+// ---------------------------------------------------------------------------
+
+type userResp struct {
+	Login string `json:"login"`
+	ID    int    `json:"id"`
+}
+
+type createIssueReq struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
+type createIssueResp struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+}
+
+func TestDecode_HappyPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"login":"torvalds","id":1024}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithYAML(t, `clients:
+  - name: gh
+    base_url: <BASE>
+    endpoints:
+      - name: get_user
+        method: GET
+        path: /users/{username}
+        decode: json
+`, srv.URL)
+
+	got, err := Decode[userResp](context.Background(), c, "gh.get_user",
+		Call{Path: map[string]string{"username": "torvalds"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Login != "torvalds" || got.ID != 1024 {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestDecode_404_MapsToNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"message":"not found"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithYAML(t, `clients:
+  - name: gh
+    base_url: <BASE>
+    endpoints:
+      - name: get_user
+        method: GET
+        path: /users/{username}
+        decode: json
+`, srv.URL)
+
+	_, err := Decode[userResp](context.Background(), c, "gh.get_user",
+		Call{Path: map[string]string{"username": "nosuch"}})
+	if err == nil {
+		t.Fatal("nil error, want NotFound")
+	}
+	var e *xerrs.Error
+	if !errors.As(err, &e) {
+		t.Fatalf("err type = %T, want *xerrs.Error", err)
+	}
+	if e.Kind != xerrs.KindNotFound {
+		t.Errorf("Kind = %v, want KindNotFound", e.Kind)
+	}
+	if e.Code != "apimap_gh_get_user_not_found" {
+		t.Errorf("Code = %q", e.Code)
+	}
+	gotFields := map[string]string{}
+	for _, f := range e.Details {
+		gotFields[f.Field] = f.Message
+	}
+	if gotFields["status"] != "404" {
+		t.Errorf("status detail = %q", gotFields["status"])
+	}
+	if !strings.HasPrefix(gotFields["url"], "http://") {
+		t.Errorf("url detail = %q", gotFields["url"])
+	}
+	if !strings.Contains(gotFields["body"], "not found") {
+		t.Errorf("body detail = %q", gotFields["body"])
+	}
+}
+
+func TestDecode_500_MapsToInternal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithYAML(t, `clients:
+  - name: c1
+    base_url: <BASE>
+    endpoints:
+      - {name: a, method: GET, path: /a, decode: json}
+`, srv.URL)
+
+	_, err := Decode[userResp](context.Background(), c, "c1.a", Call{})
+	var e *xerrs.Error
+	if !errors.As(err, &e) || e.Kind != xerrs.KindInternal {
+		t.Errorf("err = %v, want KindInternal", err)
+	}
+	if e.Code != "apimap_c1_a_server_error" {
+		t.Errorf("Code = %q", e.Code)
+	}
+}
+
+func TestDecode_InvalidJSON_MapsToDecodeFailed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{not json`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithYAML(t, `clients:
+  - name: c1
+    base_url: <BASE>
+    endpoints: [{name: a, method: GET, path: /a, decode: json}]
+`, srv.URL)
+
+	_, err := Decode[userResp](context.Background(), c, "c1.a", Call{})
+	var e *xerrs.Error
+	if !errors.As(err, &e) || e.Code != CodeDecodeFailed {
+		t.Errorf("err = %v, want code %s", err, CodeDecodeFailed)
+	}
+}
+
+func TestDecode_None_ReturnsZero(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`anything goes`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithYAML(t, `clients:
+  - name: c1
+    base_url: <BASE>
+    endpoints: [{name: a, method: GET, path: /a}]
+`, srv.URL)
+
+	got, err := Decode[userResp](context.Background(), c, "c1.a", Call{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != (userResp{}) {
+		t.Errorf("got %+v, want zero", got)
+	}
+}
+
+func TestDecode_Raw_Bytes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("hello-bytes"))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithYAML(t, `clients:
+  - name: c1
+    base_url: <BASE>
+    endpoints: [{name: a, method: GET, path: /a, decode: raw}]
+`, srv.URL)
+
+	got, err := Decode[[]byte](context.Background(), c, "c1.a", Call{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hello-bytes" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestExchange_HappyPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"title":"bug"`) {
+			t.Errorf("server got body %q", body)
+		}
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"number":7,"url":"https://example.com/7"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithYAML(t, `clients:
+  - name: gh
+    base_url: <BASE>
+    endpoints:
+      - {name: create_issue, method: POST, path: /issues, encode: json, decode: json}
+`, srv.URL)
+
+	got, err := Exchange[createIssueReq, createIssueResp](
+		context.Background(), c, "gh.create_issue",
+		createIssueReq{Title: "bug", Body: "fix it"},
+		Call{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Number != 7 {
+		t.Errorf("got %+v", got)
+	}
+}
