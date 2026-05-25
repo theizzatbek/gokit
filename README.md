@@ -929,6 +929,39 @@ resp, err := c.Get("https://api.example.com/users/42")
 
 Returns a stdlib `*http.Client`. Retries idempotent methods on transient failures (5xx, 429, 408, network errors) with full-jitter exponential backoff. `POST`/`PATCH` never retry. Per-attempt timeout via `context`; `Retry-After` honoured (capped). Use `httpc.NewTransport` instead of `New` to embed the retry layer in your own client (e.g. behind otel middleware).
 
+### Declarative outbound APIs (`clients/apimap`)
+
+```yaml
+# clients/github.yaml
+clients:
+  - name: github
+    base_url: https://api.github.com
+    timeout: 10s
+    max_retries: 3
+    default_headers:
+      Accept: application/vnd.github+json
+    auth:
+      type: bearer
+      token: ${GITHUB_TOKEN}
+    endpoints:
+      - name: get_user
+        method: GET
+        path: /users/{username}
+        decode: json
+```
+
+```go
+eng := apimap.New()
+eng.LoadFile("clients/github.yaml")
+apimap.RegisterResponse[User](eng, "github.get_user")
+client, _ := eng.Build(apimap.WithLogger(logger), apimap.WithMetrics(reg))
+
+user, err := apimap.Decode[User](ctx, client, "github.get_user",
+    apimap.Call{Path: map[string]string{"username": "torvalds"}})
+```
+
+Symmetric to `fibermap` for inbound: one YAML grep gives the full outbound surface of the service. Built on `clients/httpc` for transport. Auth (basic/bearer/header) declared in YAML; secrets via `${ENV_VAR}`. Non-2xx status maps to `*errs.Error` with `Kind` derived from the status (e.g. `404 → KindNotFound`) and a stable per-endpoint Code; `Do(ctx, name, Call)` is the escape hatch for streaming downloads or custom decoding.
+
 ## License
 
 MIT. See `LICENSE`.
