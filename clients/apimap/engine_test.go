@@ -2,6 +2,7 @@ package apimap
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 
 	xerrs "github.com/theizzatbek/fibermap/errs"
@@ -104,3 +105,166 @@ func TestEngine_RegisterAfterBuiltPanics(t *testing.T) {
 	}()
 	RegisterResponse[stubResp](e, "c1.fetch")
 }
+
+func TestEngine_Build_Happy(t *testing.T) {
+	e := New()
+	if err := e.LoadFile("testdata/minimal.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := e.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.endpoints["github.get_user"]; !ok {
+		t.Errorf("missing endpoint github.get_user; have %v", c.endpoints)
+	}
+}
+
+func TestEngine_Build_Twice_Rejected(t *testing.T) {
+	e := New()
+	if err := e.LoadFile("testdata/minimal.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Build(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.Build()
+	if err == nil {
+		t.Fatal("nil error, want CodeAlreadyBuilt")
+	}
+	var ee *xerrs.Error
+	if !errors.As(err, &ee) || ee.Code != CodeAlreadyBuilt {
+		t.Errorf("err = %v, want code %s", err, CodeAlreadyBuilt)
+	}
+}
+
+func TestEngine_Build_PropagatesValidation(t *testing.T) {
+	e := New()
+	if err := e.LoadFile("testdata/invalid_method.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.Build()
+	if err == nil || !containsCode(err, CodeInvalidMethod) {
+		t.Errorf("err = %v, want code %s", err, CodeInvalidMethod)
+	}
+}
+
+func TestEngine_Build_RegistrationsCrossChecked(t *testing.T) {
+	e := New()
+	if err := e.LoadFile("testdata/minimal.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	RegisterResponse[stubResp](e, "github.nope")
+	_, err := e.Build()
+	if err == nil || !containsCode(err, CodeRegisteredEndpointMissing) {
+		t.Errorf("err = %v, want code %s", err, CodeRegisteredEndpointMissing)
+	}
+}
+
+func TestEngine_Build_PerEndpointHTTPClient_Overrides(t *testing.T) {
+	e := New()
+	overridesYAML := []byte(`clients:
+  - name: c1
+    base_url: https://example.com
+    timeout: 10s
+    endpoints:
+      - {name: shared, method: GET, path: /a}
+      - {name: special, method: GET, path: /b, timeout: 30s}
+`)
+	if err := e.LoadBytes(overridesYAML); err != nil {
+		t.Fatal(err)
+	}
+	c, err := e.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := c.endpoints["c1.shared"]
+	special := c.endpoints["c1.special"]
+	if shared.httpClient == nil || special.httpClient == nil {
+		t.Fatal("missing httpClient on resolvedEndpoint")
+	}
+	if shared.httpClient == special.httpClient {
+		t.Error("special endpoint must have its own *http.Client (it overrides timeout)")
+	}
+}
+
+func TestEngine_Build_PerEndpointHTTPClient_Shared(t *testing.T) {
+	e := New()
+	sharedYAML := []byte(`clients:
+  - name: c1
+    base_url: https://example.com
+    endpoints:
+      - {name: a, method: GET, path: /a}
+      - {name: b, method: GET, path: /b}
+`)
+	if err := e.LoadBytes(sharedYAML); err != nil {
+		t.Fatal(err)
+	}
+	c, err := e.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := c.endpoints["c1.a"]
+	b := c.endpoints["c1.b"]
+	if a.httpClient != b.httpClient {
+		t.Error("endpoints without overrides must share the per-client *http.Client")
+	}
+}
+
+func TestResolveAuthHeader(t *testing.T) {
+	tests := []struct {
+		name      string
+		a         *rawAuth
+		wantName  string
+		wantValue string
+	}{
+		{"nil", nil, "", ""},
+		{"none", &rawAuth{Type: "none"}, "", ""},
+		{"empty type", &rawAuth{Type: ""}, "", ""},
+		{"basic", &rawAuth{Type: "basic", Username: "alice", Password: "wonderland"},
+			"Authorization", "Basic YWxpY2U6d29uZGVybGFuZA=="},
+		{"bearer", &rawAuth{Type: "bearer", Token: "tok-123"},
+			"Authorization", "Bearer tok-123"},
+		{"header", &rawAuth{Type: "header", Name: "X-API-Key", Value: "k-12345"},
+			"X-API-Key", "k-12345"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotName, gotValue := resolveAuthHeader(tt.a)
+			if gotName != tt.wantName || gotValue != tt.wantValue {
+				t.Errorf("got (%q, %q), want (%q, %q)",
+					gotName, gotValue, tt.wantName, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestEngine_Build_AuthHeaderStoredOnResolvedEndpoint(t *testing.T) {
+	t.Setenv("APIMAP_TEST_TOKEN", "tok-stored")
+	e := New()
+	authYAML := []byte(`clients:
+  - name: gh
+    base_url: https://api.github.com
+    auth:
+      type: bearer
+      token: ${APIMAP_TEST_TOKEN}
+    endpoints: [{name: a, method: GET, path: /a}]
+`)
+	if err := e.LoadBytes(authYAML); err != nil {
+		t.Fatal(err)
+	}
+	c, err := e.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep := c.endpoints["gh.a"]
+	if ep.authHdrName != "Authorization" {
+		t.Errorf("authHdrName = %q, want Authorization", ep.authHdrName)
+	}
+	if ep.authHdrValue != "Bearer tok-stored" {
+		t.Errorf("authHdrValue = %q, want Bearer tok-stored", ep.authHdrValue)
+	}
+}
+
+// Silence unused import warning if http isn't used directly elsewhere.
+var _ = http.DefaultTransport
