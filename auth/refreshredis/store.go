@@ -55,4 +55,86 @@ func (s *Store) Issue(ctx context.Context, r auth.Record) error {
 	return nil
 }
 
-// Consume / RevokeFamily / RevokeSubject / GarbageCollect — Tasks 23 and 24.
+// consumeScript atomically:
+//  1. EXISTS check — if missing, returns "missing"
+//  2. consumed/revoked check — if either is "1", returns "reused" AND iterates
+//     the family set, marking every member revoked
+//  3. expires_at check — if <= now, returns "expired"
+//  4. otherwise: sets consumed=1 and returns the body fields needed by Go
+//
+// Return shape on success: { "ok", family, parent_hash, subject, issued_at, user_agent, ip, expires_at }
+// Return shape on error:   { "missing" } | { "reused" } | { "expired" }
+var consumeScript = redis.NewScript(`
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+if redis.call("EXISTS", key) == 0 then return {"missing"} end
+local h = redis.call("HMGET", key, "consumed","revoked","expires_at","family","parent_hash","subject","issued_at","user_agent","ip")
+local consumed, revoked, exp = h[1], h[2], tonumber(h[3])
+if consumed == "1" or revoked == "1" then
+    local family = h[4]
+    local fkey = "refresh:family:"..family
+    local members = redis.call("SMEMBERS", fkey)
+    for i=1,#members do
+        redis.call("HSET", "refresh:"..members[i], "revoked", "1")
+    end
+    return {"reused"}
+end
+if exp <= now then return {"expired"} end
+redis.call("HSET", key, "consumed", "1")
+return {"ok", h[4], h[5], h[6], h[7], h[8], h[9], tostring(exp)}
+`)
+
+// Consume runs consumeScript atomically against Redis.
+func (s *Store) Consume(ctx context.Context, tokenHash [32]byte, now time.Time) (auth.Record, error) {
+	res, err := consumeScript.Run(ctx, s.c, []string{refreshKey(tokenHash)}, now.Unix()).Result()
+	if err != nil {
+		return auth.Record{}, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "redis consume failed")
+	}
+	arr, ok := res.([]any)
+	if !ok || len(arr) == 0 {
+		return auth.Record{}, errs.Internalf("consume_bad_reply", "unexpected reply: %v", res)
+	}
+	switch arr[0] {
+	case "missing":
+		return auth.Record{}, errs.Unauthorized(auth.CodeRefreshInvalid, "refresh token unknown")
+	case "reused":
+		return auth.Record{}, errs.Unauthorized(auth.CodeRefreshReused, "refresh token reused")
+	case "expired":
+		return auth.Record{}, errs.Unauthorized(auth.CodeRefreshExpired, "refresh token expired")
+	case "ok":
+		var r auth.Record
+		r.TokenHash = tokenHash
+		r.FamilyID, _ = arr[1].(string)
+		if ph, _ := arr[2].(string); ph != "" {
+			b, _ := hex.DecodeString(ph)
+			copy(r.ParentHash[:], b)
+		}
+		r.Subject, _ = arr[3].(string)
+		if v, ok := arr[4].(string); ok {
+			n := atoi64(v)
+			r.IssuedAt = time.Unix(n, 0).UTC()
+		}
+		r.UserAgent, _ = arr[5].(string)
+		r.IP, _ = arr[6].(string)
+		if v, ok := arr[7].(string); ok {
+			n := atoi64(v)
+			r.ExpiresAt = time.Unix(n, 0).UTC()
+		}
+		return r, nil
+	default:
+		return auth.Record{}, errs.Internalf("consume_bad_reply", "unknown tag: %v", arr[0])
+	}
+}
+
+func atoi64(s string) int64 {
+	var n int64
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + int64(c-'0')
+	}
+	return n
+}
+
+// RevokeFamily / RevokeSubject / GarbageCollect — Task 24.
