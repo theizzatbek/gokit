@@ -1,0 +1,13 @@
+package service
+
+// Error codes returned in *errs.Error.Code from service.New.
+// Subsystem-specific failures propagate unchanged from the subpackages.
+const (
+	CodeAuthNeedsDB        = "service_auth_needs_db"
+	CodeAuthInvalidKey     = "service_auth_invalid_key"
+	CodeDBConnectFailed    = "service_db_connect_failed"
+	CodeAPIMapLoadFailed   = "service_apimap_load_failed"
+	CodeNATSConnectFailed  = "service_nats_connect_failed"
+	CodeHTTPCNewFailed     = "service_httpc_new_failed"
+	CodeOpenAPIMountFailed = "service_openapi_mount_failed"
+)
