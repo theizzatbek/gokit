@@ -1,11 +1,16 @@
 package natsclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 func TestSubscribe_RoundTrip(t *testing.T) {
@@ -256,4 +261,54 @@ func TestSubscribe_OptionsCompileAndApply(t *testing.T) {
 		t.Fatalf("Subscribe with options: %v", err)
 	}
 	_ = sub.Drain()
+}
+
+func TestSubscribe_LogsConsumerDrift(t *testing.T) {
+	if testing.Short() || testURL == "" {
+		t.Skip("integration")
+	}
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	c, err := Connect(context.Background(), Config{URL: testURL, Name: "drift"}, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(c.Close)
+
+	ctx := context.Background()
+	const stream = "TEST_SUB_DRIFT"
+	t.Cleanup(func() { _ = c.DeleteStream(ctx, stream) })
+	_ = c.EnsureStream(ctx, StreamConfig{Name: stream, Subjects: []string{"subdrift.>"}})
+
+	// Pre-create the durable consumer with AckWait=1s so it survives
+	// independent of any subscription's lifecycle.
+	if _, err := c.js.AddConsumer(stream, &nats.ConsumerConfig{
+		Durable:        "subdrift-d1",
+		DeliverSubject: "deliver.subdrift",
+		DeliverPolicy:  nats.DeliverNewPolicy,
+		AckPolicy:      nats.AckExplicitPolicy,
+		AckWait:        1 * time.Second,
+		MaxDeliver:     5,
+		FilterSubject:  "subdrift.x",
+	}); err != nil {
+		t.Fatalf("AddConsumer: %v", err)
+	}
+
+	// Subscribe with same durable but mismatched AckWait → kit should log
+	// the drift warning. NATS itself will then reject the Subscribe (this is
+	// expected — kit's Warn is advisory and surfaces the diff before the
+	// cryptic server-side error).
+	sub, _ := Subscribe[orderCreated](ctx, c, "subdrift.x",
+		func(_ context.Context, _ Msg[orderCreated]) error { return nil },
+		WithDurable("subdrift-d1"),
+		WithAckWait(10*time.Second),
+	)
+	if sub != nil {
+		_ = sub.Drain()
+	}
+
+	if !strings.Contains(logBuf.String(), "consumer config drift") {
+		t.Fatalf("drift warning not logged; log:\n%s", logBuf.String())
+	}
 }

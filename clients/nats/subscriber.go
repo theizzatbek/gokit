@@ -162,7 +162,8 @@ func Subscribe[T any](
 	handler Handler[T],
 	opts ...SubscribeOption,
 ) (*Subscription, error) {
-	if _, err := c.js.StreamNameBySubject(subject); err != nil {
+	streamName, err := c.js.StreamNameBySubject(subject)
+	if err != nil {
 		if errors.Is(err, nats.ErrStreamNotFound) || errors.Is(err, nats.ErrNoStreamResponse) {
 			return nil, xerrs.Wrapf(err, xerrs.KindNotFound, CodeStreamNotFound,
 				"natsclient: no stream for subject %q (did you EnsureStream?)", subject)
@@ -214,8 +215,9 @@ func Subscribe[T any](
 		}()
 	}
 
+	detectConsumerDrift(c.js, logger, streamName, o.durable, o.ackWait, o.maxDeliver, o.filterSubject)
+
 	var natsSub *nats.Subscription
-	var err error
 	if o.queueGroup != "" {
 		natsSub, err = c.js.QueueSubscribe(subject, o.queueGroup, handlerCB, jsSubOpts...)
 	} else {
@@ -265,4 +267,35 @@ func dispatchOne[T any](
 		return
 	}
 	_ = rawMsg.Ack()
+}
+
+// detectConsumerDrift logs a Warn if an existing durable consumer for stream/durable
+// has different ackWait/maxDeliver/filterSubject from what Subscribe would create.
+// Returns silently if no logger set or no durable consumer exists yet.
+func detectConsumerDrift(
+	js nats.JetStreamContext,
+	logger *slog.Logger,
+	stream, durable string,
+	wantAckWait time.Duration,
+	wantMaxDeliver int,
+	wantFilterSubject string,
+) {
+	if logger == nil || durable == "" {
+		return
+	}
+	ci, err := js.ConsumerInfo(stream, durable)
+	if err != nil {
+		return // not created yet — Subscribe will create it
+	}
+	if ci.Config.AckWait != wantAckWait ||
+		ci.Config.MaxDeliver != wantMaxDeliver ||
+		ci.Config.FilterSubject != wantFilterSubject {
+		logger.Warn("nats consumer config drift — kit uses existing; recreate manually if you want kit's values",
+			"stream", stream,
+			"durable", durable,
+			"have_ack_wait", ci.Config.AckWait, "want_ack_wait", wantAckWait,
+			"have_max_deliver", ci.Config.MaxDeliver, "want_max_deliver", wantMaxDeliver,
+			"have_filter", ci.Config.FilterSubject, "want_filter", wantFilterSubject,
+		)
+	}
 }
