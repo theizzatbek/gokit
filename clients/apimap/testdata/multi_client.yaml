@@ -1,0 +1,21 @@
+clients:
+  - name: github
+    base_url: https://api.github.com
+    endpoints:
+      - name: get_user
+        method: GET
+        path: /users/{username}
+        decode: json
+  - name: stripe
+    base_url: https://api.stripe.com
+    timeout: 5s
+    endpoints:
+      - name: get_charge
+        method: GET
+        path: /v1/charges/{id}
+        decode: json
+      - name: create_charge
+        method: POST
+        path: /v1/charges
+        encode: form
+        decode: json

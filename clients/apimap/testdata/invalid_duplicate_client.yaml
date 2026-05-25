@@ -1,0 +1,7 @@
+clients:
+  - name: dup
+    base_url: https://example.com
+    endpoints: [{name: a, method: GET, path: /a}]
+  - name: dup
+    base_url: https://example.com
+    endpoints: [{name: b, method: GET, path: /b}]

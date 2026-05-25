@@ -1,0 +1,11 @@
+clients:
+  - name: github
+    base_url: https://api.github.com
+    timeout: 10s
+    default_headers:
+      Accept: application/vnd.github+json
+    endpoints:
+      - name: get_user
+        method: GET
+        path: /users/{username}
+        decode: json
