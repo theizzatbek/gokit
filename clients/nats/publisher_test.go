@@ -96,3 +96,52 @@ func TestPublisher_ConcurrentSafe(t *testing.T) {
 		t.Fatalf("stream msgs = %d, want 20", si.State.Msgs)
 	}
 }
+
+func TestPublisher_HeadersPropagate(t *testing.T) {
+	c := newTestClient(t)
+	got := make(chan *nats.Msg, 1)
+	sub, _ := c.Conn().Subscribe("core.test.headers", func(m *nats.Msg) { got <- m })
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+
+	pub := NewPublisher[orderCreated](c)
+	headers := map[string][]string{
+		"X-Correlation-Id": {"corr-1"},
+		"Nats-Msg-Id":      {"custom-id"},
+	}
+	if err := pub.PublishWithHeaders(context.Background(), "core.test.headers",
+		orderCreated{ID: "o", Amount: 1}, headers); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	select {
+	case m := <-got:
+		if v := m.Header.Get("X-Correlation-Id"); v != "corr-1" {
+			t.Errorf("X-Correlation-Id = %q, want corr-1", v)
+		}
+		if v := m.Header.Get("Nats-Msg-Id"); v != "custom-id" {
+			t.Errorf("Nats-Msg-Id = %q, want custom-id", v)
+		}
+		if v := m.Header.Get("Content-Type"); v != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", v)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+func TestPublisher_AutoNatsMsgIdSet(t *testing.T) {
+	c := newTestClient(t)
+	got := make(chan *nats.Msg, 1)
+	sub, _ := c.Conn().Subscribe("core.test.autoid", func(m *nats.Msg) { got <- m })
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+
+	pub := NewPublisher[orderCreated](c)
+	_ = pub.Publish(context.Background(), "core.test.autoid", orderCreated{ID: "o", Amount: 1})
+	select {
+	case m := <-got:
+		if m.Header.Get("Nats-Msg-Id") == "" {
+			t.Fatal("Nats-Msg-Id not auto-set")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout")
+	}
+}
