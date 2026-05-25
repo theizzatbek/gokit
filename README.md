@@ -914,6 +914,21 @@ dedicated `app.Group("/api", ...)` sub-router.
   middleware — it can return any status it wants. Handler-returned errors
   pass through to Fiber's normal `ErrorHandler`.
 
+### Outbound HTTP (`clients/httpc`)
+
+```go
+c, _ := httpc.New(httpc.Config{
+    Timeout:     10 * time.Second,
+    MaxRetries:  3,
+    BackoffBase: 100 * time.Millisecond,
+    BackoffMax:  5 * time.Second,
+}, httpc.WithLogger(logger), httpc.WithMetrics(reg))
+
+resp, err := c.Get("https://api.example.com/users/42")
+```
+
+Returns a stdlib `*http.Client`. Retries idempotent methods on transient failures (5xx, 429, 408, network errors) with full-jitter exponential backoff. `POST`/`PATCH` never retry. Per-attempt timeout via `context`; `Retry-After` honoured (capped). Use `httpc.NewTransport` instead of `New` to embed the retry layer in your own client (e.g. behind otel middleware).
+
 ## License
 
 MIT. See `LICENSE`.
