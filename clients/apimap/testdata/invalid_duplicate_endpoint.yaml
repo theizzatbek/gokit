@@ -1,0 +1,6 @@
+clients:
+  - name: c1
+    base_url: https://example.com
+    endpoints:
+      - {name: ep, method: GET, path: /a}
+      - {name: ep, method: GET, path: /b}

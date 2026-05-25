@@ -1,0 +1,4 @@
+clients:
+  - name: c1
+    base_url: not-a-url
+    endpoints: [{name: a, method: GET, path: /a}]

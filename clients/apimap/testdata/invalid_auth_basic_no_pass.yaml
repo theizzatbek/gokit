@@ -1,0 +1,7 @@
+clients:
+  - name: c1
+    base_url: https://example.com
+    auth:
+      type: basic
+      username: alice
+    endpoints: [{name: a, method: GET, path: /a}]
