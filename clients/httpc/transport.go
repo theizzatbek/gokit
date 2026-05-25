@@ -64,18 +64,16 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 			return resp, nil
 		}
-		// Retryable status: drain + close body, release per-attempt ctx,
-		// loop or exit.
+		// Retryable status: drain + close body, release per-attempt ctx.
+		// Loop continues until attempts exhausted; post-loop return handles
+		// the last retryable response.
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		cancel()
 		lastResp = resp
-		if attempt >= t.maxRetries {
-			// Exhausted: return the last retryable response with a no-op body
-			// so callers can still inspect StatusCode/Headers.
-			lastResp.Body = io.NopCloser(bytes.NewReader(nil))
-			return lastResp, nil
-		}
 	}
+	// All attempts returned a retryable status. Replace the drained body
+	// with a no-op closer so callers can still inspect StatusCode/Headers.
+	lastResp.Body = io.NopCloser(bytes.NewReader(nil))
 	return lastResp, nil
 }
