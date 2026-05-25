@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
@@ -46,14 +47,28 @@ func (p *Publisher[T]) PublishWithHeaders(ctx context.Context, subject string, m
 		m.Header.Set("Nats-Msg-Id", uuid.NewString())
 	}
 
+	start := time.Now()
 	if p.c.isJetStreamSubject(subject) {
 		if _, err := p.c.js.PublishMsg(m, nats.Context(ctx)); err != nil {
+			if p.c.metrics != nil {
+				p.c.metrics.IncPublishError(subject)
+			}
 			return xerrs.Wrap(err, xerrs.KindUnavailable, CodePublishFailed, "natsclient: js publish")
+		}
+		if p.c.metrics != nil {
+			p.c.metrics.ObservePublish(subject, time.Since(start).Seconds())
+			p.c.metrics.IncPublishSuccess(subject)
 		}
 		return nil
 	}
 	if err := p.c.conn.PublishMsg(m); err != nil {
+		if p.c.metrics != nil {
+			p.c.metrics.IncPublishError(subject)
+		}
 		return xerrs.Wrap(err, xerrs.KindUnavailable, CodePublishFailed, "natsclient: core publish")
+	}
+	if p.c.metrics != nil {
+		p.c.metrics.IncPublishSuccess(subject)
 	}
 	return nil
 }

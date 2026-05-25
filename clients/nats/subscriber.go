@@ -205,13 +205,14 @@ func Subscribe[T any](
 
 	codec := c.opts.codec
 	logger := c.opts.logger
+	metrics := c.metrics
 	slots := make(chan struct{}, o.maxInFlight)
 
 	handlerCB := func(rawMsg *nats.Msg) {
 		slots <- struct{}{}
 		go func() {
 			defer func() { <-slots }()
-			dispatchOne(ctx, codec, logger, handler, rawMsg, o.backoff)
+			dispatchOne(ctx, codec, logger, metrics, handler, rawMsg, o.backoff)
 		}()
 	}
 
@@ -235,10 +236,15 @@ func dispatchOne[T any](
 	ctx context.Context,
 	codec Codec,
 	logger *slog.Logger,
+	metrics *metricsCollector,
 	handler Handler[T],
 	rawMsg *nats.Msg,
 	backoff func(redeliveries int) time.Duration,
 ) {
+	if metrics != nil {
+		metrics.IncInFlight(rawMsg.Subject)
+		defer metrics.DecInFlight(rawMsg.Subject)
+	}
 	var data T
 	if err := codec.Unmarshal(rawMsg.Data, &data); err != nil {
 		if logger != nil {
@@ -246,6 +252,9 @@ func dispatchOne[T any](
 				"subject", rawMsg.Subject,
 				"err", err,
 			)
+		}
+		if metrics != nil {
+			metrics.IncHandlerDecodeError(rawMsg.Subject)
 		}
 		_ = rawMsg.Term()
 		return
@@ -262,9 +271,18 @@ func dispatchOne[T any](
 		msg.Redeliveries = int(md.NumDelivered) - 1
 		msg.Timestamp = md.Timestamp
 	}
+	start := time.Now()
 	if err := handler(ctx, msg); err != nil {
+		if metrics != nil {
+			metrics.IncHandlerError(rawMsg.Subject)
+			metrics.ObserveHandler(rawMsg.Subject, time.Since(start).Seconds())
+		}
 		_ = rawMsg.NakWithDelay(backoff(msg.Redeliveries + 1))
 		return
+	}
+	if metrics != nil {
+		metrics.IncHandlerSuccess(rawMsg.Subject)
+		metrics.ObserveHandler(rawMsg.Subject, time.Since(start).Seconds())
 	}
 	_ = rawMsg.Ack()
 }

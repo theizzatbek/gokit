@@ -20,6 +20,9 @@ type Client struct {
 	// Publisher to decide JS-vs-core publish. Populated lazily.
 	streamCacheMu sync.RWMutex
 	streamCache   map[string]string
+
+	// metrics is non-nil only when WithMetrics was supplied to Connect.
+	metrics *metricsCollector
 }
 
 // Connect opens a NATS connection per cfg, opens a JetStream context, and
@@ -79,11 +82,16 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*Client, error) {
 		return nil, xerrs.Wrap(err, xerrs.KindUnavailable, CodeJetStreamUnavailable, "natsclient: jetstream context")
 	}
 
+	var metrics *metricsCollector
+	if o.metrics != nil {
+		metrics = newMetricsCollector(o.metrics)
+	}
 	return &Client{
 		conn:        conn,
 		js:          js,
 		opts:        o,
 		streamCache: make(map[string]string),
+		metrics:     metrics,
 	}, nil
 }
 
