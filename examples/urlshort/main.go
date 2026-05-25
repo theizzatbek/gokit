@@ -65,12 +65,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	return eng.Run(runOptions(cfg, logger)...)
+	return eng.Run(runOptions(cfg, logger, deps)...)
 }
 
-// runOptions returns the production-ops bundle.
-func runOptions(cfg config.Config, logger *slog.Logger) []fibermap.RunOption {
+// runOptions returns the production-ops bundle. The fiber-level
+// auth.Bearer(BearerOptional) is installed via WithUse so the engine's
+// ContextBuilder (which reads the Bearer Principal from Locals) runs
+// after auth populates Locals. Per-route `bearer: []` in routes.yaml
+// still enforces 401 on protected paths; the optional layer here only
+// populates context for downstream handlers.
+func runOptions(cfg config.Config, logger *slog.Logger, deps *deps) []fibermap.RunOption {
 	return []fibermap.RunOption{
+		fibermap.WithUse(deps.authObj.Bearer(auth.BearerOptional)),
 		fibermap.WithAddr(cfg.Addr),
 		fibermap.WithRequestLogger(logger),
 		fibermap.WithMetrics("/metrics"),
@@ -136,7 +142,15 @@ func buildDeps(ctx context.Context, cfg config.Config, logger *slog.Logger) (*de
 		return nil, fmt.Errorf("httpc new: %w", err)
 	}
 
-	// --- apimap: MicroLink declarative client
+	// --- apimap: MicroLink declarative client.
+	// apimap resolves ${MICROLINK_BASE_URL} via os.Getenv at LoadFile
+	// time. Push the cfg value into the env so config is the single
+	// source of truth (the user can still set MICROLINK_BASE_URL
+	// directly — env.Parse picked it up into cfg.MicrolinkBaseURL).
+	if err := os.Setenv("MICROLINK_BASE_URL", cfg.MicrolinkBaseURL); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("set MICROLINK_BASE_URL: %w", err)
+	}
 	apiEng := apimap.New()
 	if err := apiEng.LoadFile("clients.yaml"); err != nil {
 		d.Close()
