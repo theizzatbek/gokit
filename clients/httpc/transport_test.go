@@ -146,3 +146,83 @@ func isDeadlineErr(err error) bool {
 	}
 	return false
 }
+
+func TestRetryTransport_RetryOnStatus(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&n, 1)
+		if count < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := fastCfg()
+	cfg.MaxRetries = 3
+	rt := newRetryTransport(t, cfg)
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := atomic.LoadInt32(&n); got != 3 {
+		t.Errorf("server saw %d requests, want 3 (1 initial + 2 retries)", got)
+	}
+}
+
+func TestRetryTransport_ExhaustsRetries(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&n, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := fastCfg()
+	cfg.MaxRetries = 2
+	rt := newRetryTransport(t, cfg)
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 503 {
+		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+	want := int32(3) // 1 initial + 2 retries
+	if got := atomic.LoadInt32(&n); got != want {
+		t.Errorf("server saw %d requests, want %d", got, want)
+	}
+}
+
+func TestRetryTransport_NonRetryableStatusReturnedImmediately(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&n, 1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := fastCfg()
+	cfg.MaxRetries = 3
+	rt := newRetryTransport(t, cfg)
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+	if got := atomic.LoadInt32(&n); got != 1 {
+		t.Errorf("server saw %d requests, want 1 (400 must not retry)", got)
+	}
+}
