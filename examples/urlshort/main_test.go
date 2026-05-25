@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,9 +23,17 @@ import (
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/clients/apimap"
+	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/examples/urlshort/internal/appctx"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/config"
+	"github.com/theizzatbek/gokit/examples/urlshort/internal/enrich"
+	"github.com/theizzatbek/gokit/examples/urlshort/internal/events"
+	"github.com/theizzatbek/gokit/examples/urlshort/internal/links"
+	"github.com/theizzatbek/gokit/examples/urlshort/internal/users"
 	"github.com/theizzatbek/gokit/fibermap"
+	"github.com/theizzatbek/gokit/service"
 )
 
 // TestSmoke_EndToEnd exercises every gokit package: fibermap routes,
@@ -41,42 +49,76 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	dbCfg := startPostgres(t, ctx)
 	natsURL := startNATS(t, ctx)
 	upstream := startUpstreamStub(t)
-
 	pemKey := generateEd25519PEM(t)
 
+	t.Setenv("MICROLINK_BASE_URL", upstream.URL)
+
 	cfg := config.Config{
-		DB:               dbCfg,
-		NATSURL:          natsURL,
+		Config: service.Config{
+			DB:     dbCfg,
+			Auth:   service.AuthConfig{PrivateKeyPEM: pemKey, KID: "k1", Issuer: "urlshort", AccessTTL: 15 * time.Minute, RefreshTTL: time.Hour},
+			NATS:   service.NATSConfig{URL: natsURL},
+			APIMap: service.APIMapConfig{Path: "clients.yaml"}, // working dir is examples/urlshort/ during tests
+		},
 		MicrolinkBaseURL: upstream.URL,
-		JWTPrivateKeyPEM: pemKey,
 		ShortURLBase:     "http://test.local",
-		Addr:             ":0",
-		LogLevel:         "warn",
 	}
-	cfg.ApplyDefaults()
+	cfg.Service.LogLevel = "error"
 
-	// Verbose logging during smoke debugging — flip to io.Discard once green.
-	logger := slog.New(slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
-	_ = logger // keep for now; switch to stderr if debugging
-
-	deps, err := buildDeps(ctx, cfg, logger)
+	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
+		service.WithAPIMapRegistration(func(e *apimap.Engine) {
+			apimap.RegisterResponse[enrich.MicroLinkResp](e, "microlink.metadata")
+		}),
+	)
 	if err != nil {
-		t.Fatalf("buildDeps: %v", err)
+		t.Fatalf("service.New: %v", err)
 	}
-	t.Cleanup(deps.Close)
+	t.Cleanup(svc.Close)
 
-	eng, err := buildEngine(ctx, cfg, logger, deps)
+	// Apply migrations + ensure stream — same as production main.go.
+	sqlBytes, err := os.ReadFile("migrations/0001_init.sql")
 	if err != nil {
-		t.Fatalf("buildEngine: %v", err)
+		t.Fatal(err)
+	}
+	if _, err := svc.DB.Exec(ctx, string(sqlBytes)); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := svc.NATS.EnsureStream(ctx, natsclient.StreamConfig{
+		Name: "URLSHORT", Subjects: []string{"urlshort.>"}, MaxAge: 24 * time.Hour, Storage: natsclient.StorageFile,
+	}); err != nil {
+		t.Fatalf("ensure stream: %v", err)
 	}
 
-	app := fiber.New(fiber.Config{
-		ErrorHandler: fibermap.ErrorHandler(logger),
-	})
-	// Same Bearer-optional layer the binary installs via WithUse — must
-	// run BEFORE the engine's contextInit so AppCtx.UserID is populated.
-	app.Use(deps.authObj.Bearer(auth.BearerOptional))
-	if err := eng.Mount(app); err != nil {
+	fetcher := enrich.NewFetcher(svc.HTTPC, svc.APIMap, svc.Logger())
+	pub := events.New(svc.NATS, svc.Logger())
+	usersSvc := users.NewService(svc.DB, svc.Hasher)
+	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata,
+		func(ctx context.Context, l links.Link) {
+			pub.PublishCreated(ctx, events.LinkCreated{
+				LinkID: l.ID, UserID: l.UserID, Code: l.Code,
+				URL: l.OriginalURL, Title: l.Title, CreatedAt: l.CreatedAt,
+			})
+		},
+		func(ctx context.Context, code, ua, ip string) {
+			pub.PublishVisited(ctx, events.LinkVisited{
+				Code: code, VisitedAt: time.Now(), UserAgent: ua, IP: ip,
+			})
+		},
+	)
+	svc.SetContextBuilder(appctx.NewContextBuilder(svc.Auth, svc.Logger()))
+	users.RegisterHandlers(svc.Engine, usersSvc, svc.Auth)
+	links.RegisterHandlers(svc.Engine, linksSvc, cfg.ShortURLBase)
+
+	// Load routes.yaml explicitly — service.Run normally does this, but the
+	// test calls Mount directly to drive via app.Test.
+	if err := svc.Engine.LoadFile("routes.yaml"); err != nil {
+		t.Fatalf("LoadFile routes.yaml: %v", err)
+	}
+
+	app := fiber.New(fiber.Config{ErrorHandler: fibermap.ErrorHandler(svc.Logger())})
+	// Same Bearer-optional layer that service.Run installs via WithUse.
+	app.Use(svc.Auth.Bearer(auth.BearerOptional))
+	if err := svc.Engine.Mount(app); err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
 
