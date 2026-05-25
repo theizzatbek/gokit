@@ -27,11 +27,16 @@ func app200(t *testing.T) *fiber.App {
 	return app
 }
 
+// bcrypt at cost 10 under -race on a loaded CI runner can exceed
+// app.Test's default 1s timeout. Disable the timeout — these tests
+// run against an in-memory connection, there is no realistic hang.
+const noTimeout = -1
+
 func TestBasic_Success(t *testing.T) {
 	app := app200(t)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", basicHeader("alice", "secret"))
-	resp, err := app.Test(req)
+	resp, err := app.Test(req, noTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +53,10 @@ func TestBasic_WrongPassword(t *testing.T) {
 	app := app200(t)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", basicHeader("alice", "wrong"))
-	resp, _ := app.Test(req)
+	resp, err := app.Test(req, noTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resp.StatusCode != 401 {
 		t.Errorf("status = %d, want 401", resp.StatusCode)
 	}
@@ -63,12 +71,18 @@ func TestBasic_UnknownUser_SameBodyAsWrongPassword(t *testing.T) {
 
 	wrong := httptest.NewRequest("GET", "/", nil)
 	wrong.Header.Set("Authorization", basicHeader("alice", "wrong"))
-	respWrong, _ := app.Test(wrong)
+	respWrong, err := app.Test(wrong, noTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
 	bodyWrong, _ := io.ReadAll(respWrong.Body)
 
 	unknown := httptest.NewRequest("GET", "/", nil)
 	unknown.Header.Set("Authorization", basicHeader("nosuch", "whatever"))
-	respUnknown, _ := app.Test(unknown)
+	respUnknown, err := app.Test(unknown, noTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
 	bodyUnknown, _ := io.ReadAll(respUnknown.Body)
 
 	if respUnknown.StatusCode != 401 {
@@ -84,7 +98,10 @@ func TestBasic_BadBase64(t *testing.T) {
 	app := app200(t)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Basic !!!not-base64!!!")
-	resp, _ := app.Test(req)
+	resp, err := app.Test(req, noTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resp.StatusCode != 401 {
 		t.Errorf("status = %d, want 401", resp.StatusCode)
 	}
@@ -93,7 +110,10 @@ func TestBasic_BadBase64(t *testing.T) {
 func TestBasic_NoHeader(t *testing.T) {
 	app := app200(t)
 	req := httptest.NewRequest("GET", "/", nil)
-	resp, _ := app.Test(req)
+	resp, err := app.Test(req, noTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resp.StatusCode != 401 {
 		t.Errorf("status = %d, want 401", resp.StatusCode)
 	}
