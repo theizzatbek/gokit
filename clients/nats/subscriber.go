@@ -3,6 +3,7 @@ package natsclient
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -142,13 +143,14 @@ func Subscribe[T any](
 	}
 
 	codec := c.opts.codec
+	logger := c.opts.logger
 	slots := make(chan struct{}, o.maxInFlight)
 
 	natsSub, err := c.js.Subscribe(subject, func(rawMsg *nats.Msg) {
 		slots <- struct{}{}
 		go func() {
 			defer func() { <-slots }()
-			dispatchOne(ctx, codec, handler, rawMsg, o.backoff)
+			dispatchOne(ctx, codec, logger, handler, rawMsg, o.backoff)
 		}()
 	}, jsSubOpts...)
 	if err != nil {
@@ -158,17 +160,23 @@ func Subscribe[T any](
 }
 
 // dispatchOne handles a single delivery: decode → call handler → ack/nak/term.
-// The decode-Term logic lands in Task 15.
+// Decode failures Term the message (poison pill) and log at Error level.
 func dispatchOne[T any](
 	ctx context.Context,
 	codec Codec,
+	logger *slog.Logger,
 	handler Handler[T],
 	rawMsg *nats.Msg,
 	backoff func(redeliveries int) time.Duration,
 ) {
 	var data T
 	if err := codec.Unmarshal(rawMsg.Data, &data); err != nil {
-		// Task 15 turns this into Term + Error log.
+		if logger != nil {
+			logger.Error("nats decode failed",
+				"subject", rawMsg.Subject,
+				"err", err,
+			)
+		}
 		_ = rawMsg.Term()
 		return
 	}

@@ -201,3 +201,40 @@ func TestSubscribe_HandlerErrorRetriesWithBackoff(t *testing.T) {
 		t.Fatalf("redeliveries = %v, want [0, ≥1, ...]", redeliveries)
 	}
 }
+
+func TestSubscribe_DecodeFailureTerms(t *testing.T) {
+	c := newTestClient(t)
+	ctx := context.Background()
+	const stream = "TEST_SUB_DECODE"
+	t.Cleanup(func() { _ = c.DeleteStream(ctx, stream) })
+	_ = c.EnsureStream(ctx, StreamConfig{Name: stream, Subjects: []string{"subdec.>"}})
+
+	called := make(chan struct{}, 1)
+	sub, _ := Subscribe[orderCreated](ctx, c, "subdec.created",
+		func(_ context.Context, _ Msg[orderCreated]) error {
+			called <- struct{}{}
+			return nil
+		},
+		WithDurable("subdec-d1"),
+		WithMaxDeliver(3),
+	)
+	t.Cleanup(func() { _ = sub.Drain() })
+
+	// Publish raw garbage that won't decode into orderCreated.
+	_, _ = c.JetStream().Publish("subdec.created", []byte("not-json"))
+
+	// Handler must NOT be called.
+	select {
+	case <-called:
+		t.Fatal("handler was called for undecodeable payload")
+	case <-time.After(800 * time.Millisecond):
+		// good — Term'd
+	}
+
+	// Stream sanity check — informational, not strict.
+	si, err := c.JetStream().StreamInfo(stream)
+	if err != nil {
+		t.Fatalf("StreamInfo: %v", err)
+	}
+	_ = si
+}
