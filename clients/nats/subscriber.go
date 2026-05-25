@@ -58,17 +58,51 @@ func (s *Subscription) Unsubscribe() error {
 	return nil
 }
 
-// subOptions is the resolved set of SubscribeOptions. Tasks 13/16 extend this.
+// subOptions is the resolved set of SubscribeOptions. Task 16 extends this.
 type subOptions struct {
-	durable string
+	durable     string
+	maxInFlight int
+	ackWait     time.Duration
+	maxDeliver  int
+	backoff     func(redeliveries int) time.Duration
 }
 
-// SubscribeOption configures Subscribe. Tasks 13/16 add the full set.
+// SubscribeOption configures Subscribe. Task 16 adds the rest.
 type SubscribeOption func(*subOptions)
 
 // WithDurable sets the JetStream durable consumer name.
 func WithDurable(name string) SubscribeOption {
 	return func(o *subOptions) { o.durable = name }
+}
+
+// WithMaxInFlight caps the number of handlers running concurrently. Default 1.
+func WithMaxInFlight(n int) SubscribeOption {
+	return func(o *subOptions) { o.maxInFlight = n }
+}
+
+// WithAckWait sets how long the handler has before NATS redelivers. Default 30s.
+func WithAckWait(d time.Duration) SubscribeOption {
+	return func(o *subOptions) { o.ackWait = d }
+}
+
+// WithMaxDeliver caps total delivery attempts. After this NATS stops
+// redelivering. Default 5.
+func WithMaxDeliver(n int) SubscribeOption {
+	return func(o *subOptions) { o.maxDeliver = n }
+}
+
+// WithBackoff overrides the default exponential backoff (1s, 2s, 4s, 8s, 16s,
+// capped at 5 min). redeliveries is 1 on first Nak, 2 on second, etc.
+func WithBackoff(fn func(redeliveries int) time.Duration) SubscribeOption {
+	return func(o *subOptions) { o.backoff = fn }
+}
+
+func defaultBackoff(redeliveries int) time.Duration {
+	d := time.Second * (1 << (redeliveries - 1))
+	if d > 5*time.Minute {
+		d = 5 * time.Minute
+	}
+	return d
 }
 
 // Subscribe binds a typed handler to subject. The subject must belong to a
@@ -88,21 +122,34 @@ func Subscribe[T any](
 		return nil, xerrs.Wrap(err, xerrs.KindUnavailable, CodeConsumerOpFailed, "natsclient: stream lookup")
 	}
 
-	o := subOptions{}
+	o := subOptions{
+		maxInFlight: 1,
+		ackWait:     30 * time.Second,
+		maxDeliver:  5,
+		backoff:     defaultBackoff,
+	}
 	for _, fn := range opts {
 		fn(&o)
 	}
 
-	jsSubOpts := []nats.SubOpt{}
+	jsSubOpts := []nats.SubOpt{
+		nats.ManualAck(),
+		nats.AckWait(o.ackWait),
+		nats.MaxDeliver(o.maxDeliver),
+	}
 	if o.durable != "" {
 		jsSubOpts = append(jsSubOpts, nats.Durable(o.durable))
 	}
-	jsSubOpts = append(jsSubOpts, nats.ManualAck())
 
 	codec := c.opts.codec
+	slots := make(chan struct{}, o.maxInFlight)
 
 	natsSub, err := c.js.Subscribe(subject, func(rawMsg *nats.Msg) {
-		dispatchOne(ctx, codec, handler, rawMsg)
+		slots <- struct{}{}
+		go func() {
+			defer func() { <-slots }()
+			dispatchOne(ctx, codec, handler, rawMsg, o.backoff)
+		}()
 	}, jsSubOpts...)
 	if err != nil {
 		return nil, xerrs.Wrap(err, xerrs.KindUnavailable, CodeConsumerOpFailed, "natsclient: subscribe")
@@ -117,7 +164,9 @@ func dispatchOne[T any](
 	codec Codec,
 	handler Handler[T],
 	rawMsg *nats.Msg,
+	backoff func(redeliveries int) time.Duration,
 ) {
+	_ = backoff // Task 14 will use this for NakWithDelay
 	var data T
 	if err := codec.Unmarshal(rawMsg.Data, &data); err != nil {
 		// Task 15 turns this into Term + Error log.
@@ -143,6 +192,3 @@ func dispatchOne[T any](
 	}
 	_ = rawMsg.Ack()
 }
-
-// keep time import alive across early tasks (Task 13/14 use it)
-var _ time.Duration

@@ -95,3 +95,60 @@ func TestSubscribe_DeliversMsgMetadata(t *testing.T) {
 		t.Errorf("Raw() returned nil")
 	}
 }
+
+func TestSubscribe_MaxInFlightBound(t *testing.T) {
+	c := newTestClient(t)
+	ctx := context.Background()
+	const stream = "TEST_SUB_MIF"
+	t.Cleanup(func() { _ = c.DeleteStream(ctx, stream) })
+	_ = c.EnsureStream(ctx, StreamConfig{Name: stream, Subjects: []string{"submif.>"}})
+
+	const maxInFlight = 3
+	const total = 20
+
+	var (
+		mu       sync.Mutex
+		inFlight int
+		peak     int
+		done     = make(chan struct{})
+		count    int
+	)
+	sub, _ := Subscribe[orderCreated](ctx, c, "submif.created",
+		func(_ context.Context, _ Msg[orderCreated]) error {
+			mu.Lock()
+			inFlight++
+			if inFlight > peak {
+				peak = inFlight
+			}
+			mu.Unlock()
+			time.Sleep(50 * time.Millisecond)
+			mu.Lock()
+			inFlight--
+			count++
+			if count == total {
+				close(done)
+			}
+			mu.Unlock()
+			return nil
+		},
+		WithDurable("submif-d1"),
+		WithMaxInFlight(maxInFlight),
+	)
+	t.Cleanup(func() { _ = sub.Drain() })
+
+	pub := NewPublisher[orderCreated](c)
+	for i := 0; i < total; i++ {
+		_ = pub.Publish(ctx, "submif.created", orderCreated{ID: "x", Amount: i})
+	}
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if peak > maxInFlight {
+		t.Fatalf("peak inFlight = %d, exceeds MaxInFlight = %d", peak, maxInFlight)
+	}
+}
