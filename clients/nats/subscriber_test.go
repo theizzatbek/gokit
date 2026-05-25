@@ -2,6 +2,7 @@ package natsclient
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -150,5 +151,53 @@ func TestSubscribe_MaxInFlightBound(t *testing.T) {
 	defer mu.Unlock()
 	if peak > maxInFlight {
 		t.Fatalf("peak inFlight = %d, exceeds MaxInFlight = %d", peak, maxInFlight)
+	}
+}
+
+func TestSubscribe_HandlerErrorRetriesWithBackoff(t *testing.T) {
+	c := newTestClient(t)
+	ctx := context.Background()
+	const stream = "TEST_SUB_RETRY"
+	t.Cleanup(func() { _ = c.DeleteStream(ctx, stream) })
+	_ = c.EnsureStream(ctx, StreamConfig{Name: stream, Subjects: []string{"subretry.>"}})
+
+	var (
+		mu           sync.Mutex
+		redeliveries []int
+		seen         = make(chan struct{}, 4)
+	)
+	sub, _ := Subscribe[orderCreated](ctx, c, "subretry.created",
+		func(_ context.Context, m Msg[orderCreated]) error {
+			mu.Lock()
+			redeliveries = append(redeliveries, m.Redeliveries)
+			mu.Unlock()
+			select {
+			case seen <- struct{}{}:
+			default:
+			}
+			return errors.New("force retry")
+		},
+		WithDurable("subretry-d1"),
+		WithMaxDeliver(3),
+		WithBackoff(func(_ int) time.Duration { return 50 * time.Millisecond }),
+	)
+	t.Cleanup(func() { _ = sub.Drain() })
+
+	pub := NewPublisher[orderCreated](c)
+	_ = pub.Publish(ctx, "subretry.created", orderCreated{ID: "x", Amount: 1})
+
+	deadline := time.After(5 * time.Second)
+	for got := 0; got < 2; {
+		select {
+		case <-seen:
+			got++
+		case <-deadline:
+			t.Fatalf("only saw %d deliveries", got)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if redeliveries[0] != 0 || redeliveries[1] < 1 {
+		t.Fatalf("redeliveries = %v, want [0, ≥1, ...]", redeliveries)
 	}
 }

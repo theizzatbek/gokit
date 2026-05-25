@@ -158,7 +158,7 @@ func Subscribe[T any](
 }
 
 // dispatchOne handles a single delivery: decode → call handler → ack/nak/term.
-// The full auto-Nak-with-backoff and decode-Term logic lands in Tasks 14/15.
+// The decode-Term logic lands in Task 15.
 func dispatchOne[T any](
 	ctx context.Context,
 	codec Codec,
@@ -166,7 +166,6 @@ func dispatchOne[T any](
 	rawMsg *nats.Msg,
 	backoff func(redeliveries int) time.Duration,
 ) {
-	_ = backoff // Task 14 will use this for NakWithDelay
 	var data T
 	if err := codec.Unmarshal(rawMsg.Data, &data); err != nil {
 		// Task 15 turns this into Term + Error log.
@@ -186,8 +185,7 @@ func dispatchOne[T any](
 		msg.Timestamp = md.Timestamp
 	}
 	if err := handler(ctx, msg); err != nil {
-		// Task 14 turns this into Nak with backoff.
-		_ = rawMsg.Nak()
+		_ = rawMsg.NakWithDelay(backoff(msg.Redeliveries + 1))
 		return
 	}
 	_ = rawMsg.Ack()
