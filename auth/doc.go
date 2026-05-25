@@ -11,7 +11,7 @@
 //
 // Typical wiring:
 //
-//	import "github.com/theizzatbek/fibermap/auth/fibermount"
+//	import "github.com/theizzatbek/gokit/auth/fibermount"
 //
 //	keys, _ := auth.GenerateEd25519Key("k1")
 //	store   := refreshpg.New(database)

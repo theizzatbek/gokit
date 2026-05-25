@@ -14,7 +14,7 @@
 //	    return err
 //	})
 //
-// Errors returned by every method are *errs.Error (see github.com/theizzatbek/fibermap/errs)
+// Errors returned by every method are *errs.Error (see github.com/theizzatbek/gokit/errs)
 // so handlers can return them directly into fibermap.ErrorHandler.
 //
 // The package does NOT import fiber — it is usable from CLIs, workers, scripts.

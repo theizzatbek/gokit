@@ -18,7 +18,7 @@
 //
 //	import (
 //	    "github.com/go-playground/validator/v10"
-//	    "github.com/theizzatbek/fibermap/bind"
+//	    "github.com/theizzatbek/gokit/fibermap/bind"
 //	)
 //
 //	var v = validator.New()

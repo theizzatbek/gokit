@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap"
-	"github.com/theizzatbek/fibermap/openapi"
+	"github.com/theizzatbek/gokit/fibermap"
+	"github.com/theizzatbek/gokit/fibermap/openapi"
 )
 
 type appCtx struct {

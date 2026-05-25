@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 // FromValidator converts a validator.ValidationErrors into a *errs.Error of

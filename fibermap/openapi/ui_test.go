@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theizzatbek/fibermap/openapi"
+	"github.com/theizzatbek/gokit/fibermap/openapi"
 )
 
 // uiCase describes one viewer constructor + the unpkg/jsdelivr asset

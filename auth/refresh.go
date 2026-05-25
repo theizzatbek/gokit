@@ -7,7 +7,7 @@ import (
 	"encoding/base64"
 	"time"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // rawRefreshPrefix is prepended to the wire token purely for log readability —

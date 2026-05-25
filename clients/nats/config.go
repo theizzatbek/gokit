@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"time"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Config is the required configuration for Connect. Tunables that don't change

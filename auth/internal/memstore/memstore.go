@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/theizzatbek/fibermap/auth"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 // Compile-time check that *Mem satisfies auth.RefreshStore.

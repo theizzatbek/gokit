@@ -12,9 +12,9 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	"github.com/theizzatbek/fibermap/auth"
-	"github.com/theizzatbek/fibermap/auth/internal/memstore"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/auth/internal/memstore"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 // appClaims is the custom-claims type used by handler tests.

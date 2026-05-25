@@ -6,7 +6,7 @@ package appctx
 import (
 	"log/slog"
 
-	"github.com/theizzatbek/fibermap"
+	"github.com/theizzatbek/gokit/fibermap"
 )
 
 // AppCtx is the payload built by ContextBuilder for every request.

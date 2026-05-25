@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/theizzatbek/fibermap"
+	"github.com/theizzatbek/gokit/fibermap"
 )
 
 const usage = `usage:

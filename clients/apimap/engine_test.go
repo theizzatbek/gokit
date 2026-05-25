@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 type stubReq struct{ N int }

@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/invopop/jsonschema"
-	"github.com/theizzatbek/fibermap"
+	"github.com/theizzatbek/gokit/fibermap"
 )
 
 // MountOpts configures [Generator.Mount]. The zero value yields

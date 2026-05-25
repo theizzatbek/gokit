@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func TestHealthcheck_OK(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap"
+	"github.com/theizzatbek/gokit/fibermap"
 )
 
 // docCtx is the per-request payload used by the examples below.

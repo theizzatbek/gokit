@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"strconv"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Client is the immutable post-Build dispatcher. Goroutine-safe.

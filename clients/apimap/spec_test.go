@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 func loadRaw(t *testing.T, fixture string) *rawConfig {

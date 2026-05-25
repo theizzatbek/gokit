@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // buildClientWithYAML loads YAML with <BASE> replaced by srv.URL,

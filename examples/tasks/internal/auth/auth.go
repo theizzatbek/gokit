@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/appctx"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/appctx"
+	"github.com/theizzatbek/gokit/fibermap"
 	"golang.org/x/crypto/bcrypt"
 )
 

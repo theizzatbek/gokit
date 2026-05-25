@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Build-time error codes returned in *errs.Error.Code from Engine.Build

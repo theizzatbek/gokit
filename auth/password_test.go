@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func TestHash_RoundTrip(t *testing.T) {

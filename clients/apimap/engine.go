@@ -8,8 +8,8 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/theizzatbek/fibermap/clients/httpc"
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/clients/httpc"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Engine is the build-once configurator. New → LoadFile/LoadBytes (n) →

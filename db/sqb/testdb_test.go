@@ -12,7 +12,7 @@ import (
 
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	"github.com/theizzatbek/fibermap/db"
+	"github.com/theizzatbek/gokit/db"
 )
 
 var (

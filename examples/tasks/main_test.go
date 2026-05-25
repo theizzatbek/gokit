@@ -10,12 +10,12 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/admin"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/appctx"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/auth"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/tasks"
-	"github.com/theizzatbek/fibermap/fibermaptest"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/admin"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/appctx"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/auth"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/tasks"
+	"github.com/theizzatbek/gokit/fibermap"
+	"github.com/theizzatbek/gokit/fibermap/fibermaptest"
 )
 
 // newEngine builds the engine the way main() does, minus the

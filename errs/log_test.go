@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func TestLogValueIncludesKindCodeMessage(t *testing.T) {

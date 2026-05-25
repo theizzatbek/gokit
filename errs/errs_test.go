@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func TestKindString(t *testing.T) {

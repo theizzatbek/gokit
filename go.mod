@@ -1,4 +1,4 @@
-module github.com/theizzatbek/fibermap
+module github.com/theizzatbek/gokit
 
 go 1.26.3
 

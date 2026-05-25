@@ -6,8 +6,8 @@ package admin
 
 import (
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/appctx"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/appctx"
+	"github.com/theizzatbek/gokit/fibermap"
 )
 
 // Routes returns a handler that serves the current Engine.Routes()

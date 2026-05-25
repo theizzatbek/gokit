@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	natsclient "github.com/theizzatbek/fibermap/clients/nats"
+	natsclient "github.com/theizzatbek/gokit/clients/nats"
 )
 
 type OrderCreated struct {

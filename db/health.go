@@ -3,7 +3,7 @@ package db
 import (
 	"context"
 
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 // Healthcheck pings the pool with "SELECT 1" under the caller's context.

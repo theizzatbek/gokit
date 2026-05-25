@@ -5,7 +5,7 @@ import (
 	"os"
 	"regexp"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 	"gopkg.in/yaml.v3"
 )
 

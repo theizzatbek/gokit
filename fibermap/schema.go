@@ -9,7 +9,7 @@ var schemaJSON []byte
 // slice. Useful for:
 //
 //   - shipping the schema to your IDE: add the modeline
-//     `# yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/fibermap/main/schema/routes.schema.json`
+//     `# yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/gokit/main/fibermap/schema/routes.schema.json`
 //     to the top of your routes.yaml and editors with the YAML
 //     language server (VS Code, GoLand, Vim with coc-yaml, ...) give
 //     you autocomplete, hover docs, and inline diagnostics;

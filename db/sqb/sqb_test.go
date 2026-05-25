@@ -6,8 +6,8 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 
-	"github.com/theizzatbek/fibermap/db"
-	"github.com/theizzatbek/fibermap/db/sqb"
+	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/db/sqb"
 )
 
 func newDB(t *testing.T) *db.DB { return startTestSqbDB(t) }

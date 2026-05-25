@@ -4,23 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-package Go library (`github.com/theizzatbek/fibermap`, Go 1.23) that loads a YAML-described HTTP route tree onto a [Fiber v2](https://github.com/gofiber/fiber) router. No `cmd/`, no subpackages — everything lives in `package fibermap` at the repo root. Tests use only the standard library plus Fiber's in-process test helpers.
+A composable Go service kit (`github.com/theizzatbek/gokit`, Go 1.23+) — eight independently importable packages that cover routing, errors, database, auth, outbound HTTP, declarative outbound APIs, and NATS event streaming. Each subpackage lives under the umbrella module path; root `gokit` package itself has no exported symbols — it exists only as the module path. Tests use stdlib + each subpackage's specific helpers (testcontainers for `db`/`auth/refreshpg`/`auth/refreshredis`/`clients/nats`; in-process Fiber test helpers for `fibermap`).
+
+The YAML-declarative router that originally gave the repo its name now lives at `fibermap/` as one of the eight peers. Most of the "Architecture" notes below describe that subpackage specifically — those patterns are not necessarily mirrored in `errs`, `db`, `auth`, or `clients/*` (each has its own design spec under `docs/superpowers/specs/`).
 
 ## Commands
 
+Run from repo root — `go test ./...` covers every subpackage.
+
 ```bash
 go test ./...                      # full suite
-go test -run TestEngine_Mount ./.  # one test by name
+go test -run TestEngine_Mount ./fibermap  # one test by name
 go test -race -count=1 ./...       # race-checked, no cache
 go vet ./...
 gofmt -l .                         # check formatting (CI-style)
 ```
 
-There is no Makefile, no linter config, and no test fixtures outside `testdata/*.yaml`.
+There is no Makefile and no project-wide linter config.
 
-## Architecture — what spans multiple files
+## Architecture — `fibermap/` subpackage internals
 
-The whole library is a build-once-mount-once configurator (`Engine[T]`) parameterized by the per-request payload type `T`. Understanding the system means understanding three things that span files:
+The notes in this section describe the `gokit/fibermap` router (the YAML build-once-mount-once configurator). Same patterns are not necessarily mirrored in other subpackages — see their respective bullets at the bottom of the file.
+
+The whole router is a build-once-mount-once configurator (`Engine[T]`) parameterized by the per-request payload type `T`. Understanding the system means understanding three things that span files:
 
 ### 1. The lifecycle is strict and enforced at Mount time
 
@@ -57,11 +63,11 @@ Register stage is the one exception that does **not** return an error: `Register
 - `clients/nats/` — typed NATS / JetStream client wrapper. `natsclient.Connect(ctx, Config) (*Client, error)` opens a connection + JetStream context. Generic `Publisher[T]` / `Subscribe[T]` over an opt-in `Codec` (JSON default). Auto-ack handler model: handler returns nil → Ack, err → Nak with exponential backoff, decode-fail → Term (poison pill). `MaxInFlight` semaphore caps handler concurrency. Idempotent `EnsureStream(ctx, StreamConfig)` for app-managed stream lifecycle. Errors map to `*errs.Error` with stable Code constants (`connect_failed`, `stream_not_found`, `publish_failed`, …). Opt-in slog/Prometheus observability via `WithLogger` / `WithMetrics`. Replaces the kit-overview slot originally allocated to `jobs/`.
 - `clients/httpc/` — outbound HTTP client builder. `httpc.New(Config, ...Option) (*http.Client, error)` returns a stdlib `*http.Client` whose transport chain wraps the user-supplied or `http.DefaultTransport` with per-attempt `context.WithTimeout`, full-jitter exponential retry on transient failures (5xx, 429, 408, network errors — idempotent methods only; POST/PATCH never retry), and opt-in slog/Prometheus observability. `NewTransport(cfg, opts...)` returns the same chain unwrapped for users composing into their own client (otel, auth middleware). Errors from validation map to `*errs.Error` (Codes: `httpc_invalid_timeout`, `httpc_invalid_max_retries`, `httpc_invalid_backoff`); runtime network errors and exhausted-retry responses pass through unchanged — drop-in stdlib semantics. `Retry-After` honoured (capped at `4 * BackoffMax`); body replay via `req.GetBody` (stdlib convention). `MaxRetries: -1` disables retries entirely; the zero value gets the default (3). Depends only on `errs/` and `prometheus/client_golang`; no fiber, no fasthttp.
 - `clients/apimap/` — declarative outbound HTTP layer. Upstream APIs are described in YAML (clients, endpoints, methods, paths, encoding/decoding, per-endpoint timeout/retry overrides, per-client auth); the engine validates everything at `Build` and returns a goroutine-safe `*Client` keyed by `<client>.<endpoint>`. Auth shapes (`type: basic|bearer|header|none`) resolve to a single header applied per-request; secrets come from `${ENV_VAR}` substituted into the YAML at Load. `apimap.Decode[T](ctx, c, name, Call) (T, error)` decodes 2xx response bodies; non-2xx maps to `*errs.Error` with `Kind` derived from status and a stable per-endpoint `Code` (e.g. `apimap_github_get_user_not_found`). Response context (status / url / truncated body) sits in `*errs.Error.Details`. `Exchange[Req, Resp]` adds typed request encoding. `Do(ctx, name, Call)` is the stdlib-style escape hatch returning `*http.Response` unwrapped. Transport is `clients/httpc.New(...)` — one `*http.Client` per upstream by default, dedicated `*http.Client` per endpoint when any `timeout`/`max_retries`/`backoff_*` is overridden. Encoding modes: `json`/`form`/`raw`/`none`. Decoding modes: `json`/`raw`/`none`. Depends on `errs/`, `clients/httpc`, and `gopkg.in/yaml.v3`; no fiber, no fasthttp, no `db`/`auth`/`nats`.
-- Root helper `fibermap.ErrorHandler(logger *slog.Logger) fiber.ErrorHandler` (in `error_handler.go`) wires `errs.HTTP` into Fiber and falls back to `*fiber.Error`'s own code for router-level errors (404/405). Auto-logs 5xx responses via the passed logger; 4xx is silent by default. Pass `nil` logger to use `slog.Default()`.
+- `fibermap.ErrorHandler(logger *slog.Logger) fiber.ErrorHandler` (in `fibermap/error_handler.go`) wires `errs.HTTP` into Fiber and falls back to `*fiber.Error`'s own code for router-level errors (404/405). Auto-logs 5xx responses via the passed logger; 4xx is silent by default. Pass `nil` logger to use `slog.Default()`.
 
 ## YAML shape
 
-Defined by the unexported structs in `spec.go` (`rawConfig`, `rawGroup`, `rawRoute`, `mwRef`). Groups nest. Both groups and routes accept a single `middleware_set:` name plus an explicit `middleware:` list — `combineSetAndList` prepends the set name and `resolveChain` expands it. `middleware:` items are heterogeneous: scalar string → `mwRef{Name}` (plain), single-key map `{name: [args...]}` → `mwRef{Name, Args}` (factory). Decoded by `mwRef.UnmarshalYAML` in yaml.go. Only the methods in `validHTTPMethods` (yaml.go) are accepted. `testdata/*.yaml` covers the supported shapes (nested groups, sets, factories, duplicate-route detection, cycle detection).
+Defined by the unexported structs in `fibermap/spec.go` (`rawConfig`, `rawGroup`, `rawRoute`, `mwRef`). Groups nest. Both groups and routes accept a single `middleware_set:` name plus an explicit `middleware:` list — `combineSetAndList` prepends the set name and `resolveChain` expands it. `middleware:` items are heterogeneous: scalar string → `mwRef{Name}` (plain), single-key map `{name: [args...]}` → `mwRef{Name, Args}` (factory). Decoded by `mwRef.UnmarshalYAML` in `fibermap/yaml.go`. Only the methods in `validHTTPMethods` (`fibermap/yaml.go`) are accepted. `fibermap/testdata/*.yaml` covers the supported shapes (nested groups, sets, factories, duplicate-route detection, cycle detection).
 
 ## Status
 

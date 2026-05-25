@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Call carries per-invocation parameters: path-variable values, query

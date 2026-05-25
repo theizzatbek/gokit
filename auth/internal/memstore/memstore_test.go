@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/theizzatbek/fibermap/auth"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func TestIssueThenConsume(t *testing.T) {

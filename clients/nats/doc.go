@@ -30,7 +30,7 @@
 //	defer sub.Drain()
 //
 // Errors returned by every method are *errs.Error
-// (see github.com/theizzatbek/fibermap/errs).
+// (see github.com/theizzatbek/gokit/errs).
 //
 // See docs/superpowers/specs/2026-05-25-kit-nats-design.md for the full design.
 package natsclient

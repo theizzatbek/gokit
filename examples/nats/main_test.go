@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	natsclient "github.com/theizzatbek/fibermap/clients/nats"
+	natsclient "github.com/theizzatbek/gokit/clients/nats"
 )
 
 // TestExample_BuildClient_Smoke checks that the connect path compiles + runs

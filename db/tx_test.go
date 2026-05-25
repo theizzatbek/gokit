@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/theizzatbek/fibermap/db"
+	"github.com/theizzatbek/gokit/db"
 )
 
 func setupKV(t *testing.T, d *db.DB) {

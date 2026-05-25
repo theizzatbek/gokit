@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
+	"github.com/theizzatbek/gokit/fibermap"
 )
 
 func newTestApp(t *testing.T, h fiber.Handler, logger *slog.Logger) *fiber.App {

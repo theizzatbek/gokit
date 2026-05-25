@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 func TestSubstitutePath_Happy(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap/errs"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 // ErrorHandler returns a fiber.ErrorHandler that converts errors to JSON

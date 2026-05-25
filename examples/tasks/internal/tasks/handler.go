@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
-	"github.com/theizzatbek/fibermap/examples/tasks/internal/appctx"
+	"github.com/theizzatbek/gokit/examples/tasks/internal/appctx"
 )
 
 // Handler bundles store + validator + handler funcs so they're easy

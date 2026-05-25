@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	xerrs "github.com/theizzatbek/fibermap/errs"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 func TestConfig_Validate(t *testing.T) {
