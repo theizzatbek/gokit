@@ -23,7 +23,7 @@ import (
 func fastCfg() Config {
 	return Config{
 		Timeout:     500 * time.Millisecond,
-		MaxRetries:  0,
+		MaxRetries:  -1,
 		BackoffBase: time.Millisecond,
 		BackoffMax:  10 * time.Millisecond,
 	}

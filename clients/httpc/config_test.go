@@ -17,7 +17,8 @@ func TestConfig_Validate(t *testing.T) {
 		{"zero values are valid (defaults will kick in)", Config{}, ""},
 		{"only Timeout set", Config{Timeout: time.Second}, ""},
 		{"negative Timeout", Config{Timeout: -1}, CodeInvalidTimeout},
-		{"negative MaxRetries", Config{MaxRetries: -1}, CodeInvalidMaxRetries},
+		{"MaxRetries -1 is the disable sentinel", Config{MaxRetries: -1}, ""},
+		{"MaxRetries < -1 invalid", Config{MaxRetries: -2}, CodeInvalidMaxRetries},
 		{"BackoffBase negative", Config{BackoffBase: -1}, CodeInvalidBackoff},
 		{"BackoffMax < BackoffBase", Config{BackoffBase: 10 * time.Millisecond, BackoffMax: time.Millisecond}, CodeInvalidBackoff},
 		{"BackoffMax negative", Config{BackoffMax: -1}, CodeInvalidBackoff},
@@ -51,7 +52,9 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	if c.Timeout != 10*time.Second {
 		t.Errorf("Timeout = %v, want 10s", c.Timeout)
 	}
-	// MaxRetries deliberately stays at 0 (zero means "no retries").
+	if c.MaxRetries != 3 {
+		t.Errorf("MaxRetries = %d, want 3 (zero gets default)", c.MaxRetries)
+	}
 	if c.BackoffBase != 100*time.Millisecond {
 		t.Errorf("BackoffBase = %v, want 100ms", c.BackoffBase)
 	}
@@ -76,10 +79,13 @@ func TestConfig_ApplyDefaults_PreservesUserValues(t *testing.T) {
 	}
 }
 
-func TestConfig_MaxRetriesZero_Valid(t *testing.T) {
-	// MaxRetries: 0 explicitly disables retries — must NOT be rejected.
-	cfg := Config{MaxRetries: 0}
+func TestConfig_MaxRetriesNegativeOne_DisablesRetries(t *testing.T) {
+	cfg := Config{MaxRetries: -1}
 	if err := cfg.validate(); err != nil {
-		t.Fatalf("validate() = %v, want nil (MaxRetries:0 disables retries)", err)
+		t.Fatalf("validate() = %v, want nil (-1 is the disable sentinel)", err)
+	}
+	cfg.applyDefaults()
+	if cfg.MaxRetries != 0 {
+		t.Errorf("after applyDefaults: MaxRetries = %d, want 0 (mapped from -1)", cfg.MaxRetries)
 	}
 }
