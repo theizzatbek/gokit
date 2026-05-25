@@ -138,3 +138,75 @@ func atoi64(s string) int64 {
 }
 
 // RevokeFamily / RevokeSubject / GarbageCollect — Task 24.
+
+func (s *Store) RevokeFamily(ctx context.Context, familyID string) error {
+	members, err := s.c.SMembers(ctx, familyKey(familyID)).Result()
+	if err != nil {
+		return errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "redis family lookup failed")
+	}
+	if len(members) == 0 {
+		return nil
+	}
+	pipe := s.c.TxPipeline()
+	for _, m := range members {
+		pipe.HSet(ctx, "refresh:"+m, "revoked", "1")
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "redis family revoke failed")
+	}
+	return nil
+}
+
+func (s *Store) RevokeSubject(ctx context.Context, subject string) error {
+	members, err := s.c.SMembers(ctx, subjectKey(subject)).Result()
+	if err != nil {
+		return errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "redis subject lookup failed")
+	}
+	if len(members) == 0 {
+		return nil
+	}
+	pipe := s.c.TxPipeline()
+	for _, m := range members {
+		pipe.HSet(ctx, "refresh:"+m, "revoked", "1")
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "redis subject revoke failed")
+	}
+	return nil
+}
+
+// GarbageCollect is a best-effort sweeper for stale entries in family/subject
+// sets. The records themselves are already removed by Redis EXPIREAT; this
+// method just trims dangling set members. Returns the number of trimmed members.
+func (s *Store) GarbageCollect(ctx context.Context, now time.Time) (int64, error) {
+	var removed int64
+	// SCAN through all refresh:family:* and refresh:subject:* sets, drop members
+	// whose hash key no longer EXISTS.
+	for _, pattern := range []string{"refresh:family:*", "refresh:subject:*"} {
+		iter := s.c.Scan(ctx, 0, pattern, 100).Iterator()
+		for iter.Next(ctx) {
+			setKey := iter.Val()
+			members, err := s.c.SMembers(ctx, setKey).Result()
+			if err != nil {
+				return removed, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "redis gc smembers")
+			}
+			pipe := s.c.TxPipeline()
+			for _, m := range members {
+				if cnt, _ := s.c.Exists(ctx, "refresh:"+m).Result(); cnt == 0 {
+					pipe.SRem(ctx, setKey, m)
+					removed++
+				}
+			}
+			if _, err := pipe.Exec(ctx); err != nil {
+				return removed, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "redis gc srem")
+			}
+		}
+		if err := iter.Err(); err != nil {
+			return removed, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "redis gc scan")
+		}
+	}
+	return removed, nil
+}
+
+// Compile-time interface assertion.
+var _ auth.RefreshStore = (*Store)(nil)

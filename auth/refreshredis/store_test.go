@@ -163,6 +163,56 @@ func TestConsume_ReusedRevokesFamily(t *testing.T) {
 	assertCode(t, err2, auth.CodeRefreshReused)
 }
 
+func TestRevokeFamily_Redis(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	ctx := context.Background()
+	s := newStore(t)
+	now := time.Now().UTC()
+	fam := "44444444-4444-4444-4444-444444444444"
+	var h [32]byte
+	h[0] = 1
+	_ = s.Issue(ctx, auth.Record{TokenHash: h, FamilyID: fam, Subject: "u", IssuedAt: now, ExpiresAt: now.Add(time.Hour)})
+	if err := s.RevokeFamily(ctx, fam); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	_, err := s.Consume(ctx, h, now)
+	assertCode(t, err, auth.CodeRefreshReused)
+}
+
+func TestRevokeSubject_Redis(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	ctx := context.Background()
+	s := newStore(t)
+	now := time.Now().UTC()
+	var h [32]byte
+	h[0] = 1
+	_ = s.Issue(ctx, auth.Record{TokenHash: h, Subject: "u-1",
+		FamilyID: "55555555-5555-5555-5555-555555555555",
+		IssuedAt: now, ExpiresAt: now.Add(time.Hour)})
+	if err := s.RevokeSubject(ctx, "u-1"); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	_, err := s.Consume(ctx, h, now)
+	assertCode(t, err, auth.CodeRefreshReused)
+}
+
+func TestGarbageCollect_Redis(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	// Redis EXPIREAT already removes expired keys — GarbageCollect just reports
+	// a best-effort count by scanning the family/subject sets for stale entries.
+	ctx := context.Background()
+	s := newStore(t)
+	if _, err := s.GarbageCollect(ctx, time.Now()); err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+}
+
 func assertCode(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
