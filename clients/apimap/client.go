@@ -131,7 +131,7 @@ func Decode[Resp any](ctx context.Context, c *Client, endpoint string, call Call
 	if err != nil {
 		return zero, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	ep := c.endpoints[endpoint]
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		out, derr := decodeInto[Resp](resp, ep.decode)
@@ -159,7 +159,7 @@ func Exchange[Req, Resp any](ctx context.Context, c *Client, endpoint string, bo
 	if err != nil {
 		return zero, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		out, derr := decodeInto[Resp](resp, ep.decode)
 		if derr != nil {
