@@ -21,6 +21,7 @@ Each package can be adopted standalone. Together they take you from
 | `clients/httpc/` | Outbound `*http.Client` builder. Retry, per-attempt timeout, slog + Prometheus observability. |
 | `clients/apimap/` | Declarative outbound: describe upstream APIs in YAML, call them by name. Auth and `${ENV_VAR}` secrets in YAML. |
 | `clients/nats/` | Typed JetStream wrapper. Generic `Publisher[T]` / `Subscribe[T]`. Auto-ack handler model. |
+| `service/` | Optional all-in-one helper. `service.New(ctx, cfg)` bundles every other subpackage into a `Service[T, C]` runtime with auto-detect optionality, auto-mounted auth handlers, and the Bearer-optional layer fix. Shrinks `main.go` for typical services from ~270 → ~80 lines. |
 
 ## Dependency rules
 
