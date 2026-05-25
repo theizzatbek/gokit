@@ -238,3 +238,22 @@ func TestSubscribe_DecodeFailureTerms(t *testing.T) {
 	}
 	_ = si
 }
+
+func TestSubscribe_OptionsCompileAndApply(t *testing.T) {
+	c := newTestClient(t)
+	ctx := context.Background()
+	const stream = "TEST_SUB_OPTS"
+	t.Cleanup(func() { _ = c.DeleteStream(ctx, stream) })
+	_ = c.EnsureStream(ctx, StreamConfig{Name: stream, Subjects: []string{"subopts.>"}})
+
+	sub, err := Subscribe[orderCreated](ctx, c, "subopts.x",
+		func(_ context.Context, _ Msg[orderCreated]) error { return nil },
+		WithDurable("subopts-d1"),
+		WithStartFrom(StartNew()),
+		WithQueueGroup("g1"),
+	)
+	if err != nil {
+		t.Fatalf("Subscribe with options: %v", err)
+	}
+	_ = sub.Drain()
+}

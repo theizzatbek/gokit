@@ -66,6 +66,10 @@ type subOptions struct {
 	ackWait     time.Duration
 	maxDeliver  int
 	backoff     func(redeliveries int) time.Duration
+
+	startPolicy   StartPolicy
+	filterSubject string
+	queueGroup    string
 }
 
 // SubscribeOption configures Subscribe. Task 16 adds the rest.
@@ -96,6 +100,49 @@ func WithMaxDeliver(n int) SubscribeOption {
 // capped at 5 min). redeliveries is 1 on first Nak, 2 on second, etc.
 func WithBackoff(fn func(redeliveries int) time.Duration) SubscribeOption {
 	return func(o *subOptions) { o.backoff = fn }
+}
+
+// StartPolicy controls where a fresh consumer starts reading. Implementations
+// are sealed — use the constructors below.
+type StartPolicy interface{ startPolicy() }
+
+type startNew struct{}
+type startAll struct{}
+type startFromSeq struct{ seq uint64 }
+type startFromTime struct{ t time.Time }
+
+func (startNew) startPolicy()      {}
+func (startAll) startPolicy()      {}
+func (startFromSeq) startPolicy()  {}
+func (startFromTime) startPolicy() {}
+
+// StartNew — only deliver messages published after the consumer starts (default).
+func StartNew() StartPolicy { return startNew{} }
+
+// StartAll — replay every message currently in the stream, then go live.
+func StartAll() StartPolicy { return startAll{} }
+
+// StartFromSequence — start at a specific stream sequence number.
+func StartFromSequence(seq uint64) StartPolicy { return startFromSeq{seq: seq} }
+
+// StartFromTime — start at messages published at or after t.
+func StartFromTime(t time.Time) StartPolicy { return startFromTime{t: t} }
+
+// WithStartFrom configures the StartPolicy. Default StartNew.
+func WithStartFrom(p StartPolicy) SubscribeOption {
+	return func(o *subOptions) { o.startPolicy = p }
+}
+
+// WithFilterSubject narrows a subscription on a wildcard stream to a specific
+// subject. Empty = no filter.
+func WithFilterSubject(s string) SubscribeOption {
+	return func(o *subOptions) { o.filterSubject = s }
+}
+
+// WithQueueGroup load-balances delivery across subscribers in the same group.
+// Empty = no queue group.
+func WithQueueGroup(g string) SubscribeOption {
+	return func(o *subOptions) { o.queueGroup = g }
 }
 
 func defaultBackoff(redeliveries int) time.Duration {
@@ -141,18 +188,39 @@ func Subscribe[T any](
 	if o.durable != "" {
 		jsSubOpts = append(jsSubOpts, nats.Durable(o.durable))
 	}
+	if o.filterSubject != "" {
+		jsSubOpts = append(jsSubOpts, nats.ConsumerFilterSubjects(o.filterSubject))
+	}
+	switch p := o.startPolicy.(type) {
+	case startAll:
+		jsSubOpts = append(jsSubOpts, nats.DeliverAll())
+	case startFromSeq:
+		jsSubOpts = append(jsSubOpts, nats.StartSequence(p.seq))
+	case startFromTime:
+		jsSubOpts = append(jsSubOpts, nats.StartTime(p.t))
+	default:
+		jsSubOpts = append(jsSubOpts, nats.DeliverNew())
+	}
 
 	codec := c.opts.codec
 	logger := c.opts.logger
 	slots := make(chan struct{}, o.maxInFlight)
 
-	natsSub, err := c.js.Subscribe(subject, func(rawMsg *nats.Msg) {
+	handlerCB := func(rawMsg *nats.Msg) {
 		slots <- struct{}{}
 		go func() {
 			defer func() { <-slots }()
 			dispatchOne(ctx, codec, logger, handler, rawMsg, o.backoff)
 		}()
-	}, jsSubOpts...)
+	}
+
+	var natsSub *nats.Subscription
+	var err error
+	if o.queueGroup != "" {
+		natsSub, err = c.js.QueueSubscribe(subject, o.queueGroup, handlerCB, jsSubOpts...)
+	} else {
+		natsSub, err = c.js.Subscribe(subject, handlerCB, jsSubOpts...)
+	}
 	if err != nil {
 		return nil, xerrs.Wrap(err, xerrs.KindUnavailable, CodeConsumerOpFailed, "natsclient: subscribe")
 	}
