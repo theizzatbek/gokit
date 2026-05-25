@@ -1,8 +1,10 @@
 package httpc
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // fastCfg is a Config tuned for tight test timing.
@@ -42,6 +47,7 @@ func newRetryTransport(t *testing.T, cfg Config, opts ...Option) *retryTransport
 		backoffBase: cfg.BackoffBase,
 		backoffMax:  cfg.BackoffMax,
 		logger:      o.logger,
+		collectors:  newCollectors(o.metrics),
 	}
 }
 
@@ -477,6 +483,106 @@ func mustParseURL(t *testing.T, s string) *url.URL {
 		t.Fatal(err)
 	}
 	return u
+}
+
+func TestRetryTransport_LogsRetryDecisions(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&n, 1)
+		if count < 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg := fastCfg()
+	cfg.MaxRetries = 2
+	rt := newRetryTransport(t, cfg, WithLogger(logger))
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if !strings.Contains(buf.String(), "httpc retry") {
+		t.Errorf("log does not contain retry record: %s", buf.String())
+	}
+}
+
+func TestRetryTransport_LogsExhaustion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	cfg := fastCfg()
+	cfg.MaxRetries = 1
+	rt := newRetryTransport(t, cfg, WithLogger(logger))
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if !strings.Contains(buf.String(), "httpc retries exhausted") {
+		t.Errorf("log does not contain exhaustion record: %s", buf.String())
+	}
+}
+
+func TestRetryTransport_MetricsCounters(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&n, 1)
+		if count < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := prometheus.NewRegistry()
+	cfg := fastCfg()
+	cfg.MaxRetries = 3
+	rt := newRetryTransport(t, cfg, WithMetrics(reg))
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	got := testutil.ToFloat64(rt.collectors.retriesTotal.WithLabelValues("GET", "5xx"))
+	if got != 2 {
+		t.Errorf("retries_total{GET,5xx} = %v, want 2", got)
+	}
+}
+
+func TestRetryTransport_MetricsExhausted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	reg := prometheus.NewRegistry()
+	cfg := fastCfg()
+	cfg.MaxRetries = 1
+	rt := newRetryTransport(t, cfg, WithMetrics(reg))
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	got := testutil.ToFloat64(rt.collectors.retriesExhausted.WithLabelValues("GET"))
+	if got != 1 {
+		t.Errorf("retries_exhausted_total{GET} = %v, want 1", got)
+	}
 }
 
 func TestRetryTransport_MethodCaseInsensitive(t *testing.T) {

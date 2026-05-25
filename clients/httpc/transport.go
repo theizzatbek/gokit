@@ -146,6 +146,23 @@ func rewindBody(req *http.Request) error {
 	return nil
 }
 
+// classify maps a retry decision to the metric/log classification label.
+func classify(resp *http.Response, err error, ra time.Duration) string {
+	switch {
+	case ra > 0:
+		return "retry_after"
+	case err != nil || resp == nil:
+		return "network"
+	case resp.StatusCode == 408:
+		return "408"
+	case resp.StatusCode == 429:
+		return "429"
+	case resp.StatusCode >= 500:
+		return "5xx"
+	}
+	return "other"
+}
+
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	maxAttempts := t.maxRetries
 	if !isIdempotent(req.Method) {
@@ -169,6 +186,14 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			cancel()
 			if attempt >= maxAttempts {
+				if t.logger != nil {
+					t.logger.Warn("httpc retries exhausted",
+						"method", req.Method, "url", req.URL.String(),
+						"attempts", attempt+1, "err", err.Error())
+				}
+				if t.collectors != nil {
+					t.collectors.retriesExhausted.WithLabelValues(req.Method).Inc()
+				}
 				return nil, err
 			}
 			// If the body cannot be replayed, stop retrying and return the error.
@@ -176,6 +201,15 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				return nil, err
 			}
 			delay := computeBackoff(attempt, t.backoffBase, t.backoffMax)
+			if t.logger != nil {
+				t.logger.Debug("httpc retry",
+					"method", req.Method, "url", req.URL.String(),
+					"attempt", attempt, "delay_ms", delay.Milliseconds(),
+					"err", err.Error())
+			}
+			if t.collectors != nil {
+				t.collectors.retriesTotal.WithLabelValues(req.Method, "network").Inc()
+			}
 			if sleepErr := ctxSleep(req.Context(), delay); sleepErr != nil {
 				return nil, sleepErr
 			}
@@ -193,6 +227,14 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if attempt == maxAttempts {
 			// Exhausted: return drained response so callers can still inspect
 			// StatusCode/Headers.
+			if t.logger != nil {
+				t.logger.Warn("httpc retries exhausted",
+					"method", req.Method, "url", req.URL.String(),
+					"attempts", attempt+1, "status", resp.StatusCode)
+			}
+			if t.collectors != nil {
+				t.collectors.retriesExhausted.WithLabelValues(req.Method).Inc()
+			}
 			resp.Body = io.NopCloser(bytes.NewReader(nil))
 			return resp, nil
 		}
@@ -211,6 +253,16 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 		} else {
 			delay = computeBackoff(attempt, t.backoffBase, t.backoffMax)
+		}
+		class := classify(resp, nil, ra)
+		if t.logger != nil {
+			t.logger.Debug("httpc retry",
+				"method", req.Method, "url", req.URL.String(),
+				"attempt", attempt, "delay_ms", delay.Milliseconds(),
+				"status", resp.StatusCode, "reason", class)
+		}
+		if t.collectors != nil {
+			t.collectors.retriesTotal.WithLabelValues(req.Method, class).Inc()
 		}
 		if sleepErr := ctxSleep(req.Context(), delay); sleepErr != nil {
 			return nil, sleepErr
