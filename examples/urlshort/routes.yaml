@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/gokit/main/fibermap/schema/routes.schema.json
+
+# urlshort routes.
+#
+# Auth login/refresh/logout are mounted programmatically in main.go via
+# Engine.Add — they call into auth.LoginHandler / RefreshHandler /
+# LogoutHandler which expect *fiber.Ctx, not Context[AppCtx].
+#
+# `bearer` is a factory middleware registered by
+# auth/fibermount.MountMiddlewareFactories; empty args list means
+# "verify Bearer token, no extra scope/role check".
+
+groups:
+  - prefix: /auth
+    routes:
+      - method: POST
+        path: /register
+        handler: users.register
+        name: auth.register
+        tags: [auth]
+        summary: Register a new user
+
+  - prefix: /links
+    middleware:
+      - bearer: []
+    routes:
+      - method: POST
+        path: ""
+        handler: links.create
+        name: links.create
+        tags: [links]
+        summary: Shorten a URL
+      - method: GET
+        path: ""
+        handler: links.list
+        name: links.list
+        tags: [links]
+        summary: List my links
+      - method: GET
+        path: /:code/stats
+        handler: links.stats
+        name: links.stats
+        tags: [links]
+        summary: Visit stats for a link (owner only)
+      - method: DELETE
+        path: /:code
+        handler: links.delete
+        name: links.delete
+        tags: [links]
+        summary: Delete a link (owner only)
+
+  - prefix: ""
+    routes:
+      - method: GET
+        path: /:code
+        handler: links.redirect
+        name: links.redirect
+        tags: [redirect]
+        summary: Follow a short code (public 302)

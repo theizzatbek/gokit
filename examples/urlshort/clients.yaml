@@ -1,0 +1,12 @@
+clients:
+  - name: microlink
+    base_url: ${MICROLINK_BASE_URL}
+    timeout: 5s
+    max_retries: 2
+    default_headers:
+      Accept: application/json
+    endpoints:
+      - name: metadata
+        method: GET
+        path: /
+        decode: json
