@@ -124,8 +124,7 @@ func scanOne(row interface{ Scan(...any) error }) (auth.Record, bool, error) {
 	err := row.Scan(&tokenHash, &r.FamilyID, &parentHash, &r.Subject,
 		&r.IssuedAt, &r.ExpiresAt, &r.UserAgent, &ip)
 	if err != nil {
-		var e *errs.Error
-		if errors.As(err, &e) && e.Kind == errs.KindNotFound {
+		if e, ok := errors.AsType[*errs.Error](err); ok && e.Kind == errs.KindNotFound {
 			return auth.Record{}, false, nil
 		}
 		return auth.Record{}, false, err
@@ -136,4 +135,30 @@ func scanOne(row interface{ Scan(...any) error }) (auth.Record, bool, error) {
 	return r, true, nil
 }
 
-// RevokeSubject / GarbageCollect are added in Task 21.
+// RevokeSubject revokes every live token belonging to the subject. Idempotent.
+func (s *Store) RevokeSubject(ctx context.Context, subject string) error {
+	const q = `
+		UPDATE auth_refresh_tokens
+		SET    revoked_at = COALESCE(revoked_at, now())
+		WHERE  subject = $1
+		  AND  revoked_at IS NULL
+	`
+	if _, err := s.q.Exec(ctx, q, subject); err != nil {
+		return errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "refresh subject revoke failed")
+	}
+	return nil
+}
+
+// GarbageCollect deletes records with expires_at <= now. Returns the number of
+// rows removed.
+func (s *Store) GarbageCollect(ctx context.Context, now time.Time) (int64, error) {
+	const q = `DELETE FROM auth_refresh_tokens WHERE expires_at <= $1`
+	tag, err := s.q.Exec(ctx, q, now)
+	if err != nil {
+		return 0, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "refresh GC failed")
+	}
+	return tag.RowsAffected(), nil
+}
+
+// Compile-time interface assertion.
+var _ auth.RefreshStore = (*Store)(nil)

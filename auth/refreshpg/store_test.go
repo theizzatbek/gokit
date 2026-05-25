@@ -223,6 +223,69 @@ func TestConsume_ReusedRevokesFamily(t *testing.T) {
 	assertCode(t, err2, auth.CodeRefreshReused)
 }
 
+func TestRevokeFamily(t *testing.T) {
+	if testing.Short() || testDB == nil {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	_, _ = testDB.Exec(ctx, "TRUNCATE auth_refresh_tokens")
+	s := New(testDB)
+	now := time.Now().UTC()
+	fam := "44444444-4444-4444-4444-444444444444"
+	var h [32]byte
+	h[0] = 1
+	_ = s.Issue(ctx, auth.Record{TokenHash: h, FamilyID: fam, Subject: "u", IssuedAt: now, ExpiresAt: now.Add(time.Hour)})
+	if err := s.RevokeFamily(ctx, fam); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	_, err := s.Consume(ctx, h, now)
+	assertCode(t, err, auth.CodeRefreshReused)
+}
+
+func TestRevokeSubject(t *testing.T) {
+	if testing.Short() || testDB == nil {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	_, _ = testDB.Exec(ctx, "TRUNCATE auth_refresh_tokens")
+	s := New(testDB)
+	now := time.Now().UTC()
+	var h [32]byte
+	h[0] = 1
+	_ = s.Issue(ctx, auth.Record{TokenHash: h, Subject: "u-1",
+		FamilyID: "55555555-5555-5555-5555-555555555555",
+		IssuedAt: now, ExpiresAt: now.Add(time.Hour)})
+	if err := s.RevokeSubject(ctx, "u-1"); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	_, err := s.Consume(ctx, h, now)
+	assertCode(t, err, auth.CodeRefreshReused)
+}
+
+func TestGarbageCollect(t *testing.T) {
+	if testing.Short() || testDB == nil {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	_, _ = testDB.Exec(ctx, "TRUNCATE auth_refresh_tokens")
+	s := New(testDB)
+	now := time.Now().UTC()
+	var live, dead [32]byte
+	live[0] = 1
+	dead[0] = 2
+	_ = s.Issue(ctx, auth.Record{TokenHash: live, FamilyID: "66666666-6666-6666-6666-666666666666",
+		Subject: "u", IssuedAt: now, ExpiresAt: now.Add(time.Hour)})
+	_ = s.Issue(ctx, auth.Record{TokenHash: dead, FamilyID: "77777777-7777-7777-7777-777777777777",
+		Subject: "u", IssuedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(-time.Hour)})
+	n, err := s.GarbageCollect(ctx, now)
+	if err != nil {
+		t.Fatalf("gc: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("gc removed %d, want 1", n)
+	}
+}
+
 func assertCode(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil {
