@@ -226,3 +226,71 @@ func TestRetryTransport_NonRetryableStatusReturnedImmediately(t *testing.T) {
 		t.Errorf("server saw %d requests, want 1 (400 must not retry)", got)
 	}
 }
+
+func TestRetryTransport_NonIdempotentMethodSkipsRetry(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&n, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := fastCfg()
+	cfg.MaxRetries = 3
+	rt := newRetryTransport(t, cfg)
+	req, _ := http.NewRequest("POST", srv.URL, nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if got := atomic.LoadInt32(&n); got != 1 {
+		t.Errorf("server saw %d requests, want 1 (POST must not retry)", got)
+	}
+}
+
+func TestRetryTransport_NetworkErrorRetried(t *testing.T) {
+	// Listen on a port, free it to force connection refused on every attempt.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	cfg := fastCfg()
+	cfg.MaxRetries = 2
+	rt := newRetryTransport(t, cfg)
+	req, _ := http.NewRequest("GET", "http://"+addr, nil)
+	_, err = rt.RoundTrip(req)
+	if err == nil {
+		t.Fatal("RoundTrip succeeded, want network error after retries exhausted")
+	}
+	// We don't count attempts at the network layer here; the test verifies
+	// that the network-error path returns an error (not a panic) after
+	// the budget is exhausted. Attempt counting is covered via
+	// TestRetryTransport_ExhaustsRetries for the status path.
+}
+
+func TestRetryTransport_MethodCaseInsensitive(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&n, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := fastCfg()
+	cfg.MaxRetries = 2
+	rt := newRetryTransport(t, cfg)
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	req.Method = "get" // lowercase
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if got := atomic.LoadInt32(&n); got != 3 {
+		t.Errorf("server saw %d requests, want 3 (lowercase \"get\" must be classified idempotent)", got)
+	}
+}

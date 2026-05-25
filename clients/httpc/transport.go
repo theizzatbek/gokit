@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -35,6 +36,21 @@ func (b *cancelOnCloseBody) Close() error {
 	return err
 }
 
+// idempotentMethods is the hard-coded set of HTTP methods we retry.
+// POST and PATCH are excluded to avoid silent double-writes.
+var idempotentMethods = map[string]struct{}{
+	"GET":     {},
+	"HEAD":    {},
+	"PUT":     {},
+	"DELETE":  {},
+	"OPTIONS": {},
+}
+
+func isIdempotent(method string) bool {
+	_, ok := idempotentMethods[strings.ToUpper(method)]
+	return ok
+}
+
 // isRetryableStatus returns true for the hard-coded transient-failure set:
 // 408 Request Timeout, 429 Too Many Requests, 500/502/503/504 server errors.
 func isRetryableStatus(status int) bool {
@@ -46,7 +62,11 @@ func isRetryableStatus(status int) bool {
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	for attempt := 0; attempt <= t.maxRetries; attempt++ {
+	maxAttempts := t.maxRetries
+	if !isIdempotent(req.Method) {
+		maxAttempts = 0
+	}
+	for attempt := 0; attempt <= maxAttempts; attempt++ {
 		if err := req.Context().Err(); err != nil {
 			return nil, err
 		}
@@ -55,9 +75,10 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp, err := t.base.RoundTrip(attemptReq)
 		if err != nil {
 			cancel()
-			// Network errors are NOT retried in Task 6 — only retryable statuses.
-			// Task 7 will add network-error retry.
-			return nil, err
+			if attempt >= maxAttempts {
+				return nil, err
+			}
+			continue
 		}
 		if !isRetryableStatus(resp.StatusCode) {
 			resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
@@ -67,15 +88,13 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		cancel()
-		if attempt == t.maxRetries {
+		if attempt == maxAttempts {
 			// Exhausted: return drained response so callers can still inspect
 			// StatusCode/Headers.
 			resp.Body = io.NopCloser(bytes.NewReader(nil))
 			return resp, nil
 		}
 	}
-	// Unreachable: the for-loop runs attempts [0, maxRetries] and every
-	// iteration returns. The compiler can't see this; the panic guards
-	// against future refactors that might break the invariant.
+	// Unreachable: every loop iteration returns.
 	panic("httpc: unreachable")
 }
