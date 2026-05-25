@@ -16,6 +16,7 @@ import (
 
 	"github.com/theizzatbek/fibermap"
 	"github.com/theizzatbek/fibermap/auth"
+	"github.com/theizzatbek/fibermap/auth/fibermount"
 	"github.com/theizzatbek/fibermap/errs"
 )
 
@@ -126,13 +127,12 @@ func buildApp(logger *slog.Logger) (*fiber.App, error) {
 		return c.Status(http.StatusCreated).JSON(map[string]string{"status": "created"})
 	})
 
-	// Bridge auth's middleware factories (func([]any) (fiber.Handler, error))
-	// into fibermap's typed signature (func([]string) (MiddlewareFunc[T], error)).
-	// MountMiddlewareFactories targets a different signature — we register
-	// each by hand so the example does not depend on signature alignment.
-	fibermap.RegisterMiddlewareFactory(eng, "bearer", adaptFactory[appCtx](a.BearerFactory))
-	fibermap.RegisterMiddlewareFactory(eng, "require_scope", adaptFactory[appCtx](a.RequireScopeFactory))
-	fibermap.RegisterMiddlewareFactory(eng, "require_role", adaptFactory[appCtx](a.RequireRoleFactory))
+	// Bridge auth's middleware factories into fibermap's typed signature in
+	// one call. fibermount lives in its own subpackage so the core auth/
+	// package never imports fibermap.
+	if err := fibermount.MountMiddlewareFactories(eng, a); err != nil {
+		return nil, err
+	}
 
 	if err := eng.LoadBytes(routesYAML); err != nil {
 		return nil, err
@@ -148,25 +148,6 @@ func buildApp(logger *slog.Logger) (*fiber.App, error) {
 // the typed Data payload (e.g. the auth bundle's login/refresh/logout).
 func wrapFiber[T any](h fiber.Handler) fibermap.HandlerFunc[T] {
 	return func(c *fibermap.Context[T]) error { return h(c.Ctx) }
-}
-
-// adaptFactory bridges an auth-style factory ([]any → fiber.Handler) into a
-// fibermap-style factory ([]string → MiddlewareFunc[T]). YAML factory args
-// always arrive as []string; we promote them to []any for the auth factory,
-// then re-wrap the produced fiber.Handler so fibermap's per-request
-// Context[T] is unwrapped on entry.
-func adaptFactory[T any](f func([]any) (fiber.Handler, error)) fibermap.MiddlewareFactoryFunc[T] {
-	return func(args []string) (fibermap.MiddlewareFunc[T], error) {
-		anyArgs := make([]any, len(args))
-		for i, s := range args {
-			anyArgs[i] = s
-		}
-		h, err := f(anyArgs)
-		if err != nil {
-			return nil, err
-		}
-		return func(c *fibermap.Context[T]) error { return h(c.Ctx) }, nil
-	}
 }
 
 // memStore is a tiny in-memory auth.RefreshStore for the example. Production

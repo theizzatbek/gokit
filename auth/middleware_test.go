@@ -226,26 +226,3 @@ func TestRequireScopeFactory_AcceptsStrings(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
-
-type fakeRegistrar struct{ got map[string]fiber.Handler }
-
-func (f *fakeRegistrar) RegisterMiddlewareFactory(name string, fn func([]any) (fiber.Handler, error)) {
-	if f.got == nil {
-		f.got = map[string]fiber.Handler{}
-	}
-	h, _ := fn(nil)
-	f.got[name] = h
-}
-
-func TestMountMiddlewareFactories_RegistersAllThree(t *testing.T) {
-	a := mustNewAuth(t)
-	r := &fakeRegistrar{}
-	if err := a.MountMiddlewareFactories(r); err != nil {
-		t.Fatalf("Mount: %v", err)
-	}
-	for _, name := range []string{"bearer", "require_scope", "require_role"} {
-		if _, ok := r.got[name]; !ok {
-			t.Errorf("factory %q not registered", name)
-		}
-	}
-}

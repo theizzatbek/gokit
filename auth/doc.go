@@ -11,6 +11,8 @@
 //
 // Typical wiring:
 //
+//	import "github.com/theizzatbek/fibermap/auth/fibermount"
+//
 //	keys, _ := auth.GenerateEd25519Key("k1")
 //	store   := refreshpg.New(database)
 //	a, _    := auth.New[MyClaims](auth.Config{
@@ -18,7 +20,7 @@
 //	    Keys: keys, AccessTTL: 15*time.Minute, RefreshTTL: 30*24*time.Hour,
 //	}, auth.WithRefreshStore(store))
 //	a.SetCredentialsVerifier(myVerifier)
-//	a.MountMiddlewareFactories(eng)
+//	fibermount.MountMiddlewareFactories(eng, a)
 //	eng.RegisterHandler("auth.login",   a.LoginHandler)
 //	eng.RegisterHandler("auth.refresh", a.RefreshHandler)
 //	eng.RegisterHandler("auth.logout",  a.LogoutHandler)

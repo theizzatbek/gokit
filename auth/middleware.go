@@ -142,13 +142,6 @@ func containsString(haystack []string, needle string) bool {
 	return false
 }
 
-// MiddlewareFactoryRegistrar is matched by *fibermap.Engine[T].RegisterMiddlewareFactory.
-// auth/ declares it locally so the package does not import fibermap (which keeps
-// the dependency direction outward and makes testing easier — see auth_test.go).
-type MiddlewareFactoryRegistrar interface {
-	RegisterMiddlewareFactory(name string, fn func([]any) (fiber.Handler, error))
-}
-
 // BearerFactory adapts Bearer to fibermap's middleware-factory signature.
 // Accepts zero or one argument:
 //
@@ -213,14 +206,4 @@ func stringSliceArgs(name string, args []any) ([]string, error) {
 		out = append(out, s)
 	}
 	return out, nil
-}
-
-// MountMiddlewareFactories registers bearer / require_scope / require_role
-// on reg in one call. Names are fixed; for custom names call the individual
-// *Factory methods directly.
-func (a *Auth[C]) MountMiddlewareFactories(reg MiddlewareFactoryRegistrar) error {
-	reg.RegisterMiddlewareFactory("bearer", a.BearerFactory)
-	reg.RegisterMiddlewareFactory("require_scope", a.RequireScopeFactory)
-	reg.RegisterMiddlewareFactory("require_role", a.RequireRoleFactory)
-	return nil
 }
