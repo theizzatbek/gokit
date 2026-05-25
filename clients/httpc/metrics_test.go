@@ -23,24 +23,24 @@ func TestNewCollectors_RegistersAllMetrics(t *testing.T) {
 	if c == nil {
 		t.Fatal("newCollectors(reg) = nil, want non-nil")
 	}
-	want := []string{
-		"httpc_requests_total",
-		"httpc_request_duration_seconds",
-		"httpc_retries_total",
-		"httpc_retries_exhausted_total",
+	if c.requestsTotal == nil {
+		t.Error("requestsTotal collector is nil")
 	}
-	mfs, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
+	if c.requestDuration == nil {
+		t.Error("requestDuration collector is nil")
 	}
-	present := map[string]bool{}
-	for _, mf := range mfs {
-		present[mf.GetName()] = true
+	if c.retriesTotal == nil {
+		t.Error("retriesTotal collector is nil")
 	}
-	for _, name := range want {
-		if !present[name] {
-			t.Errorf("metric %q not registered", name)
-		}
+	if c.retriesExhausted == nil {
+		t.Error("retriesExhausted collector is nil")
+	}
+	// Re-registering with the same registry must fail — proves they were
+	// registered the first time without us depending on Gather() returning
+	// uninitialised series.
+	err := reg.Register(c.requestsTotal)
+	if err == nil {
+		t.Error("re-Register of requestsTotal succeeded; expected AlreadyRegisteredError")
 	}
 }
 

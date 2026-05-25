@@ -43,12 +43,6 @@ func newCollectors(reg prometheus.Registerer) *collectors {
 		}, []string{"method"}),
 	}
 	reg.MustRegister(c.requestsTotal, c.requestDuration, c.retriesTotal, c.retriesExhausted)
-	// Initialise at least one label-set per metric so Gather returns the
-	// metric families even before any request is made.
-	c.requestsTotal.WithLabelValues("GET", "200")
-	c.requestDuration.WithLabelValues("GET", "200")
-	c.retriesTotal.WithLabelValues("GET", "network")
-	c.retriesExhausted.WithLabelValues("GET")
 	return c
 }
 
