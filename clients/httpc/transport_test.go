@@ -336,6 +336,69 @@ func TestRetryTransport_ContextCancelDuringBackoff(t *testing.T) {
 	}
 }
 
+func TestRetryTransport_RetryAfterSeconds(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&n, 1)
+		if count == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := fastCfg()
+	cfg.MaxRetries = 1
+	rt := newRetryTransport(t, cfg)
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := atomic.LoadInt32(&n); got != 2 {
+		t.Errorf("server saw %d requests, want 2", got)
+	}
+}
+
+func TestRetryTransport_RetryAfterCapped(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&n, 1)
+		if count == 1 {
+			w.Header().Set("Retry-After", "9999")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := Config{
+		Timeout:     time.Second,
+		MaxRetries:  1,
+		BackoffBase: time.Millisecond,
+		BackoffMax:  10 * time.Millisecond,
+	}
+	rt := newRetryTransport(t, cfg)
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	start := time.Now()
+	resp, err := rt.RoundTrip(req)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("elapsed = %v, want < 200ms (Retry-After should be capped at 4*BackoffMax=40ms)", elapsed)
+	}
+}
+
 func TestRetryTransport_MethodCaseInsensitive(t *testing.T) {
 	var n int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -8,6 +8,7 @@ import (
 	"math"
 	mathrand "math/rand/v2"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -98,6 +99,31 @@ func isRetryableStatus(status int) bool {
 	return false
 }
 
+// retryAfter returns the duration the response advises waiting, or 0 if no
+// usable header is present. Cap is applied by the caller.
+func retryAfter(resp *http.Response) time.Duration {
+	if resp == nil {
+		return 0
+	}
+	h := resp.Header.Get("Retry-After")
+	if h == "" {
+		return 0
+	}
+	// Integer seconds form (RFC 7231 §7.1.3).
+	if secs, err := strconv.Atoi(h); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second
+	}
+	// HTTP-date form.
+	if when, err := http.ParseTime(h); err == nil {
+		d := time.Until(when)
+		if d < 0 {
+			return 0
+		}
+		return d
+	}
+	return 0
+}
+
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	maxAttempts := t.maxRetries
 	if !isIdempotent(req.Method) {
@@ -126,6 +152,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return resp, nil
 		}
 		// Retryable status: drain + close body, release per-attempt ctx.
+		ra := retryAfter(resp)
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		cancel()
@@ -135,7 +162,17 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			resp.Body = io.NopCloser(bytes.NewReader(nil))
 			return resp, nil
 		}
-		delay := computeBackoff(attempt, t.backoffBase, t.backoffMax)
+		var delay time.Duration
+		if ra > 0 {
+			maxDelay := 4 * t.backoffMax
+			if ra > maxDelay {
+				delay = maxDelay
+			} else {
+				delay = ra
+			}
+		} else {
+			delay = computeBackoff(attempt, t.backoffBase, t.backoffMax)
+		}
 		if sleepErr := ctxSleep(req.Context(), delay); sleepErr != nil {
 			return nil, sleepErr
 		}
