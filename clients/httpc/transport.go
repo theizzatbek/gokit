@@ -66,8 +66,8 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		// Retryable status: drain + close body, release per-attempt ctx,
 		// loop or exit.
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 		cancel()
 		lastResp = resp
 		if attempt >= t.maxRetries {
