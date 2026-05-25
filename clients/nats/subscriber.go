@@ -3,6 +3,7 @@ package natsclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -10,6 +11,34 @@ import (
 
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
+
+// ErrPoison is wrapped by SubscribeRaw handlers to indicate the message
+// is unrecoverable — the dispatcher will Term it (no redelivery) rather
+// than Nak. Use errors.Is(err, ErrPoison) to test.
+var ErrPoison = errors.New("natsclient: poison pill")
+
+// RawMsg is the non-generic delivery surfaced to SubscribeRaw handlers.
+// Body is the codec-undecoded payload; metadata mirrors Msg[T].
+type RawMsg struct {
+	Subject      string
+	Body         []byte
+	Headers      map[string][]string
+	Sequence     uint64
+	Redeliveries int
+	Reply        string
+	Timestamp    time.Time
+	raw          *nats.Msg
+}
+
+// Raw returns the underlying *nats.Msg.
+func (m *RawMsg) Raw() *nats.Msg { return m.raw }
+
+// RawHandler is the non-generic message handler. Returned-error semantics:
+//
+//	nil                          → Ack
+//	errors.Is(err, ErrPoison)    → Term (no redelivery)
+//	any other error              → Nak with backoff
+type RawHandler func(ctx context.Context, m *RawMsg) error
 
 // Msg is what a Subscribe handler receives — the decoded payload plus JetStream
 // metadata. Use Raw() to escape into the underlying *nats.Msg for cases the
@@ -153,13 +182,13 @@ func defaultBackoff(redeliveries int) time.Duration {
 	return d
 }
 
-// Subscribe binds a typed handler to subject. The subject must belong to a
-// stream you EnsureStream'd. Returns a *Subscription — Drain on shutdown.
-func Subscribe[T any](
+// SubscribeRaw binds a non-generic handler. Subscribe[T] is built on
+// top of this and provides the typed decoding layer.
+func SubscribeRaw(
 	ctx context.Context,
 	c *Client,
 	subject string,
-	handler Handler[T],
+	handler RawHandler,
 	opts ...SubscribeOption,
 ) (*Subscription, error) {
 	streamName, err := c.js.StreamNameBySubject(subject)
@@ -203,7 +232,6 @@ func Subscribe[T any](
 		jsSubOpts = append(jsSubOpts, nats.DeliverNew())
 	}
 
-	codec := c.opts.codec
 	logger := c.opts.logger
 	metrics := c.metrics
 	slots := make(chan struct{}, o.maxInFlight)
@@ -212,7 +240,7 @@ func Subscribe[T any](
 		slots <- struct{}{}
 		go func() {
 			defer func() { <-slots }()
-			dispatchOne(ctx, codec, logger, metrics, handler, rawMsg, o.backoff)
+			dispatchRaw(ctx, logger, metrics, handler, rawMsg, o.backoff)
 		}()
 	}
 
@@ -230,14 +258,52 @@ func Subscribe[T any](
 	return &Subscription{natsSub: natsSub}, nil
 }
 
-// dispatchOne handles a single delivery: decode → call handler → ack/nak/term.
-// Decode failures Term the message (poison pill) and log at Error level.
-func dispatchOne[T any](
+// Subscribe binds a typed handler to subject. Calls SubscribeRaw with a
+// typed shim that uses the client's codec to decode the body into T.
+// Decode failure logs at Error level and returns ErrPoison-wrapped err,
+// causing SubscribeRaw to Term the message.
+func Subscribe[T any](
 	ctx context.Context,
-	codec Codec,
+	c *Client,
+	subject string,
+	handler Handler[T],
+	opts ...SubscribeOption,
+) (*Subscription, error) {
+	codec := c.opts.codec
+	logger := c.opts.logger
+	metrics := c.metrics
+	shim := func(ctx context.Context, m *RawMsg) error {
+		var data T
+		if err := codec.Unmarshal(m.Body, &data); err != nil {
+			if logger != nil {
+				logger.Error("nats decode failed", "subject", m.Subject, "err", err)
+			}
+			if metrics != nil {
+				metrics.IncHandlerDecodeError(m.Subject)
+			}
+			return fmt.Errorf("natsclient: decode: %w: %s", ErrPoison, err.Error())
+		}
+		return handler(ctx, Msg[T]{
+			Data:         data,
+			Subject:      m.Subject,
+			Headers:      m.Headers,
+			Sequence:     m.Sequence,
+			Redeliveries: m.Redeliveries,
+			Reply:        m.Reply,
+			Timestamp:    m.Timestamp,
+			raw:          m.raw,
+		})
+	}
+	return SubscribeRaw(ctx, c, subject, shim, opts...)
+}
+
+// dispatchRaw handles a single delivery: build RawMsg → call handler →
+// ack/nak/term based on returned error.
+func dispatchRaw(
+	ctx context.Context,
 	logger *slog.Logger,
 	metrics *metricsCollector,
-	handler Handler[T],
+	handler RawHandler,
 	rawMsg *nats.Msg,
 	backoff func(redeliveries int) time.Duration,
 ) {
@@ -245,23 +311,9 @@ func dispatchOne[T any](
 		metrics.IncInFlight(rawMsg.Subject)
 		defer metrics.DecInFlight(rawMsg.Subject)
 	}
-	var data T
-	if err := codec.Unmarshal(rawMsg.Data, &data); err != nil {
-		if logger != nil {
-			logger.Error("nats decode failed",
-				"subject", rawMsg.Subject,
-				"err", err,
-			)
-		}
-		if metrics != nil {
-			metrics.IncHandlerDecodeError(rawMsg.Subject)
-		}
-		_ = rawMsg.Term()
-		return
-	}
-	msg := Msg[T]{
-		Data:    data,
+	msg := &RawMsg{
 		Subject: rawMsg.Subject,
+		Body:    rawMsg.Data,
 		Headers: map[string][]string(rawMsg.Header),
 		Reply:   rawMsg.Reply,
 		raw:     rawMsg,
@@ -272,19 +324,24 @@ func dispatchOne[T any](
 		msg.Timestamp = md.Timestamp
 	}
 	start := time.Now()
-	if err := handler(ctx, msg); err != nil {
+	err := handler(ctx, msg)
+	if err == nil {
 		if metrics != nil {
-			metrics.IncHandlerError(rawMsg.Subject)
+			metrics.IncHandlerSuccess(rawMsg.Subject)
 			metrics.ObserveHandler(rawMsg.Subject, time.Since(start).Seconds())
 		}
-		_ = rawMsg.NakWithDelay(backoff(msg.Redeliveries + 1))
+		_ = rawMsg.Ack()
+		return
+	}
+	if errors.Is(err, ErrPoison) {
+		_ = rawMsg.Term()
 		return
 	}
 	if metrics != nil {
-		metrics.IncHandlerSuccess(rawMsg.Subject)
+		metrics.IncHandlerError(rawMsg.Subject)
 		metrics.ObserveHandler(rawMsg.Subject, time.Since(start).Seconds())
 	}
-	_ = rawMsg.Ack()
+	_ = rawMsg.NakWithDelay(backoff(msg.Redeliveries + 1))
 }
 
 // detectConsumerDrift logs a Warn if an existing durable consumer for stream/durable
