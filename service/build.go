@@ -142,7 +142,13 @@ func (s *Service[T, C]) buildAPIMap() error {
 	if s.opts.apimapRegistration != nil {
 		s.opts.apimapRegistration(eng)
 	}
-	apimapOpts := append([]apimap.Option{apimap.WithLogger(s.logger), apimap.WithMetrics(s.metrics)}, s.opts.apimapOpts...)
+	// Do NOT auto-pass WithMetrics — apimap.Build constructs its own
+	// inner *http.Client per upstream which would re-register the same
+	// httpc_* collectors we already registered on the top-level HTTPC,
+	// panicking the shared registry. Users who want per-upstream
+	// metrics pass apimap.WithMetrics via WithAPIMapOptions with a
+	// dedicated Registerer.
+	apimapOpts := append([]apimap.Option{apimap.WithLogger(s.logger)}, s.opts.apimapOpts...)
 	c, err := eng.Build(apimapOpts...)
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation, CodeAPIMapLoadFailed, "service: apimap build failed")
