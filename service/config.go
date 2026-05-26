@@ -36,10 +36,20 @@ type Config struct {
 }
 
 // ServiceConfig — server + logging knobs.
+//
+// NodeName identifies the running instance in multi-node deployments;
+// it defaults to os.Hostname() when unset and flows to
+// natsclient.Config.Name (when NATS.Name is not explicit) and to slog
+// default attrs as "node". ServerGroup labels a cluster of nodes that
+// share work via the same queue groups; when set, natsmap auto-derived
+// subscriber queue groups are suffixed with this value and the logger
+// gains a "server_group" default attr.
 type ServiceConfig struct {
-	Addr      string `env:"ADDR"       envDefault:":3000"`
-	LogLevel  string `env:"LOG_LEVEL"  envDefault:"info"`
-	LogFormat string `env:"LOG_FORMAT" envDefault:"json"` // json | text
+	Addr        string `env:"ADDR"         envDefault:":3000"`
+	LogLevel    string `env:"LOG_LEVEL"    envDefault:"info"`
+	LogFormat   string `env:"LOG_FORMAT"   envDefault:"json"` // json | text
+	NodeName    string `env:"NODE_NAME"`
+	ServerGroup string `env:"SERVER_GROUP"`
 }
 
 // AuthConfig — JWT signing material + TTLs. PrivateKeyPEM is the

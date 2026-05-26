@@ -8,7 +8,11 @@ import (
 
 // newLogger builds a *slog.Logger from the format/level strings in
 // ServiceConfig. Unknown level → Info. Unknown format → JSON.
-func newLogger(format, level string) *slog.Logger {
+//
+// nodeName and serverGroup, when non-empty, are added as default attrs
+// (node, server_group) so every log line is identifiable in multi-node
+// deployments.
+func newLogger(format, level, nodeName, serverGroup string) *slog.Logger {
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(level)); err != nil {
 		lvl = slog.LevelInfo
@@ -21,5 +25,12 @@ func newLogger(format, level string) *slog.Logger {
 	default:
 		h = slog.NewJSONHandler(os.Stdout, opts)
 	}
-	return slog.New(h)
+	l := slog.New(h)
+	if nodeName != "" {
+		l = l.With("node", nodeName)
+	}
+	if serverGroup != "" {
+		l = l.With("server_group", serverGroup)
+	}
+	return l
 }

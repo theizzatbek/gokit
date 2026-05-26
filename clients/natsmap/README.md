@@ -168,6 +168,84 @@ e.LoadFile("subscribers.yaml")
 
 Map consulted first; on miss falls back to `os.LookupEnv`. Both miss → `natsmap_env_var_unset`.
 
+## Streams declaration
+
+natsmap can ensure JetStream streams alongside the subscribers and
+publishers that use them. Two shapes:
+
+### Explicit list
+
+```yaml
+streams:
+  - name: ORDERS
+    subjects: [orders.>]
+    storage: file              # file (default) | memory
+    retention: limits          # limits (default) | interest | work_queue
+    max_age: 168h
+    max_bytes: 0               # bytes; 0 = unlimited
+    max_msgs: 0
+    replicas: 1
+    dedup: 2m
+```
+
+### Auto-derive from subjects
+
+```yaml
+streams: auto
+
+publishers:
+  - { name: orders_out, subject: orders.created }
+```
+
+`streams: auto` walks subscriber + publisher subjects, groups by first
+segment (`orders.created` → `orders`), and creates one stream per
+group with wildcard subjects (`orders.>`) and safe defaults (file
+storage, limits retention, unlimited age).
+
+For production, prefer the explicit list — defaults are not tuned
+(no MaxAge, no Replicas > 1). `auto` is great for dev and examples.
+
+Combining `auto` and an explicit list in the same engine →
+`natsmap_streams_auto_conflict` error at Build.
+
+## Multi-node behaviour
+
+When the same service runs on N instances, subscriber defaults must
+avoid two instances fighting over the same durable consumer. natsmap
+applies these rules:
+
+| YAML `durable` | YAML `queue_group` | Effective `durable` | Effective `queue_group` |
+|---|---|---|---|
+| `""` (omitted) | `""` (omitted) | `name` | `name` (+ ServerGroup suffix) |
+| `""` | `"workers"` | `name` | `workers` (explicit wins) |
+| `"foo"` | `""` | `foo` | `""` (user controls durable) |
+| `"foo"` | `"bar"` | `foo` | `bar` |
+| `"ephemeral"` | `""` | `""` (true ephemeral) | `""` |
+| `"ephemeral"` | `"bar"` | `""` | `bar` |
+
+**Default = load-balanced**: subscriber with no explicit config gets a
+durable consumer bound to a queue group both named after the
+subscriber. N instances → N consumers in the same queue group → each
+message goes to exactly one.
+
+**Broadcast = explicit ephemeral**: `durable: ephemeral` opts each
+instance into its own ephemeral consumer. Every instance sees every
+message.
+
+### ServerGroup pattern (cross-region)
+
+Set `service.WithServerGroup("dc1")` (or `SERVICE_SERVER_GROUP=dc1`
+env) to suffix auto-derived queue groups:
+
+```
+subscriber name = invoice_sender
+ServerGroup     = dc1
+queue group     = invoice_sender-dc1
+```
+
+Instances in DC1 form `invoice_sender-dc1` queue group; DC2 instances
+form `invoice_sender-dc2`. Each region processes events independently.
+
 ### `start_from` shapes
 
 | Value | Meaning |

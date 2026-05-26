@@ -33,6 +33,9 @@ type Engine struct {
 
 	envMap map[string]string // nil = no overrides; LoadBytes builds composite lookup
 
+	streams     rawStreamsBlock
+	serverGroup string
+
 	built bool
 }
 
@@ -58,6 +61,18 @@ type EngineOption func(*Engine)
 // map is a no-op (falls back to os.LookupEnv for every key).
 func WithEnv(m map[string]string) EngineOption {
 	return func(e *Engine) { e.envMap = m }
+}
+
+// WithServerGroup sets the server group label used for auto-suffixing
+// subscriber queue groups. When set, an auto-derived queue group
+// (empty durable + empty queue_group in YAML) becomes
+// "<subscriber-name>-<server-group>" instead of just
+// "<subscriber-name>". Lets the same service deployed across N regions
+// process events independently per region.
+//
+// Explicit YAML queue_group values are NOT suffixed.
+func WithServerGroup(group string) EngineOption {
+	return func(e *Engine) { e.serverGroup = group }
 }
 
 // New returns an empty Engine.
@@ -93,6 +108,10 @@ func (e *Engine) LoadBytes(b []byte) error {
 	}
 	e.subscribers = append(e.subscribers, cfg.Subscribers...)
 	e.publishers = append(e.publishers, cfg.Publishers...)
+	if cfg.Streams.Auto {
+		e.streams.Auto = true
+	}
+	e.streams.List = append(e.streams.List, cfg.Streams.List...)
 	return nil
 }
 
@@ -186,7 +205,7 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 		return nil, xerrs.Validation(CodeAlreadyBuilt,
 			"natsmap: Engine.Build called twice")
 	}
-	cfg := &rawConfig{Subscribers: e.subscribers, Publishers: e.publishers}
+	cfg := &rawConfig{Subscribers: e.subscribers, Publishers: e.publishers, Streams: e.streams}
 	if err := cfg.validate(e.handlerNameSet(), e.publisherNameSet()); err != nil {
 		return nil, err
 	}
@@ -200,6 +219,23 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 		publishers: map[string]publishShim{},
 	}
 
+	// Resolve streams: explicit list OR auto-derived from subjects.
+	streamsToEnsure := e.streams.List
+	if e.streams.Auto {
+		streamsToEnsure = deriveStreamsFromSubjects(e.subscribers, e.publishers)
+	}
+	for i := range streamsToEnsure {
+		s := &streamsToEnsure[i]
+		streamCfg, err := buildStreamConfig(s)
+		if err != nil {
+			return nil, err
+		}
+		if err := c.EnsureStream(ctx, streamCfg); err != nil {
+			return nil, xerrs.Wrapf(err, xerrs.KindUnavailable,
+				CodeEnsureStreamFailed, "natsmap: ensure stream %q", s.Name)
+		}
+	}
+
 	// Subscribers
 	codec := c.Codec()
 	var buildErrs []error
@@ -207,7 +243,8 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 		s := &e.subscribers[i]
 		handlerFn := e.handlerFns[s.Name]
 		handlerType := e.handlerTypes[s.Name]
-		subOpts, sferr := buildSubscribeOptions(s)
+		durable, queueGroup := resolveDurableQueueGroup(s, e.serverGroup)
+		subOpts, sferr := buildSubscribeOptions(s, durable, queueGroup)
 		if sferr != nil {
 			buildErrs = append(buildErrs, sferr)
 			continue
@@ -284,12 +321,49 @@ func makeRawHandler(t reflect.Type, codec natsclient.Codec,
 	}
 }
 
+// resolveDurableQueueGroup applies the auto-default rules described in
+// the multi-node README section:
+//
+//	durable=""           → durable = sub.Name
+//	durable="ephemeral"  → durable = "" (true ephemeral)
+//	durable=other        → durable = other (unchanged)
+//
+//	if durable was auto-derived AND queue_group is empty:
+//	    queue_group = sub.Name (+ "-" + serverGroup if non-empty)
+//
+// Explicit queue_group is never suffixed; explicit durable does NOT
+// trigger queue_group auto-derive (user controls durable → user
+// controls qg).
+func resolveDurableQueueGroup(s *rawSubscriber, serverGroup string) (durable, queueGroup string) {
+	durable = s.Durable
+	queueGroup = s.QueueGroup
+
+	autoDurable := false
+	if durable == "" {
+		durable = s.Name
+		autoDurable = true
+	} else if durable == "ephemeral" {
+		durable = ""
+	}
+
+	if autoDurable && queueGroup == "" {
+		queueGroup = s.Name
+		if serverGroup != "" {
+			queueGroup += "-" + serverGroup
+		}
+	}
+	return durable, queueGroup
+}
+
 // buildSubscribeOptions translates a rawSubscriber into the
-// natsclient.SubscribeOption list.
-func buildSubscribeOptions(s *rawSubscriber) ([]natsclient.SubscribeOption, error) {
+// natsclient.SubscribeOption list. durable and queueGroup are
+// pre-resolved by resolveDurableQueueGroup (applying auto-default and
+// ServerGroup-suffix rules); buildSubscribeOptions reads neither
+// s.Durable nor s.QueueGroup directly.
+func buildSubscribeOptions(s *rawSubscriber, durable, queueGroup string) ([]natsclient.SubscribeOption, error) {
 	var opts []natsclient.SubscribeOption
-	if s.Durable != "" {
-		opts = append(opts, natsclient.WithDurable(s.Durable))
+	if durable != "" {
+		opts = append(opts, natsclient.WithDurable(durable))
 	}
 	if s.MaxInFlight > 0 {
 		opts = append(opts, natsclient.WithMaxInFlight(s.MaxInFlight))
@@ -300,8 +374,8 @@ func buildSubscribeOptions(s *rawSubscriber) ([]natsclient.SubscribeOption, erro
 	if s.AckWait > 0 {
 		opts = append(opts, natsclient.WithAckWait(s.AckWait))
 	}
-	if s.QueueGroup != "" {
-		opts = append(opts, natsclient.WithQueueGroup(s.QueueGroup))
+	if queueGroup != "" {
+		opts = append(opts, natsclient.WithQueueGroup(queueGroup))
 	}
 	if s.FilterSubject != "" {
 		opts = append(opts, natsclient.WithFilterSubject(s.FilterSubject))
@@ -328,17 +402,17 @@ func buildBackoffFn(b *rawBackoff) func(int) time.Duration {
 		return func(int) time.Duration { return base }
 	}
 	base := b.Base
-	max := b.Max
-	if max <= 0 {
-		max = base * 32
+	maxBackoff := b.Max
+	if maxBackoff <= 0 {
+		maxBackoff = base * 32
 	}
 	return func(redeliveries int) time.Duration {
 		if redeliveries < 1 {
 			return base
 		}
 		d := base << (redeliveries - 1)
-		if d > max || d <= 0 {
-			return max
+		if d > maxBackoff || d <= 0 {
+			return maxBackoff
 		}
 		return d
 	}
@@ -369,4 +443,83 @@ func parseStartPolicy(s string) (natsclient.StartPolicy, error) {
 	}
 	return nil, xerrs.Validationf(CodeInvalidStartFrom,
 		"natsmap: start_from %q invalid", s)
+}
+
+// buildStreamConfig translates rawStream → natsclient.StreamConfig.
+// Returns *errs.Error for invalid storage / retention values.
+func buildStreamConfig(s *rawStream) (natsclient.StreamConfig, error) {
+	cfg := natsclient.StreamConfig{
+		Name:     s.Name,
+		Subjects: s.Subjects,
+		MaxAge:   s.MaxAge,
+		MaxBytes: s.MaxBytes,
+		MaxMsgs:  s.MaxMsgs,
+		Replicas: s.Replicas,
+		Dedup:    s.Dedup,
+	}
+	switch strings.ToLower(s.Storage) {
+	case "", "file":
+		cfg.Storage = natsclient.StorageFile
+	case "memory":
+		cfg.Storage = natsclient.StorageMemory
+	default:
+		return cfg, xerrs.Validationf(CodeStreamInvalidStorage,
+			"natsmap: stream %q storage %q invalid", s.Name, s.Storage)
+	}
+	switch strings.ToLower(s.Retention) {
+	case "", "limits":
+		cfg.Retention = natsclient.RetentionLimits
+	case "interest":
+		cfg.Retention = natsclient.RetentionInterest
+	case "work_queue":
+		cfg.Retention = natsclient.RetentionWorkQueue
+	default:
+		return cfg, xerrs.Validationf(CodeStreamInvalidRetention,
+			"natsmap: stream %q retention %q invalid", s.Name, s.Retention)
+	}
+	return cfg, nil
+}
+
+// deriveStreamsFromSubjects walks subscriber + publisher subjects, groups
+// by the first segment (text before the first dot), and returns one
+// rawStream per group. Used by Engine.Build when `streams: auto` is set.
+//
+// Conventions:
+//   - Group key = first segment (e.g. "orders.created" → "orders").
+//   - Stream name = uppercase group key.
+//   - Subjects = ["<group>.>"] for dotted inputs; for inputs without
+//     dots, the literal subject is used.
+//   - Defaults: Storage=File, Retention=Limits, MaxAge=0 (set by
+//     buildStreamConfig from zero values).
+func deriveStreamsFromSubjects(subs []rawSubscriber, pubs []rawPublisher) []rawStream {
+	groups := map[string]string{} // group key (lowercase first segment) → subject pattern
+	collect := func(subject string) {
+		if subject == "" {
+			return
+		}
+		dot := strings.IndexByte(subject, '.')
+		if dot < 0 {
+			groups[subject] = subject // literal fallback
+			return
+		}
+		segment := subject[:dot]
+		groups[segment] = segment + ".>"
+	}
+	for _, s := range subs {
+		collect(s.Subject)
+	}
+	for _, p := range pubs {
+		collect(p.Subject)
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	out := make([]rawStream, 0, len(groups))
+	for segment, subject := range groups {
+		out = append(out, rawStream{
+			Name:     strings.ToUpper(segment),
+			Subjects: []string{subject},
+		})
+	}
+	return out
 }

@@ -1,0 +1,7 @@
+streams:
+  - name: ORDERS
+    subjects: [orders.>]
+    storage: file
+    retention: limits
+    max_age: 168h
+    replicas: 1

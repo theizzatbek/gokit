@@ -36,6 +36,11 @@ func TestValidate_InvalidFixtures(t *testing.T) {
 		{"testdata/invalid_ack_wait.yaml", CodeInvalidAckWait},
 		{"testdata/invalid_backoff.yaml", CodeInvalidBackoff},
 		{"testdata/invalid_start_from.yaml", CodeInvalidStartFrom},
+		{"testdata/invalid_stream_missing_name.yaml", CodeStreamMissingName},
+		{"testdata/invalid_stream_missing_subjects.yaml", CodeStreamMissingSubjects},
+		{"testdata/invalid_stream_duplicate_name.yaml", CodeStreamDuplicateName},
+		{"testdata/invalid_stream_storage.yaml", CodeStreamInvalidStorage},
+		{"testdata/invalid_stream_retention.yaml", CodeStreamInvalidRetention},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -75,6 +80,40 @@ func TestParseBytes_PublishersFixture(t *testing.T) {
 	}
 	if got, want := cfg.Publishers[0].Headers["X-Source"], "invoice-svc"; got != want {
 		t.Fatalf("header X-Source: got %q want %q", got, want)
+	}
+}
+
+func TestParseBytes_StreamsExplicit(t *testing.T) {
+	b, err := os.ReadFile("testdata/streams_explicit.yaml")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	cfg, err := parseBytes(b, nil)
+	if err != nil {
+		t.Fatalf("parseBytes: %v", err)
+	}
+	if cfg.Streams.Auto {
+		t.Fatal("expected Auto=false")
+	}
+	if len(cfg.Streams.List) != 1 || cfg.Streams.List[0].Name != "ORDERS" {
+		t.Fatalf("streams: %+v", cfg.Streams)
+	}
+}
+
+func TestParseBytes_StreamsAuto(t *testing.T) {
+	b, err := os.ReadFile("testdata/streams_auto.yaml")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	cfg, err := parseBytes(b, nil)
+	if err != nil {
+		t.Fatalf("parseBytes: %v", err)
+	}
+	if !cfg.Streams.Auto {
+		t.Fatal("expected Auto=true")
+	}
+	if len(cfg.Streams.List) != 0 {
+		t.Fatalf("expected empty List, got %+v", cfg.Streams.List)
 	}
 }
 

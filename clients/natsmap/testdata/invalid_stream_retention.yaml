@@ -1,0 +1,2 @@
+streams:
+  - { name: X, subjects: [x.>], retention: bizarre }

@@ -1,0 +1,4 @@
+streams: auto
+publishers:
+  - name: orders_out
+    subject: orders.created
