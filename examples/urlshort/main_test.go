@@ -99,19 +99,8 @@ func TestSmoke_EndToEnd(t *testing.T) {
 
 	fetcher := enrich.NewFetcher(svc.HTTPC, svc.APIMap, svc.Logger())
 	usersSvc := users.NewService(svc.DB, svc.Hasher)
-	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata,
-		func(ctx context.Context, l links.Link) {
-			events.PublishCreated(ctx, svc.NATSMap, svc.Logger(), events.LinkCreated{
-				LinkID: l.ID, UserID: l.UserID, Code: l.Code,
-				URL: l.OriginalURL, Title: l.Title, CreatedAt: l.CreatedAt,
-			})
-		},
-		func(ctx context.Context, code, ua, ip string) {
-			events.PublishVisited(ctx, svc.NATSMap, svc.Logger(), events.LinkVisited{
-				Code: code, VisitedAt: time.Now(), UserAgent: ua, IP: ip,
-			})
-		},
-	)
+	pub := events.NewPublisher(svc.NATSMap, svc.Logger())
+	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub)
 	svc.SetContextBuilder(appctx.NewContextBuilder(svc.Auth, svc.Logger()))
 	users.RegisterHandlers(svc.Engine, usersSvc, svc.Auth)
 	links.RegisterHandlers(svc.Engine, linksSvc, cfg.ShortURLBase)
