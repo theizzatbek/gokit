@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -96,6 +97,10 @@ func (s *Service[T, C]) buildDB(ctx context.Context) error {
 	if s.cfg.DB.User == "" {
 		return nil
 	}
+	applyConnectRetryDefaults(s.opts.skipConnectRetry,
+		&s.cfg.DB.ConnectMaxRetries,
+		&s.cfg.DB.ConnectBackoffBase,
+		&s.cfg.DB.ConnectBackoffMax)
 	d, err := db.Connect(ctx, s.cfg.DB, db.WithLogger(s.logger))
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeDBConnectFailed, "service: db connect failed")
@@ -175,12 +180,22 @@ func (s *Service[T, C]) buildNATS(ctx context.Context) error {
 	if s.cfg.NATS.URL == "" {
 		return nil
 	}
+	applyConnectRetryDefaults(s.opts.skipConnectRetry,
+		&s.cfg.NATS.ConnectMaxRetries,
+		&s.cfg.NATS.ConnectBackoffBase,
+		&s.cfg.NATS.ConnectBackoffMax)
 	natsOpts := append([]natsclient.Option{natsclient.WithLogger(s.logger), natsclient.WithMetrics(s.metrics)}, s.opts.natsOpts...)
 	natsName := s.cfg.NATS.Name
 	if natsName == "" {
 		natsName = s.cfg.Service.NodeName
 	}
-	c, err := natsclient.Connect(ctx, natsclient.Config{URL: s.cfg.NATS.URL, Name: natsName}, natsOpts...)
+	c, err := natsclient.Connect(ctx, natsclient.Config{
+		URL:                s.cfg.NATS.URL,
+		Name:               natsName,
+		ConnectMaxRetries:  s.cfg.NATS.ConnectMaxRetries,
+		ConnectBackoffBase: s.cfg.NATS.ConnectBackoffBase,
+		ConnectBackoffMax:  s.cfg.NATS.ConnectBackoffMax,
+	}, natsOpts...)
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeNATSConnectFailed, "service: nats connect failed")
 	}
@@ -283,4 +298,31 @@ func (s *Service[T, C]) mountAuthHandlers() error {
 	s.Engine.Add("POST", "/auth/refresh", "auth.refresh", wrap(s.Auth.RefreshHandler))
 	s.Engine.Add("POST", "/auth/logout", "auth.logout", wrap(s.Auth.LogoutHandler))
 	return nil
+}
+
+// applyConnectRetryDefaults centralises the rule:
+//   - skip=true → no injection (cfg stays as user wrote it).
+//   - maxRetries == -1 → user explicit "no retry"; normalize to 0.
+//   - maxRetries == 0 → inject 5 (K8s-friendly default).
+//   - base == 0 → inject 1s.
+//   - max == 0 → inject 16s.
+//
+// Pure function — easy to unit test without constructing a Service.
+func applyConnectRetryDefaults(skip bool, maxRetries *int, base, max *time.Duration) {
+	if skip {
+		return
+	}
+	if *maxRetries == -1 {
+		*maxRetries = 0
+		return
+	}
+	if *maxRetries == 0 {
+		*maxRetries = 5
+	}
+	if *base == 0 {
+		*base = time.Second
+	}
+	if *max == 0 {
+		*max = 16 * time.Second
+	}
 }

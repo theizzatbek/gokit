@@ -36,6 +36,7 @@ type options struct {
 	natsOpts            []natsclient.Option
 	routesEnable        bool
 	runOpts             []fibermap.RunOption
+	skipConnectRetry    bool
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -176,4 +177,18 @@ func WithRunOptions(opts ...fibermap.RunOption) Option {
 // Missing file at Run time produces CodeRoutesYAMLNotFound.
 func WithRoutes() Option {
 	return func(o *options) { o.routesEnable = true }
+}
+
+// WithoutConnectRetry disables the auto-injected K8s-friendly retry
+// defaults for DB and NATS Connect calls. Use when the deployment
+// strictly orders dependencies (e.g. init-containers) and prefers
+// fast-fail diagnostics over patience.
+//
+// Without this option, service.New auto-defaults ConnectMaxRetries=5,
+// ConnectBackoffBase=1s, ConnectBackoffMax=16s for both DB and NATS
+// when the cfg values are zero. Setting any cfg field to a non-zero
+// value preserves the explicit value; setting ConnectMaxRetries=-1
+// via env disables retry without needing this option.
+func WithoutConnectRetry() Option {
+	return func(o *options) { o.skipConnectRetry = true }
 }
