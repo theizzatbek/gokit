@@ -294,6 +294,13 @@ func sortStreamsByName(s []rawStream) {
 	sort.Slice(s, func(i, j int) bool { return s[i].Name < s[j].Name })
 }
 
+func TestWithServerGroup_FlipsServerGroup(t *testing.T) {
+	e := New(WithServerGroup("dc1"))
+	if e.serverGroup != "dc1" {
+		t.Fatalf("serverGroup: got %q want %q", e.serverGroup, "dc1")
+	}
+}
+
 func TestResolveDurableQueueGroup_Matrix(t *testing.T) {
 	cases := []struct {
 		name           string

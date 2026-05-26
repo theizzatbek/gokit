@@ -63,6 +63,18 @@ func WithEnv(m map[string]string) EngineOption {
 	return func(e *Engine) { e.envMap = m }
 }
 
+// WithServerGroup sets the server group label used for auto-suffixing
+// subscriber queue groups. When set, an auto-derived queue group
+// (empty durable + empty queue_group in YAML) becomes
+// "<subscriber-name>-<server-group>" instead of just
+// "<subscriber-name>". Lets the same service deployed across N regions
+// process events independently per region.
+//
+// Explicit YAML queue_group values are NOT suffixed.
+func WithServerGroup(group string) EngineOption {
+	return func(e *Engine) { e.serverGroup = group }
+}
+
 // New returns an empty Engine.
 func New(opts ...EngineOption) *Engine {
 	e := &Engine{
