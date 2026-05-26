@@ -169,3 +169,208 @@ func TestRuntime_BuildTwiceFails(t *testing.T) {
 		t.Fatalf("want CodeAlreadyBuilt, got %v", err)
 	}
 }
+
+func TestRuntime_StreamsExplicit_Created(t *testing.T) {
+	c := newTestClient(t)
+	yaml := []byte(`streams:
+  - name: TESTEXPLICIT
+    subjects: [testexplicit.>]
+    storage: file
+publishers:
+  - name: p
+    subject: testexplicit.x
+`)
+	eng := New()
+	if err := eng.LoadBytes(yaml); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	RegisterPublisher[order](eng, "p")
+	rt, err := eng.Build(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Drain() })
+	info, err := c.JetStream().StreamInfo("TESTEXPLICIT")
+	if err != nil {
+		t.Fatalf("StreamInfo: %v", err)
+	}
+	if info.Config.Subjects[0] != "testexplicit.>" {
+		t.Fatalf("Subjects: %v", info.Config.Subjects)
+	}
+}
+
+func TestRuntime_StreamsAuto_Derived(t *testing.T) {
+	c := newTestClient(t)
+	yaml := []byte(`streams: auto
+publishers:
+  - name: p
+    subject: testauto.created
+`)
+	eng := New()
+	if err := eng.LoadBytes(yaml); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	RegisterPublisher[order](eng, "p")
+	rt, err := eng.Build(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Drain() })
+	info, err := c.JetStream().StreamInfo("TESTAUTO")
+	if err != nil {
+		t.Fatalf("StreamInfo TESTAUTO: %v", err)
+	}
+	if info.Config.Subjects[0] != "testauto.>" {
+		t.Fatalf("Subjects: %v", info.Config.Subjects)
+	}
+}
+
+func TestRuntime_AutoDurableQueueGroup_LoadBalances(t *testing.T) {
+	c := newTestClient(t)
+	if err := c.EnsureStream(context.Background(), natsclient.StreamConfig{
+		Name: "TESTLB", Subjects: []string{"testlb.>"},
+	}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+	yaml := []byte(`subscribers:
+  - name: receiver
+    subject: testlb.x
+`)
+	var counts struct {
+		mu   sync.Mutex
+		a, b int
+	}
+	makeEngine := func(label string) *Runtime {
+		e := New()
+		if err := e.LoadBytes(yaml); err != nil {
+			t.Fatalf("LoadBytes: %v", err)
+		}
+		RegisterHandler[order](e, "receiver",
+			func(ctx context.Context, m natsclient.Msg[order]) error {
+				counts.mu.Lock()
+				defer counts.mu.Unlock()
+				if label == "a" {
+					counts.a++
+				} else {
+					counts.b++
+				}
+				return nil
+			})
+		rt, err := e.Build(context.Background(), c)
+		if err != nil {
+			t.Fatalf("Build %s: %v", label, err)
+		}
+		return rt
+	}
+	rtA := makeEngine("a")
+	t.Cleanup(func() { _ = rtA.Drain() })
+	rtB := makeEngine("b")
+	t.Cleanup(func() { _ = rtB.Drain() })
+
+	pub := natsclient.NewPublisher[order](c)
+	for i := 0; i < 10; i++ {
+		if err := pub.Publish(context.Background(), "testlb.x", order{ID: "o"}); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+	deadline := time.After(5 * time.Second)
+	for {
+		counts.mu.Lock()
+		total := counts.a + counts.b
+		counts.mu.Unlock()
+		if total >= 10 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("did not receive 10 messages; got a=%d b=%d", counts.a, counts.b)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	counts.mu.Lock()
+	defer counts.mu.Unlock()
+	// Both consumers in the same queue group: messages distribute.
+	// Don't assert exact split; require BOTH to have received at least
+	// one. If this ever flakes, bump message count.
+	if counts.a == 0 || counts.b == 0 {
+		t.Fatalf("expected both consumers to receive at least one; a=%d b=%d", counts.a, counts.b)
+	}
+}
+
+func TestRuntime_EphemeralSentinel(t *testing.T) {
+	c := newTestClient(t)
+	if err := c.EnsureStream(context.Background(), natsclient.StreamConfig{
+		Name: "TESTEPH", Subjects: []string{"testeph.>"},
+	}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+	yaml := []byte(`subscribers:
+  - name: receiver
+    subject: testeph.x
+    durable: ephemeral
+`)
+	eng := New()
+	if err := eng.LoadBytes(yaml); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	got := make(chan struct{}, 1)
+	RegisterHandler[order](eng, "receiver",
+		func(ctx context.Context, m natsclient.Msg[order]) error {
+			select {
+			case got <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+	rt, err := eng.Build(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Drain() })
+
+	pub := natsclient.NewPublisher[order](c)
+	if err := pub.Publish(context.Background(), "testeph.x", order{ID: "o"}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	select {
+	case <-got:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ephemeral subscriber did not receive")
+	}
+	// Verify no durable consumer was created with the name "receiver".
+	if _, err := c.JetStream().ConsumerInfo("TESTEPH", "receiver"); err == nil {
+		t.Fatal("expected ConsumerInfo to fail for ephemeral consumer; got success")
+	}
+}
+
+func TestRuntime_ServerGroupSuffix(t *testing.T) {
+	c := newTestClient(t)
+	if err := c.EnsureStream(context.Background(), natsclient.StreamConfig{
+		Name: "TESTSG", Subjects: []string{"testsg.>"},
+	}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+	yaml := []byte(`subscribers:
+  - name: inv
+    subject: testsg.x
+`)
+	eng := New(WithServerGroup("dc1"))
+	if err := eng.LoadBytes(yaml); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	RegisterHandler[order](eng, "inv",
+		func(ctx context.Context, m natsclient.Msg[order]) error { return nil })
+	rt, err := eng.Build(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Drain() })
+	// Durable name remains "inv"; queue group becomes "inv-dc1".
+	info, err := c.JetStream().ConsumerInfo("TESTSG", "inv")
+	if err != nil {
+		t.Fatalf("ConsumerInfo: %v", err)
+	}
+	if info.Config.DeliverGroup != "inv-dc1" {
+		t.Fatalf("DeliverGroup: got %q want %q", info.Config.DeliverGroup, "inv-dc1")
+	}
+}
