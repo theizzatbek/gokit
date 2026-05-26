@@ -10,4 +10,6 @@ const (
 	CodeNATSConnectFailed  = "service_nats_connect_failed"
 	CodeHTTPCNewFailed     = "service_httpc_new_failed"
 	CodeOpenAPIMountFailed = "service_openapi_mount_failed"
+	CodeNATSMapNeedsNATS   = "service_natsmap_needs_nats"
+	CodeNATSMapLoadFailed  = "service_natsmap_load_failed"
 )

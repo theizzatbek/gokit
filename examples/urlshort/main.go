@@ -20,6 +20,7 @@ import (
 
 	"github.com/theizzatbek/gokit/clients/apimap"
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
+	"github.com/theizzatbek/gokit/clients/natsmap"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/appctx"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/config"
@@ -49,6 +50,7 @@ func run() error {
 		return err
 	}
 	cfg.APIMap.Path = "clients.yaml"
+	cfg.NATSMap.PublishersPath = "publishers.yaml"
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -61,6 +63,10 @@ func run() error {
 		}),
 		service.WithAPIMapRegistration(func(e *apimap.Engine) {
 			apimap.RegisterResponse[enrich.MicroLinkResp](e, "microlink.metadata")
+		}),
+		service.WithNATSMapRegistration(func(e *natsmap.Engine) {
+			natsmap.RegisterPublisher[events.LinkCreated](e, "urlshort.link.created")
+			natsmap.RegisterPublisher[events.LinkVisited](e, "urlshort.link.visited")
 		}),
 	)
 	if err != nil {
@@ -81,18 +87,17 @@ func run() error {
 	}
 
 	fetcher := enrich.NewFetcher(svc.HTTPC, svc.APIMap, svc.Logger())
-	pub := events.New(svc.NATS, svc.Logger())
 	usersSvc := users.NewService(svc.DB, svc.Hasher)
 	linksSvc := links.NewService(svc.DB,
 		fetcher.FetchMetadata,
 		func(ctx context.Context, l links.Link) {
-			pub.PublishCreated(ctx, events.LinkCreated{
+			events.PublishCreated(ctx, svc.NATSMap, svc.Logger(), events.LinkCreated{
 				LinkID: l.ID, UserID: l.UserID, Code: l.Code,
 				URL: l.OriginalURL, Title: l.Title, CreatedAt: l.CreatedAt,
 			})
 		},
 		func(ctx context.Context, code, ua, ip string) {
-			pub.PublishVisited(ctx, events.LinkVisited{
+			events.PublishVisited(ctx, svc.NATSMap, svc.Logger(), events.LinkVisited{
 				Code: code, VisitedAt: time.Now(), UserAgent: ua, IP: ip,
 			})
 		},

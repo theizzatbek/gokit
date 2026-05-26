@@ -1,0 +1,13 @@
+subscribers:
+  - name: invoice_sender
+    subject: orders.created
+    durable: invoice-sender
+    max_in_flight: 16
+    max_deliver: 5
+    ack_wait: 30s
+    queue_group: workers
+    backoff:
+      type: exponential
+      base: 1s
+      max: 1m
+    start_from: new

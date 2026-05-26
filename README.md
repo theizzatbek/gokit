@@ -1,8 +1,9 @@
 # gokit
 
-A composable Go service kit. Eight independently importable packages that cover
+A composable Go service kit. Nine independently importable packages that cover
 what every HTTP API service hand-rolls: routing, errors, database, auth,
-outbound HTTP, declarative outbound APIs, NATS event streaming.
+outbound HTTP, declarative outbound APIs, NATS event streaming, declarative
+NATS subscribers + publishers.
 
 Each package can be adopted standalone. Together they take you from
 `main.go` to a production-shaped service.
@@ -21,6 +22,7 @@ Each package can be adopted standalone. Together they take you from
 | `clients/httpc/` | Outbound `*http.Client` builder. Retry, per-attempt timeout, slog + Prometheus observability. |
 | `clients/apimap/` | Declarative outbound: describe upstream APIs in YAML, call them by name. Auth and `${ENV_VAR}` secrets in YAML. |
 | `clients/nats/` | Typed JetStream wrapper. Generic `Publisher[T]` / `Subscribe[T]`. Auto-ack handler model. |
+| `clients/natsmap/` | Declarative NATS subscribers + publishers via YAML. Typed handlers + publishers by name, `*Runtime.Drain()` for graceful shutdown. |
 | `service/` | Optional all-in-one helper. `service.New(ctx, cfg)` bundles every other subpackage into a `Service[T, C]` runtime with auto-detect optionality, auto-mounted auth handlers, and the Bearer-optional layer fix. Shrinks `main.go` for typical services from ~270 → ~80 lines. |
 
 ## Dependency rules
@@ -31,6 +33,7 @@ db, db/sqb                → errs + pgx
 clients/httpc             → errs + prometheus
 clients/apimap            → errs + clients/httpc + yaml.v3
 clients/nats              → errs + nats.go + prometheus
+clients/natsmap           → errs + clients/nats + yaml.v3
 auth                      → errs + crypto + jwt + fiber
 fibermap                  → errs + fiber (router-adjacent sub-packages only)
 ```
@@ -48,6 +51,7 @@ go get github.com/theizzatbek/gokit/auth
 go get github.com/theizzatbek/gokit/clients/httpc
 go get github.com/theizzatbek/gokit/clients/apimap
 go get github.com/theizzatbek/gokit/clients/nats
+go get github.com/theizzatbek/gokit/clients/natsmap
 
 # optional: standalone CLI for routes.yaml linting and schema export
 go install github.com/theizzatbek/gokit/cmd/fibermap@latest

@@ -1,0 +1,5 @@
+publishers:
+  - name: orders.created
+    subject: orders.created
+    headers:
+      X-Source: invoice-svc

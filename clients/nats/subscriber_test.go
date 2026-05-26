@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -12,6 +13,27 @@ import (
 
 	"github.com/nats-io/nats.go"
 )
+
+// TestErrPoison_WrapPolicy verifies that the wrap pattern used by Subscribe[T]'s
+// decode-failure path produces an error that:
+//   - errors.Is(err, ErrPoison) == true  (dispatchRaw will Term)
+//   - errors.Is(err, underlyingErr) == true (cause preserved for callers)
+//
+// Hermetic — no NATS server needed.
+func TestErrPoison_WrapPolicy(t *testing.T) {
+	underlying := errors.New("simulated decode failure")
+	wrapped := fmt.Errorf("natsclient: decode: %w: %w", ErrPoison, underlying)
+	if !errors.Is(wrapped, ErrPoison) {
+		t.Fatal("errors.Is(wrapped, ErrPoison) == false; dispatchRaw would Nak instead of Term")
+	}
+	if !errors.Is(wrapped, underlying) {
+		t.Fatal("errors.Is(wrapped, underlying) == false; cause not preserved")
+	}
+	plain := errors.New("transient: try again later")
+	if errors.Is(plain, ErrPoison) {
+		t.Fatal("errors.Is(plain, ErrPoison) == true; would Term a transient error")
+	}
+}
 
 func TestSubscribe_RoundTrip(t *testing.T) {
 	c := newTestClient(t)
@@ -310,5 +332,93 @@ func TestSubscribe_LogsConsumerDrift(t *testing.T) {
 
 	if !strings.Contains(logBuf.String(), "consumer config drift") {
 		t.Fatalf("drift warning not logged; log:\n%s", logBuf.String())
+	}
+}
+
+func TestSubscribeRaw_ErrPoisonTermsMessage(t *testing.T) {
+	c := newTestClient(t)
+	if err := c.EnsureStream(context.Background(), StreamConfig{
+		Name: "RAWTEST", Subjects: []string{"rawtest.>"},
+	}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+
+	calls := make(chan int, 8)
+	sub, err := SubscribeRaw(context.Background(), c, "rawtest.poison",
+		func(ctx context.Context, m *RawMsg) error {
+			calls <- m.Redeliveries
+			return fmt.Errorf("decode: %w: bad", ErrPoison)
+		},
+		WithMaxDeliver(5),
+		WithAckWait(500*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("SubscribeRaw: %v", err)
+	}
+	defer sub.Drain()
+
+	pub := NewPublisher[[]byte](c)
+	if err := pub.Publish(context.Background(), "rawtest.poison", []byte("x")); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	select {
+	case <-calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler not called")
+	}
+
+	// ErrPoison should TERM the message — no redelivery within the next 2s.
+	select {
+	case got := <-calls:
+		t.Fatalf("poison message redelivered: redeliveries=%d", got)
+	case <-time.After(2 * time.Second):
+	}
+}
+
+func TestSubscribeRaw_NormalErrorNaks(t *testing.T) {
+	c := newTestClient(t)
+	if err := c.EnsureStream(context.Background(), StreamConfig{
+		Name: "RAWTEST2", Subjects: []string{"rawtest2.>"},
+	}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+
+	calls := make(chan int, 8)
+	sub, err := SubscribeRaw(context.Background(), c, "rawtest2.nak",
+		func(ctx context.Context, m *RawMsg) error {
+			calls <- m.Redeliveries
+			if m.Redeliveries < 1 {
+				return errors.New("transient")
+			}
+			return nil
+		},
+		WithMaxDeliver(5),
+		WithBackoff(func(int) time.Duration { return 100 * time.Millisecond }),
+	)
+	if err != nil {
+		t.Fatalf("SubscribeRaw: %v", err)
+	}
+	defer sub.Drain()
+
+	pub := NewPublisher[[]byte](c)
+	if err := pub.Publish(context.Background(), "rawtest2.nak", []byte("x")); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	gotZero, gotOne := false, false
+	deadline := time.After(3 * time.Second)
+	for !gotZero || !gotOne {
+		select {
+		case n := <-calls:
+			if n == 0 {
+				gotZero = true
+			}
+			if n == 1 {
+				gotOne = true
+			}
+		case <-deadline:
+			t.Fatalf("expected redelivery; gotZero=%v gotOne=%v", gotZero, gotOne)
+		}
 	}
 }

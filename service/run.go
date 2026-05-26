@@ -43,6 +43,9 @@ func (s *Service[T, C]) Close() {
 		return
 	}
 	s.closed = true
+	if s.NATSMap != nil {
+		_ = s.NATSMap.Drain()
+	}
 	if s.NATS != nil {
 		s.NATS.Close()
 	}

@@ -1,0 +1,7 @@
+subscribers:
+  - name: invoice_sender
+    subject: orders.created
+    durable: invoice-sender
+publishers:
+  - name: orders.created
+    subject: orders.created

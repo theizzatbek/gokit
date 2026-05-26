@@ -168,3 +168,8 @@ func (c *Client) Conn() *nats.Conn { return c.conn }
 
 // JetStream returns the underlying nats.JetStreamContext. Same caveat as Conn.
 func (c *Client) JetStream() nats.JetStreamContext { return c.js }
+
+// Codec returns the codec configured at Connect (JSONCodec by default).
+// Exposed for cross-package use (natsmap reflects payloads at runtime
+// and needs the same codec the client uses).
+func (c *Client) Codec() Codec { return c.opts.codec }

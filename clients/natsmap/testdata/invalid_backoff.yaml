@@ -1,0 +1,7 @@
+subscribers:
+  - name: a
+    subject: orders.created
+    backoff:
+      type: weird
+      base: 1s
+      max: 1m

@@ -9,6 +9,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/apimap"
 	"github.com/theizzatbek/gokit/clients/httpc"
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
+	"github.com/theizzatbek/gokit/clients/natsmap"
 	"github.com/theizzatbek/gokit/fibermap"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
 )
@@ -17,18 +18,19 @@ import (
 type Option func(*options)
 
 type options struct {
-	logger             *slog.Logger
-	metrics            prometheus.Registerer
-	openapiInfo        *openapi.Info // nil = disabled
-	openapiOpts        []openapi.Option
-	fiberMiddleware    []fiber.Handler
-	skipAuthHandlers   bool
-	skipBearerLayer    bool
-	httpcOpts          []httpc.Option
-	apimapOpts         []apimap.Option
-	apimapRegistration func(*apimap.Engine)
-	natsOpts           []natsclient.Option
-	runOpts            []fibermap.RunOption
+	logger              *slog.Logger
+	metrics             prometheus.Registerer
+	openapiInfo         *openapi.Info // nil = disabled
+	openapiOpts         []openapi.Option
+	fiberMiddleware     []fiber.Handler
+	skipAuthHandlers    bool
+	skipBearerLayer     bool
+	httpcOpts           []httpc.Option
+	apimapOpts          []apimap.Option
+	apimapRegistration  func(*apimap.Engine)
+	natsmapRegistration func(*natsmap.Engine)
+	natsOpts            []natsclient.Option
+	runOpts             []fibermap.RunOption
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -92,6 +94,20 @@ func WithAPIMapOptions(opts ...apimap.Option) Option {
 //	)
 func WithAPIMapRegistration(fn func(*apimap.Engine)) Option {
 	return func(o *options) { o.apimapRegistration = fn }
+}
+
+// WithNATSMapRegistration registers typed subscriber handlers and
+// publishers on the natsmap engine BEFORE Build seals it. Required when
+// using Config.NATSMap.{Subscribers,Publishers}Path.
+//
+//	service.New(... ,
+//	    service.WithNATSMapRegistration(func(e *natsmap.Engine) {
+//	        natsmap.RegisterHandler[OrderCreated](e, "invoice_sender", handle)
+//	        natsmap.RegisterPublisher[OrderCreated](e, "orders.created")
+//	    }),
+//	)
+func WithNATSMapRegistration(fn func(*natsmap.Engine)) Option {
+	return func(o *options) { o.natsmapRegistration = fn }
 }
 
 // WithNATSOptions appends to the natsclient options.

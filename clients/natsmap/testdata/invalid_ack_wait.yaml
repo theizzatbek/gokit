@@ -1,0 +1,4 @@
+subscribers:
+  - name: a
+    subject: orders.created
+    ack_wait: -1s

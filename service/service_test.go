@@ -24,6 +24,8 @@ import (
 
 	"github.com/theizzatbek/gokit/auth"
 	"github.com/theizzatbek/gokit/clients/apimap"
+	natsclient "github.com/theizzatbek/gokit/clients/nats"
+	"github.com/theizzatbek/gokit/clients/natsmap"
 	"github.com/theizzatbek/gokit/db"
 	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/fibermap"
@@ -246,4 +248,96 @@ func doSmokeJSON(t *testing.T, app *fiber.App, method, path, body, bearer string
 		t.Fatal(err)
 	}
 	return resp
+}
+
+// TestService_NATSMapRoundTrip exercises service.New with only NATS + NATSMap
+// configured. Publishing through svc.NATSMap delivers to a raw subscriber.
+func TestService_NATSMapRoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("smoke test requires Docker")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	natsURL := startSmokeNATS(t, ctx)
+
+	tmpDir := t.TempDir()
+	pubPath := filepath.Join(tmpDir, "publishers.yaml")
+	if err := os.WriteFile(pubPath, []byte(`publishers:
+  - name: orders_out
+    subject: svctest.orders
+`), 0o644); err != nil {
+		t.Fatalf("write publishers.yaml: %v", err)
+	}
+
+	cfg := Config{
+		NATS:    NATSConfig{URL: natsURL, Name: "svctest"},
+		NATSMap: NATSMapConfig{PublishersPath: pubPath},
+	}
+	cfg.Service.LogLevel = "error"
+
+	svc, err := New[smokeAppCtx, smokeClaims](ctx, cfg,
+		WithNATSMapRegistration(func(e *natsmap.Engine) {
+			natsmap.RegisterPublisher[smokeOrder](e, "orders_out")
+		}),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	if svc.NATS == nil {
+		t.Fatal("svc.NATS == nil")
+	}
+	if svc.NATSMap == nil {
+		t.Fatal("svc.NATSMap == nil")
+	}
+
+	// Ensure the JetStream stream exists before publishing.
+	if err := svc.NATS.EnsureStream(ctx, natsclient.StreamConfig{
+		Name:     "SVCTEST",
+		Subjects: []string{"svctest.>"},
+	}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+
+	// Raw subscribe (NOT through natsmap) to assert the published message
+	// reaches the wire.
+	recvCh := make(chan smokeOrder, 1)
+	sub, err := natsclient.Subscribe[smokeOrder](ctx, svc.NATS, "svctest.orders",
+		func(_ context.Context, m natsclient.Msg[smokeOrder]) error {
+			select {
+			case recvCh <- m.Data:
+			default:
+			}
+			return nil
+		}, natsclient.WithDurable("svctest-assert"))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(func() { _ = sub.Drain() })
+
+	if err := natsmap.Publish[smokeOrder](ctx, svc.NATSMap, "orders_out",
+		smokeOrder{ID: "o1"}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	select {
+	case got := <-recvCh:
+		if got.ID != "o1" {
+			t.Fatalf("payload mismatch: got %+v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for delivery via svc.NATSMap")
+	}
+
+	// PublisherNames introspection.
+	names := svc.NATSMap.PublisherNames()
+	if len(names) != 1 || names[0] != "orders_out" {
+		t.Fatalf("PublisherNames: got %v want [orders_out]", names)
+	}
+}
+
+type smokeOrder struct {
+	ID string `json:"id"`
 }

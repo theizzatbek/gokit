@@ -1,0 +1,2 @@
+subscribers:
+  - { name: a, subject: orders.created, start_from: tomorrow }

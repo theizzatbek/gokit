@@ -1,6 +1,6 @@
 # service
 
-All-in-one service helper. One `service.New(ctx, cfg)` builds the bundled runtime — `*db.DB`, `*auth.Auth[C]`, `*natsclient.Client`, `*http.Client`, `*apimap.Client`, `*fibermap.Engine[T]` — with auto-detect optionality (subsystems with empty config stay nil). Auto-mounts `/auth/login` `/auth/refresh` `/auth/logout` when Auth configured. Auto-installs `auth.Bearer(BearerOptional)` at fiber.App level via `WithUse` so `ContextBuilder` reads JWT subject correctly (fixes a real gotcha). `Run()` blocks with the production-ops bundle. Service is additive over the existing subpackages — go straight to `svc.DB.Tx(...)` / `svc.Auth.Sign(...)` for anything Service doesn't shortcut.
+All-in-one service helper. One `service.New(ctx, cfg)` builds the bundled runtime — `*db.DB`, `*auth.Auth[C]`, `*natsclient.Client`, `*natsmap.Runtime`, `*http.Client`, `*apimap.Client`, `*fibermap.Engine[T]` — with auto-detect optionality (subsystems with empty config stay nil). Auto-mounts `/auth/login` `/auth/refresh` `/auth/logout` when Auth configured. Auto-installs `auth.Bearer(BearerOptional)` at fiber.App level via `WithUse` so `ContextBuilder` reads JWT subject correctly (fixes a real gotcha). `Run()` blocks with the production-ops bundle. Service is additive over the existing subpackages — go straight to `svc.DB.Tx(...)` / `svc.Auth.Sign(...)` for anything Service doesn't shortcut.
 
 **Import:** `github.com/theizzatbek/gokit/service`
 **Depends on:** every other `gokit/*` subpackage
@@ -74,6 +74,7 @@ Env-driven via `caarlos0/env/v11`. Compose into your own app config via embeddin
 | `DB` | `DB_` | `DB_USER` set | When omitted, `svc.DB == nil` |
 | `Auth` | `AUTH_` | `AUTH_PRIVATE_KEY_PEM` set | Requires DB (refreshpg store) |
 | `NATS` | `NATS_` | `NATS_URL` set | Independent |
+| `NATSMap` | `NATSMAP_` | `NATSMAP_SUBSCRIBERS_PATH` or `NATSMAP_PUBLISHERS_PATH` set | Requires NATS |
 | `HTTPC` | `HTTPC_` | always | Zero-value → sensible defaults |
 | `APIMap` | `APIMAP_` | `APIMAP_PATH` set | Path to clients.yaml |
 
@@ -108,6 +109,15 @@ Env-driven via `caarlos0/env/v11`. Compose into your own app config via embeddin
 |---|---|
 | `Path` | `APIMAP_PATH` |
 
+### `NATSMapConfig`
+
+| Field | Env |
+|---|---|
+| `SubscribersPath` | `NATSMAP_SUBSCRIBERS_PATH` |
+| `PublishersPath` | `NATSMAP_PUBLISHERS_PATH` |
+
+Either path triggers auto-build via `clients/natsmap`. Both paths may point at the same combined YAML. Requires `NATS` to be configured (`service_natsmap_needs_nats` otherwise).
+
 ## Options
 
 | Option | Notes |
@@ -121,6 +131,7 @@ Env-driven via `caarlos0/env/v11`. Compose into your own app config via embeddin
 | `WithHTTPCOptions(opts...)` | Extra httpc options (logger + metrics already auto-applied) |
 | `WithAPIMapOptions(opts...)` | Extra apimap options |
 | `WithAPIMapRegistration(fn)` | Register typed Request/Response models BEFORE `apimap.Build` seals the engine |
+| `WithNATSMapRegistration(fn)` | Register typed subscriber handlers + publishers via `natsmap.RegisterHandler[T]` / `natsmap.RegisterPublisher[T]` BEFORE `natsmap.Build` opens subscriptions. Required when `NATSMap.*Path` is set. |
 | `WithNATSOptions(opts...)` | Extra natsclient options |
 | `WithRunOptions(opts...)` | Append `fibermap.RunOption`s to the default production-ops bundle |
 
@@ -200,6 +211,8 @@ resp, _ := svc.HTTPC.Get("https://example.com")
 | `service_db_connect_failed` | Unavailable | `db.Connect` failed (wrapped) |
 | `service_apimap_load_failed` | Validation | apimap LoadFile / Build failed (wrapped) |
 | `service_nats_connect_failed` | Unavailable | `natsclient.Connect` failed (wrapped) |
+| `service_natsmap_needs_nats` | Validation | NATSMap configured but NATS not |
+| `service_natsmap_load_failed` | Validation | natsmap LoadFile / Build failed (wrapped) |
 | `service_httpc_new_failed` | Validation | `httpc.New` validation failed (wrapped) |
 | `service_openapi_mount_failed` | Internal | OpenAPI Mount failed |
 
@@ -211,6 +224,10 @@ Subsystem-specific errors propagate as `Cause` — use `errors.As` to extract.
 - `svc.Metrics()` returns the `prometheus.Registerer` every subsystem registers into.
 - All subsystems' `WithLogger`/`WithMetrics` options are auto-applied; you don't pass them per call.
 - **Note:** `apimap` does NOT receive `WithMetrics` automatically — apimap internally constructs its own `httpc` clients which would re-register the same `httpc_*` collectors and panic the shared registry. If you want per-upstream apimap metrics, pass `apimap.WithMetrics(separateReg)` via `WithAPIMapOptions`.
+
+## Shutdown order
+
+`svc.Close()` drains `NATSMap` (so in-flight subscriber handlers finish) **before** tearing down the `NATS` connection. Downstream subsystems (`DB`, `Auth`) close last. Always `defer svc.Close()` after `service.New`.
 
 ## Testing
 
@@ -233,5 +250,5 @@ For integration tests, mirror `examples/urlshort/main_test.go` — use testconta
 
 ## See also
 
-- [`fibermap`](../fibermap/README.md), [`errs`](../errs/README.md), [`db`](../db/README.md), [`auth`](../auth/README.md), [`clients/httpc`](../clients/httpc/README.md), [`clients/apimap`](../clients/apimap/README.md), [`clients/nats`](../clients/nats/README.md), [`fibermap/openapi`](../fibermap/openapi/README.md)
+- [`fibermap`](../fibermap/README.md), [`errs`](../errs/README.md), [`db`](../db/README.md), [`auth`](../auth/README.md), [`clients/httpc`](../clients/httpc/README.md), [`clients/apimap`](../clients/apimap/README.md), [`clients/nats`](../clients/nats/README.md), [`clients/natsmap`](../clients/natsmap/README.md), [`fibermap/openapi`](../fibermap/openapi/README.md)
 - [`examples/urlshort`](../examples/urlshort/README.md) — Service used end-to-end

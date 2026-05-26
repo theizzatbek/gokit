@@ -97,3 +97,49 @@ func (c *Client) isJetStreamSubject(subject string) bool {
 var streamCacheStats struct {
 	lookups int64
 }
+
+// PublishViaCodec is the non-generic publish entry point used by other
+// kit packages (notably natsmap) that need to publish a typed payload
+// resolved at runtime via reflection. It uses the client's codec
+// (already configured at Connect) and respects core-vs-JS subject
+// routing.
+func PublishViaCodec(ctx context.Context, c *Client, subject string, payload any, headers map[string][]string) error {
+	body, err := c.opts.codec.Marshal(payload)
+	if err != nil {
+		return xerrs.Wrap(err, xerrs.KindValidation, CodeEncodeFailed, "natsclient: payload encode")
+	}
+	m := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
+	for k, v := range headers {
+		m.Header[k] = v
+	}
+	if m.Header.Get("Content-Type") == "" {
+		m.Header.Set("Content-Type", c.opts.codec.ContentType())
+	}
+	if m.Header.Get("Nats-Msg-Id") == "" {
+		m.Header.Set("Nats-Msg-Id", uuid.NewString())
+	}
+	start := time.Now()
+	if c.isJetStreamSubject(subject) {
+		if _, err := c.js.PublishMsg(m, nats.Context(ctx)); err != nil {
+			if c.metrics != nil {
+				c.metrics.IncPublishError(subject)
+			}
+			return xerrs.Wrap(err, xerrs.KindUnavailable, CodePublishFailed, "natsclient: js publish")
+		}
+		if c.metrics != nil {
+			c.metrics.ObservePublish(subject, time.Since(start).Seconds())
+			c.metrics.IncPublishSuccess(subject)
+		}
+		return nil
+	}
+	if err := c.conn.PublishMsg(m); err != nil {
+		if c.metrics != nil {
+			c.metrics.IncPublishError(subject)
+		}
+		return xerrs.Wrap(err, xerrs.KindUnavailable, CodePublishFailed, "natsclient: core publish")
+	}
+	if c.metrics != nil {
+		c.metrics.IncPublishSuccess(subject)
+	}
+	return nil
+}

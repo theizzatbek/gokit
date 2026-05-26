@@ -20,6 +20,7 @@ type Config struct {
 	DB      db.Config     `envPrefix:"DB_"`
 	Auth    AuthConfig    `envPrefix:"AUTH_"`
 	NATS    NATSConfig    `envPrefix:"NATS_"`
+	NATSMap NATSMapConfig `envPrefix:"NATSMAP_"`
 	HTTPC   httpc.Config  `envPrefix:"HTTPC_"`
 	APIMap  APIMapConfig  `envPrefix:"APIMAP_"`
 }
@@ -47,6 +48,13 @@ type NATSConfig struct {
 	Name string `env:"NAME"`
 }
 
+// NATSMapConfig — paths to YAML files. Either is the opt-in trigger;
+// both may be set (one combined engine) or only one. Requires NATS.
+type NATSMapConfig struct {
+	SubscribersPath string `env:"SUBSCRIBERS_PATH"`
+	PublishersPath  string `env:"PUBLISHERS_PATH"`
+}
+
 // APIMapConfig — Path to clients.yaml is the opt-in trigger.
 type APIMapConfig struct {
 	Path string `env:"PATH"`
@@ -58,6 +66,10 @@ func (c Config) Validate() error {
 	if c.Auth.PrivateKeyPEM != "" && c.DB.User == "" {
 		return xerrs.Validation(CodeAuthNeedsDB,
 			"service: Auth.PrivateKeyPEM requires DB (refreshpg store needs a Querier)")
+	}
+	if (c.NATSMap.SubscribersPath != "" || c.NATSMap.PublishersPath != "") && c.NATS.URL == "" {
+		return xerrs.Validation(CodeNATSMapNeedsNATS,
+			"service: NATSMap requires NATS (subscribers + publishers need a connection)")
 	}
 	return nil
 }
