@@ -15,7 +15,7 @@ func TestBuildPgxURL_URLOverridesAssembledFields(t *testing.T) {
 		Password: "ignored",
 		Database: "ignored",
 		SSLMode:  "disable",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("buildPgxURL: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestBuildPgxURL_AssembledFieldsWhenURLEmpty(t *testing.T) {
 		Host: "db.internal", Port: 5432,
 		User: "alice", Password: "s3cret",
 		Database: "app", SSLMode: "disable",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("buildPgxURL: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestBuildPgxURL_AssembledFieldsWhenURLEmpty(t *testing.T) {
 func TestBuildPgxURL_MultiHostPreserved(t *testing.T) {
 	got, err := buildPgxURL(Config{
 		URL: "postgres://app:pass@h1,h2,h3:5432/appdb?sslmode=disable",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("buildPgxURL: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestBuildPgxURL_MultiHostPreserved(t *testing.T) {
 }
 
 func TestBuildPgxURL_MalformedURLReturnsError(t *testing.T) {
-	_, err := buildPgxURL(Config{URL: "::::not-a-url"})
+	_, err := buildPgxURL(Config{URL: "::::not-a-url"}, "")
 	if err == nil {
 		t.Fatal("expected parse error, got nil")
 	}
@@ -69,7 +69,7 @@ func TestBuildPgxURL_MinimumRequiredFields(t *testing.T) {
 		Host: "db.internal", Port: 5432,
 		User: "alice", Password: "s3cret",
 		Database: "app", SSLMode: "disable",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("buildPgxURL: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestBuildPgxURL_IncludesAppNameAndTimeoutWhenSet(t *testing.T) {
 		Host: "h", Port: 1, User: "u", Database: "d",
 		SSLMode: "require", AppName: "checkout-api",
 		ConnectTimeout: 7 * time.Second,
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("buildPgxURL: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestBuildPgxURL_EscapesPasswordSpecialChars(t *testing.T) {
 	got, err := buildPgxURL(Config{
 		Host: "h", Port: 1, User: "u", Password: "p@ss/word",
 		Database: "d", SSLMode: "disable",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("buildPgxURL: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestBuildPgxURL_OmitsPasswordWhenEmpty(t *testing.T) {
 	got, err := buildPgxURL(Config{
 		Host: "h", Port: 1, User: "u",
 		Database: "d", SSLMode: "disable",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("buildPgxURL: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestBuildPgxURL_PreservesUserQueryParamsOverConfig(t *testing.T) {
 		URL:            "postgres://app:p@h:5432/db?application_name=user-set&connect_timeout=3",
 		AppName:        "config-set",
 		ConnectTimeout: 9 * time.Second,
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("buildPgxURL: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestBuildPgxURL_EscapesPasswordSpaceAsPercent20(t *testing.T) {
 	got, err := buildPgxURL(Config{
 		Host: "h", Port: 1, User: "u", Password: "a b",
 		Database: "d", SSLMode: "disable",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("buildPgxURL: %v", err)
 	}
@@ -161,5 +161,44 @@ func TestBuildPgxURL_EscapesPasswordSpaceAsPercent20(t *testing.T) {
 	}
 	if strings.Contains(got, "a+b") {
 		t.Fatalf("space encoded as + (wrong): %q", got)
+	}
+}
+
+func TestBuildPgxURL_InjectsTargetSessionAttrsWhenMissing(t *testing.T) {
+	got, err := buildPgxURL(Config{
+		URL: "postgres://app:pass@h1:5432/appdb?sslmode=disable",
+	}, "read-write")
+	if err != nil {
+		t.Fatalf("buildPgxURL: %v", err)
+	}
+	if !strings.Contains(got, "target_session_attrs=read-write") {
+		t.Fatalf("tsa not injected: %q", got)
+	}
+}
+
+func TestBuildPgxURL_PreservesExistingTargetSessionAttrs(t *testing.T) {
+	got, err := buildPgxURL(Config{
+		URL: "postgres://app:pass@h1:5432/appdb?target_session_attrs=any",
+	}, "read-write")
+	if err != nil {
+		t.Fatalf("buildPgxURL: %v", err)
+	}
+	if !strings.Contains(got, "target_session_attrs=any") {
+		t.Fatalf("kit overwrote user value: %q", got)
+	}
+	if strings.Contains(got, "target_session_attrs=read-write") {
+		t.Fatalf("kit appended duplicate value: %q", got)
+	}
+}
+
+func TestBuildPgxURL_SkipsTargetSessionAttrsWhenEmpty(t *testing.T) {
+	got, err := buildPgxURL(Config{
+		URL: "postgres://app:pass@h1:5432/appdb",
+	}, "")
+	if err != nil {
+		t.Fatalf("buildPgxURL: %v", err)
+	}
+	if strings.Contains(got, "target_session_attrs") {
+		t.Fatalf("empty tsa should skip injection: %q", got)
 	}
 }

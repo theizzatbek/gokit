@@ -65,7 +65,12 @@ type Config struct {
 // When cfg.URL is non-empty it is used verbatim as the base; otherwise the URL
 // is assembled from Host/Port/User/Password/Database/SSLMode with AppName and
 // ConnectTimeout injected as query parameters.
-func buildPgxURL(cfg Config) (string, error) {
+//
+// tsa, when non-empty, is injected as the target_session_attrs query parameter
+// unless the user has already set it in cfg.URL. The primary pool passes
+// "read-write" to defend against a multi-host URL silently landing on a
+// standby; a read-replica pool passes "standby". Empty tsa skips injection.
+func buildPgxURL(cfg Config, tsa string) (string, error) {
 	var raw string
 	if cfg.URL != "" {
 		raw = cfg.URL
@@ -82,6 +87,9 @@ func buildPgxURL(cfg Config) (string, error) {
 	}
 	if cfg.ConnectTimeout > 0 && q.Get("connect_timeout") == "" {
 		q.Set("connect_timeout", strconv.Itoa(int(cfg.ConnectTimeout.Seconds())))
+	}
+	if tsa != "" && q.Get("target_session_attrs") == "" {
+		q.Set("target_session_attrs", tsa)
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
