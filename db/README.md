@@ -46,13 +46,15 @@ func main() {
 
 | Field | Env | Default | Notes |
 |---|---|---|---|
-| `Host` | `DB_HOST` | `localhost` | |
-| `Port` | `DB_PORT` | `5432` | |
-| `User` | `DB_USER` | — (required) | |
-| `Password` | `DB_PASSWORD` | "" | empty for trust auth |
-| `Database` | `DB_NAME` | — (required) | |
-| `SSLMode` | `DB_SSLMODE` | `disable` | `require`/`verify-full`/etc. |
-| `AppName` | `DB_APP_NAME` | "" | shown in pg_stat_activity |
+| `URL` | `DB_URL` | "" | full connection string; when set, identity fields below are ignored. See [Connection string via `URL`](#connection-string-via-url). |
+| `Host` | `DB_HOST` | `localhost` | ignored if `URL` is set |
+| `Port` | `DB_PORT` | `5432` | ignored if `URL` is set |
+| `User` | `DB_USER` | — (required if no `URL`) | ignored if `URL` is set |
+| `Password` | `DB_PASSWORD` | "" | empty for trust auth; ignored if `URL` is set |
+| `Database` | `DB_NAME` | — (required if no `URL`) | ignored if `URL` is set |
+| `SSLMode` | `DB_SSLMODE` | `disable` | `require`/`verify-full`/etc.; ignored if `URL` is set |
+| `AppName` | `DB_APP_NAME` | "" | shown in `pg_stat_activity`; auto-set from `Service.NodeName` under `service.New`. See [Application name in `pg_stat_activity`](#application-name-in-pg_stat_activity). |
+| `HasReadReplica` | `DB_HAS_READ_REPLICA` | `false` | opens a second pool against standbys. See [Read replicas](#read-replicas). |
 | `MaxConns` | `DB_MAX_CONNS` | 10 | |
 | `MinConns` | `DB_MIN_CONNS` | 0 | |
 | `MaxConnLifetime` | `DB_MAX_LIFETIME` | 1h | |
@@ -79,6 +81,38 @@ base / 16s cap (~31s total). To disable, set
 
 The retry loop respects `ctx.Done()` — a deadline-bounded ctx
 aborts mid-backoff rather than hanging.
+
+### Connection string via `URL`
+
+`Config.URL` (env `DB_URL`) is the full postgres connection string. When set,
+the individual fields (`Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`)
+are ignored.
+
+```
+DB_URL=postgres://app:s3cret@postgres-svc.default:5432/appdb?sslmode=disable
+```
+
+**Multi-host failover** is built into pgx — comma-separate the hosts inside the URL:
+
+```
+DB_URL=postgres://app:s3cret@h1,h2,h3:5432/appdb
+```
+
+pgx connects to whichever host satisfies `target_session_attrs=read-write`
+(the kit always appends this to the primary pool's URL). On a master failover,
+the pool reconnects to the new master automatically.
+
+Note: `AppName` and `ConnectTimeout` are still merged into the URL as query
+params when not already present — only the identity fields are fully ignored.
+
+### Application name in `pg_stat_activity`
+
+`Config.AppName` (env `DB_APP_NAME`) is sent to PostgreSQL during Connect and
+appears in `pg_stat_activity.application_name`. When building a `*db.DB`
+through `service.New`, the kit auto-sets this to `Service.NodeName` if you
+left it empty — every pod is identifiable to DBAs as its K8s hostname.
+
+To override per-environment, set `DB_APP_NAME=custom-name`.
 
 ### Options
 
@@ -160,6 +194,41 @@ if err := d.Healthcheck(ctx); err != nil {
 pool := d.Pool()  // *pgxpool.Pool
 // Use pool.Acquire / pool.SendBatch / etc. directly. Errors are NOT mapped here.
 ```
+
+## Read replicas
+
+Set `Config.HasReadReplica = true` (env `DB_HAS_READ_REPLICA=true`) and the kit
+opens a **second** internal pool against the same connection string with
+`target_session_attrs=standby`. The single `*db.DB` you get back exposes two
+sets of methods:
+
+| Method | Pool | When to use |
+|---|---|---|
+| `Query` / `QueryRow` / `Exec` / `Tx` | primary (write) | mutations, reads-after-writes, `SELECT FOR UPDATE`, `INSERT/UPDATE/DELETE RETURNING` |
+| `ReadQuery` / `ReadQueryRow` | read replica (falls back to primary when not configured) | replica-lag-tolerant reads: listings, search, analytics, plain GETs |
+
+Example:
+
+```go
+// Write — always primary
+row := db.QueryRow(ctx, `INSERT INTO links(...) VALUES (...) RETURNING id`, ...)
+
+// Read that tolerates lag — read pool if configured, primary otherwise
+rows, err := db.ReadQuery(ctx, `SELECT * FROM links WHERE user_id = $1`, userID)
+```
+
+**Requirements:** PostgreSQL **14+** (`target_session_attrs=standby` is PG 14+;
+older PG only has `read-only`). The primary URL stays `target_session_attrs=read-write`.
+
+**Boot-time retry budget:** when `HasReadReplica=true`, the kit runs the connect-retry loop against each pool sequentially. Total wait at boot can be roughly **2× the single-pool budget** (with default `ConnectMaxRetries=5` / `ConnectBackoffMax=16s`, ≈30s → ≈60s worst case). Size your K8s readiness probe `failureThreshold` × `periodSeconds` accordingly, or lower `DB_CONNECT_MAX_RETRIES` if you'd rather restart-and-retry than wait at boot.
+
+**Behaviour on master failover:** pgx reconnects the primary pool to whichever
+host in your multi-host URL now reports itself as read-write. No service
+restart or env change needed. The read pool keeps targeting standbys.
+
+**Behaviour when the standby pool can't connect at boot:** kit fails loud —
+`db.Connect` returns `*errs.Error{Kind:KindUnavailable, Code:"db_unavailable"}`
+and closes the primary pool before returning. Set `HasReadReplica=false` to opt out.
 
 ## Error model
 

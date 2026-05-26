@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -161,5 +162,117 @@ func TestConnect_CtxCancelDuringBackoff(t *testing.T) {
 	// must NOT consume the full MaxRetries x backoff_max budget.
 	if elapsed > 1*time.Second {
 		t.Fatalf("did not abort on ctx cancel: %v", elapsed)
+	}
+}
+
+func TestConnect_URLOverridesIndividualFields(t *testing.T) {
+	pgOnce.Do(initPostgresContainer)
+	if pgErr != nil {
+		t.Fatalf("postgres: %v", pgErr)
+	}
+	cfg := db.Config{
+		URL:            fmt.Sprintf("postgres://test:test@%s:%d/test?sslmode=disable", pgCfg.Host, pgCfg.Port),
+		Host:           "bogus.example.com",
+		Port:           1,
+		User:           "bogus",
+		Password:       "bogus",
+		Database:       "bogus",
+		SSLMode:        "disable",
+		ConnectTimeout: 5 * time.Second,
+	}
+	d, err := db.Connect(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(d.Close)
+	var one int
+	if err := d.QueryRow(context.Background(), "SELECT 1").Scan(&one); err != nil {
+		t.Fatalf("select 1: %v", err)
+	}
+	if one != 1 {
+		t.Fatalf("got %d, want 1", one)
+	}
+}
+
+func TestConnect_HasReadReplica_FailsLoudWhenNoStandby(t *testing.T) {
+	pgOnce.Do(initPostgresContainer)
+	if pgErr != nil {
+		t.Fatalf("postgres: %v", pgErr)
+	}
+	cfg := pgCfg
+	cfg.HasReadReplica = true
+	cfg.ConnectMaxRetries = 0
+	cfg.ConnectTimeout = 2 * time.Second
+	_, err := db.Connect(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error (single-node container has no standby), got nil")
+	}
+	var e *errs.Error
+	if !errors.As(err, &e) || e.Kind != errs.KindUnavailable {
+		t.Fatalf("expected *errs.Error{Kind:KindUnavailable}, got %v (%T)", err, err)
+	}
+	if e.Code != "db_unavailable" {
+		t.Fatalf("expected Code=db_unavailable, got %q", e.Code)
+	}
+}
+
+func TestConnect_AppName_VisibleInPgStatActivity(t *testing.T) {
+	pgOnce.Do(initPostgresContainer)
+	if pgErr != nil {
+		t.Fatalf("postgres: %v", pgErr)
+	}
+	cfg := pgCfg
+	cfg.AppName = "urlshort-test-pod-7"
+	d, err := db.Connect(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(d.Close)
+
+	var got string
+	if err := d.QueryRow(context.Background(),
+		`SELECT application_name FROM pg_stat_activity WHERE pid = pg_backend_pid()`,
+	).Scan(&got); err != nil {
+		t.Fatalf("query pg_stat_activity: %v", err)
+	}
+	if got != "urlshort-test-pod-7" {
+		t.Fatalf("application_name = %q, want urlshort-test-pod-7", got)
+	}
+}
+
+func TestReadQuery_FallsBackToPrimary_WhenNoReplica(t *testing.T) {
+	d := startTestDB(t)
+	rows, err := d.ReadQuery(context.Background(), "SELECT 1")
+	if err != nil {
+		t.Fatalf("ReadQuery: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatal("expected one row")
+	}
+	var n int
+	if err := rows.Scan(&n); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("got %d, want 1", n)
+	}
+}
+
+func TestReadQueryRow_FallsBackToPrimary_WhenNoReplica(t *testing.T) {
+	d := startTestDB(t)
+	var n int
+	if err := d.ReadQueryRow(context.Background(), "SELECT 42").Scan(&n); err != nil {
+		t.Fatalf("ReadQueryRow: %v", err)
+	}
+	if n != 42 {
+		t.Fatalf("got %d, want 42", n)
+	}
+}
+
+func TestReadPool_NilWhenNoReplica(t *testing.T) {
+	d := startTestDB(t)
+	if d.ReadPool() != nil {
+		t.Fatal("expected ReadPool() == nil with HasReadReplica=false")
 	}
 }

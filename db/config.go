@@ -15,6 +15,28 @@ import (
 //	}
 //	if err := env.Parse(&cfg); err != nil { ... }
 type Config struct {
+	// URL is the full postgres connection string. When set, all
+	// connection-identity fields (Host, Port, User, Password, Database,
+	// SSLMode) are ignored. K8s-native pattern:
+	//
+	//   DB_URL=postgres://app:pass@postgres-svc.default:5432/appdb?sslmode=disable
+	//
+	// Multi-host failover (pgx native):
+	//
+	//   DB_URL=postgres://app:pass@h1,h2,h3:5432/appdb
+	//
+	// AppName and ConnectTimeout are still merged into the URL as query
+	// parameters when they are not already present — only the identity
+	// fields are fully ignored.
+	URL string `env:"URL"`
+
+	// HasReadReplica enables a second internal pgxpool against the same
+	// URL with target_session_attrs=standby. ReadQuery / ReadQueryRow
+	// route to it; everything else uses the primary pool. Requires
+	// PostgreSQL 14+. Default false; ReadQuery falls back to the primary
+	// pool in that case.
+	HasReadReplica bool `env:"HAS_READ_REPLICA"`
+
 	Host     string `env:"HOST"          envDefault:"localhost"`
 	Port     int    `env:"PORT"          envDefault:"5432"`
 	User     string `env:"USER,required"`
@@ -45,23 +67,51 @@ type Config struct {
 	ConnectBackoffMax time.Duration `env:"CONNECT_BACKOFF_MAX"`
 }
 
-// buildConnString renders cfg as a libpq-style URL. Password and user are
-// URL-escaped so special characters (slashes, at-signs) don't break parsing.
-func buildConnString(cfg Config) string {
-	userinfo := url.QueryEscape(cfg.User)
-	if cfg.Password != "" {
-		userinfo += ":" + url.QueryEscape(cfg.Password)
+// buildPgxURL renders cfg as a libpq-style URL suitable for pgxpool.ParseConfig.
+//
+// When cfg.URL is non-empty it is used verbatim as the base; otherwise the URL
+// is assembled from Host/Port/User/Password/Database/SSLMode with AppName and
+// ConnectTimeout injected as query parameters.
+//
+// tsa, when non-empty, is injected as the target_session_attrs query parameter
+// unless the user has already set it in cfg.URL. The primary pool passes
+// "read-write" to defend against a multi-host URL silently landing on a
+// standby; a read-replica pool passes "standby". Empty tsa skips injection.
+func buildPgxURL(cfg Config, tsa string) (string, error) {
+	var raw string
+	if cfg.URL != "" {
+		raw = cfg.URL
+	} else {
+		raw = assembleURL(cfg)
 	}
-
-	q := url.Values{}
-	q.Set("sslmode", cfg.SSLMode)
-	if cfg.AppName != "" {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	if cfg.AppName != "" && q.Get("application_name") == "" {
 		q.Set("application_name", cfg.AppName)
 	}
-	if cfg.ConnectTimeout > 0 {
+	if cfg.ConnectTimeout > 0 && q.Get("connect_timeout") == "" {
 		q.Set("connect_timeout", strconv.Itoa(int(cfg.ConnectTimeout.Seconds())))
 	}
+	if tsa != "" && q.Get("target_session_attrs") == "" {
+		q.Set("target_session_attrs", tsa)
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
 
+// assembleURL renders the non-URL fields into a postgres:// string.
+func assembleURL(cfg Config) string {
+	var userinfo *url.Userinfo
+	if cfg.Password != "" {
+		userinfo = url.UserPassword(cfg.User, cfg.Password)
+	} else {
+		userinfo = url.User(cfg.User)
+	}
+	q := url.Values{}
+	q.Set("sslmode", cfg.SSLMode)
 	return fmt.Sprintf("postgres://%s@%s:%d/%s?%s",
-		userinfo, cfg.Host, cfg.Port, cfg.Database, q.Encode())
+		userinfo.String(), cfg.Host, cfg.Port, cfg.Database, q.Encode())
 }
