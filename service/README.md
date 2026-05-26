@@ -131,7 +131,9 @@ Either path triggers auto-build via `clients/natsmap`. Both paths may point at t
 | `WithHTTPCOptions(opts...)` | Extra httpc options (logger + metrics already auto-applied) |
 | `WithAPIMapOptions(opts...)` | Extra apimap options |
 | `WithAPIMapRegistration(fn)` | Register typed Request/Response models BEFORE `apimap.Build` seals the engine |
+| `WithAPIMapEnv(m map[string]string)` | Explicit `${VAR}` values for apimap's clients.yaml. Map consulted before `os.LookupEnv`. |
 | `WithNATSMapRegistration(fn)` | Register typed subscriber handlers + publishers via `natsmap.RegisterHandler[T]` / `natsmap.RegisterPublisher[T]` BEFORE `natsmap.Build` opens subscriptions. Required when `NATSMap.*Path` is set. |
+| `WithNATSMapEnv(m map[string]string)` | Explicit `${VAR}` values for natsmap's subscribers/publishers YAML. Map consulted before `os.LookupEnv`. |
 | `WithNATSOptions(opts...)` | Extra natsclient options |
 | `WithRunOptions(opts...)` | Append `fibermap.RunOption`s to the default production-ops bundle |
 

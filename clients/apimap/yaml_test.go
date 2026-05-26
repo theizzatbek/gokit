@@ -15,7 +15,7 @@ func TestParseBytes_Minimal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := parseBytes(b)
+	cfg, err := parseBytes(b, nil)
 	if err != nil {
 		t.Fatalf("parseBytes: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestParseBytes_MultiClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := parseBytes(b)
+	cfg, err := parseBytes(b, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestParseBytes_MultiClient(t *testing.T) {
 
 func TestParseBytes_SyntaxError(t *testing.T) {
 	bad := []byte("clients: [\n  - name: github\n    base_url:\n  invalid_indent")
-	_, err := parseBytes(bad)
+	_, err := parseBytes(bad, nil)
 	if err == nil {
 		t.Fatal("parseBytes succeeded on malformed YAML, want error")
 	}
@@ -73,7 +73,7 @@ func TestParseBytes_SyntaxError(t *testing.T) {
 }
 
 func TestParseBytes_EmptyClientsRejected(t *testing.T) {
-	_, err := parseBytes([]byte("clients: []\n"))
+	_, err := parseBytes([]byte("clients: []\n"), nil)
 	if err == nil {
 		t.Fatal("parseBytes on empty clients: succeeded, want CodeNoClients")
 	}
@@ -94,7 +94,7 @@ func TestParseBytes_EnvSubst_Happy(t *testing.T) {
       token: ${GH_TOK}
     endpoints: [{name: a, method: GET, path: /a}]
 `)
-	cfg, err := parseBytes(yaml)
+	cfg, err := parseBytes(yaml, nil)
 	if err != nil {
 		t.Fatalf("parseBytes: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestParseBytes_EnvSubst_MissingVarRejected(t *testing.T) {
     base_url: ${MUST_NOT_BE_SET_FOR_TEST}
     endpoints: [{name: a, method: GET, path: /a}]
 `)
-	_, err := parseBytes(yaml)
+	_, err := parseBytes(yaml, nil)
 	if err == nil {
 		t.Fatal("parseBytes succeeded, want CodeEnvVarUnset")
 	}
@@ -129,7 +129,7 @@ func TestParseBytes_EnvSubst_MalformedRejected(t *testing.T) {
     base_url: https://x
     endpoints: [{name: a, method: GET, path: /a}]
 `)
-	_, err := parseBytes(yaml)
+	_, err := parseBytes(yaml, nil)
 	if err == nil {
 		t.Fatal("parseBytes succeeded, want CodeEnvVarMalformed")
 	}
@@ -145,7 +145,7 @@ func TestParseBytes_EnvSubst_LiteralDollarPassesThrough(t *testing.T) {
     base_url: https://api.example.com/v$50
     endpoints: [{name: a, method: GET, path: /a}]
 `)
-	cfg, err := parseBytes(yaml)
+	cfg, err := parseBytes(yaml, nil)
 	if err != nil {
 		t.Fatalf("parseBytes: %v", err)
 	}

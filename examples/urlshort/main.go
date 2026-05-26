@@ -44,11 +44,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// apimap reads ${MICROLINK_BASE_URL} via os.Getenv at LoadFile.
-	// Push the cfg value into env so config remains the single source of truth.
-	if err := os.Setenv("MICROLINK_BASE_URL", cfg.MicrolinkBaseURL); err != nil {
-		return err
-	}
 	cfg.APIMap.Path = "clients.yaml"
 	cfg.NATSMap.PublishersPath = "publishers.yaml"
 
@@ -60,6 +55,9 @@ func run() error {
 			Title:       "urlshort API",
 			Version:     "0.1.0",
 			Description: "gokit integration example — URL shortener.",
+		}),
+		service.WithAPIMapEnv(map[string]string{
+			"MICROLINK_BASE_URL": cfg.MicrolinkBaseURL,
 		}),
 		service.WithAPIMapRegistration(func(e *apimap.Engine) {
 			apimap.RegisterResponse[enrich.MicroLinkResp](e, "microlink.metadata")

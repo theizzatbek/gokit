@@ -31,6 +31,8 @@ type Engine struct {
 	// publisherTypes maps publisher name → reflect.Type of the registered T.
 	publisherTypes map[string]reflect.Type
 
+	envMap map[string]string // nil = no overrides; LoadBytes builds composite lookup
+
 	built bool
 }
 
@@ -47,13 +49,28 @@ type msgMeta struct {
 	Timestamp    time.Time
 }
 
+// EngineOption configures Engine at construction time.
+type EngineOption func(*Engine)
+
+// WithEnv supplies explicit values for ${VAR} substitution at
+// LoadBytes/LoadFile time. The map is consulted first; on miss the
+// lookup falls back to os.LookupEnv. Pass to New(...). nil or empty
+// map is a no-op (falls back to os.LookupEnv for every key).
+func WithEnv(m map[string]string) EngineOption {
+	return func(e *Engine) { e.envMap = m }
+}
+
 // New returns an empty Engine.
-func New() *Engine {
-	return &Engine{
+func New(opts ...EngineOption) *Engine {
+	e := &Engine{
 		handlerTypes:   map[string]reflect.Type{},
 		handlerFns:     map[string]func(ctx context.Context, ptr any, meta msgMeta) error{},
 		publisherTypes: map[string]reflect.Type{},
 	}
+	for _, fn := range opts {
+		fn(e)
+	}
+	return e
 }
 
 // LoadFile reads a YAML file (subscribers, publishers, or both) and
@@ -70,13 +87,28 @@ func (e *Engine) LoadFile(path string) error {
 // LoadBytes parses and appends YAML content. May be called multiple
 // times — entries from each call accumulate into one engine.
 func (e *Engine) LoadBytes(b []byte) error {
-	cfg, err := parseBytes(b)
+	cfg, err := parseBytes(b, e.envLookup())
 	if err != nil {
 		return err
 	}
 	e.subscribers = append(e.subscribers, cfg.Subscribers...)
 	e.publishers = append(e.publishers, cfg.Publishers...)
 	return nil
+}
+
+// envLookup returns the composite ${VAR} resolver: engine map first,
+// then os.LookupEnv. Returns nil when no map is set, letting
+// substituteEnv use its default (os.LookupEnv).
+func (e *Engine) envLookup() func(string) (string, bool) {
+	if e.envMap == nil {
+		return nil
+	}
+	return func(name string) (string, bool) {
+		if v, ok := e.envMap[name]; ok {
+			return v, true
+		}
+		return os.LookupEnv(name)
+	}
 }
 
 // RegisterHandler records a typed handler for the subscriber named.

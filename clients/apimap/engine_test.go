@@ -3,6 +3,8 @@ package apimap
 import (
 	"errors"
 	"net/http"
+	"os"
+	"strings"
 	"testing"
 
 	xerrs "github.com/theizzatbek/gokit/errs"
@@ -268,3 +270,52 @@ func TestEngine_Build_AuthHeaderStoredOnResolvedEndpoint(t *testing.T) {
 
 // Silence unused import warning if http isn't used directly elsewhere.
 var _ = http.DefaultTransport
+
+func TestWithEnv_MapWinsOverProcessEnv(t *testing.T) {
+	t.Setenv("APIMAP_TEST_KEY", "from-env")
+	e := New(WithEnv(map[string]string{"APIMAP_TEST_KEY": "from-map"}))
+	yaml := []byte(`clients:
+  - name: x
+    base_url: https://${APIMAP_TEST_KEY}.example.com
+    endpoints:
+      - {name: get, method: GET, path: /, decode: json}
+`)
+	if err := e.LoadBytes(yaml); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	if got, want := e.clients[0].BaseURL, "https://from-map.example.com"; got != want {
+		t.Fatalf("BaseURL: got %q want %q (map should win)", got, want)
+	}
+}
+
+func TestWithEnv_FallsBackToProcessEnv(t *testing.T) {
+	t.Setenv("APIMAP_TEST_KEY_X", "from-env-only")
+	e := New(WithEnv(map[string]string{"OTHER_KEY": "y"}))
+	yaml := []byte(`clients:
+  - name: x
+    base_url: https://${APIMAP_TEST_KEY_X}.example.com
+    endpoints:
+      - {name: get, method: GET, path: /, decode: json}
+`)
+	if err := e.LoadBytes(yaml); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	if got, want := e.clients[0].BaseURL, "https://from-env-only.example.com"; got != want {
+		t.Fatalf("BaseURL: got %q want %q (process env fallback)", got, want)
+	}
+}
+
+func TestWithEnv_BothMissingReturnsCodeEnvVarUnset(t *testing.T) {
+	os.Unsetenv("APIMAP_TEST_KEY_MISSING")
+	e := New(WithEnv(map[string]string{}))
+	yaml := []byte(`clients:
+  - name: x
+    base_url: https://${APIMAP_TEST_KEY_MISSING}.example.com
+    endpoints:
+      - {name: get, method: GET, path: /, decode: json}
+`)
+	err := e.LoadBytes(yaml)
+	if err == nil || !strings.Contains(err.Error(), CodeEnvVarUnset) {
+		t.Fatalf("want CodeEnvVarUnset, got %v", err)
+	}
+}

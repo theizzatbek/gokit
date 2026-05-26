@@ -155,6 +155,19 @@ subscribers:
 | `natsmap_env_var_unset` | `${FOO}` referenced but `FOO` not in env |
 | `natsmap_env_var_malformed` | `${...}` shape doesn't match the regex (e.g. `${lower-case}`) |
 
+### Explicit env values via `WithEnv`
+
+If your service already has typed config, pass values explicitly:
+
+```go
+e := natsmap.New(natsmap.WithEnv(map[string]string{
+    "ORDERS_STREAM_PREFIX": cfg.OrdersStreamPrefix,
+}))
+e.LoadFile("subscribers.yaml")
+```
+
+Map consulted first; on miss falls back to `os.LookupEnv`. Both miss → `natsmap_env_var_unset`.
+
 ### `start_from` shapes
 
 | Value | Meaning |

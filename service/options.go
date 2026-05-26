@@ -28,7 +28,9 @@ type options struct {
 	httpcOpts           []httpc.Option
 	apimapOpts          []apimap.Option
 	apimapRegistration  func(*apimap.Engine)
+	apimapEnv           map[string]string
 	natsmapRegistration func(*natsmap.Engine)
+	natsmapEnv          map[string]string
 	natsOpts            []natsclient.Option
 	runOpts             []fibermap.RunOption
 }
@@ -96,6 +98,17 @@ func WithAPIMapRegistration(fn func(*apimap.Engine)) Option {
 	return func(o *options) { o.apimapRegistration = fn }
 }
 
+// WithAPIMapEnv supplies explicit values for ${VAR} substitution in
+// apimap's clients.yaml. Map is consulted before os.LookupEnv. Use this
+// to feed typed config into apimap without polluting process env.
+//
+//	service.New(... ,
+//	    service.WithAPIMapEnv(map[string]string{"UPSTREAM_URL": cfg.UpstreamURL}),
+//	)
+func WithAPIMapEnv(m map[string]string) Option {
+	return func(o *options) { o.apimapEnv = m }
+}
+
 // WithNATSMapRegistration registers typed subscriber handlers and
 // publishers on the natsmap engine BEFORE Build seals it. Required when
 // using Config.NATSMap.{Subscribers,Publishers}Path.
@@ -108,6 +121,13 @@ func WithAPIMapRegistration(fn func(*apimap.Engine)) Option {
 //	)
 func WithNATSMapRegistration(fn func(*natsmap.Engine)) Option {
 	return func(o *options) { o.natsmapRegistration = fn }
+}
+
+// WithNATSMapEnv supplies explicit values for ${VAR} substitution in
+// natsmap's subscribers/publishers YAML. Map is consulted before
+// os.LookupEnv. Symmetric to WithAPIMapEnv.
+func WithNATSMapEnv(m map[string]string) Option {
+	return func(o *options) { o.natsmapEnv = m }
 }
 
 // WithNATSOptions appends to the natsclient options.

@@ -139,7 +139,11 @@ func (s *Service[T, C]) buildAPIMap() error {
 	if s.cfg.APIMap.Path == "" {
 		return nil
 	}
-	eng := apimap.New()
+	var apimapNewOpts []apimap.EngineOption
+	if s.opts.apimapEnv != nil {
+		apimapNewOpts = append(apimapNewOpts, apimap.WithEnv(s.opts.apimapEnv))
+	}
+	eng := apimap.New(apimapNewOpts...)
 	if err := eng.LoadFile(s.cfg.APIMap.Path); err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation, CodeAPIMapLoadFailed,
 			fmt.Sprintf("service: apimap load %q failed", s.cfg.APIMap.Path))
@@ -179,7 +183,11 @@ func (s *Service[T, C]) buildNATSMap(ctx context.Context) error {
 	if s.cfg.NATSMap.SubscribersPath == "" && s.cfg.NATSMap.PublishersPath == "" {
 		return nil
 	}
-	eng := natsmap.New()
+	var natsmapNewOpts []natsmap.EngineOption
+	if s.opts.natsmapEnv != nil {
+		natsmapNewOpts = append(natsmapNewOpts, natsmap.WithEnv(s.opts.natsmapEnv))
+	}
+	eng := natsmap.New(natsmapNewOpts...)
 	if p := s.cfg.NATSMap.SubscribersPath; p != "" {
 		if err := eng.LoadFile(p); err != nil {
 			return xerrs.Wrap(err, xerrs.KindValidation, CodeNATSMapLoadFailed,

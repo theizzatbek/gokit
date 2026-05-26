@@ -15,7 +15,7 @@ func loadRaw(t *testing.T, fixture string) *rawConfig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := parseBytes(b)
+	cfg, err := parseBytes(b, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
