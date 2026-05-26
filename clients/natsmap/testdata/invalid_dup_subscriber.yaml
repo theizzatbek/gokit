@@ -1,0 +1,3 @@
+subscribers:
+  - { name: a, subject: orders.created }
+  - { name: a, subject: orders.shipped }

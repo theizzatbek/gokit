@@ -1,0 +1,2 @@
+subscribers:
+  - { name: a, subject: orders.created, max_deliver: -5 }
