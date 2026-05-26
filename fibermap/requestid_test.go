@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
+
+	"github.com/theizzatbek/gokit/reqctx"
 )
 
 func TestRequestID_GeneratesWhenMissing(t *testing.T) {
@@ -62,5 +64,24 @@ func TestRequestID_PopulatesLocals(t *testing.T) {
 	}
 	if len(captured) != 16 {
 		t.Errorf("Locals(request_id) = %q, want 16 chars", captured)
+	}
+}
+
+func TestRequestID_InjectsIntoUserContext(t *testing.T) {
+	app := fiber.New()
+	app.Use(RequestID())
+	var capturedFromCtx string
+	app.Get("/x", func(c *fiber.Ctx) error {
+		capturedFromCtx = reqctx.RequestIDFromContext(c.UserContext())
+		return c.SendString("ok")
+	})
+
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.Header.Set(HeaderRequestID, "ctx-flow-test")
+	if _, err := app.Test(req); err != nil {
+		t.Fatal(err)
+	}
+	if capturedFromCtx != "ctx-flow-test" {
+		t.Fatalf("user-context request_id = %q, want %q", capturedFromCtx, "ctx-flow-test")
 	}
 }
