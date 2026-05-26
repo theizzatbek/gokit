@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/theizzatbek/gokit/db"
@@ -42,5 +43,24 @@ func TestConfig_Validate_Matrix(t *testing.T) {
 				t.Errorf("err = %v, want code %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestValidate_NATSMapRequiresNATS(t *testing.T) {
+	cfg := Config{}
+	cfg.NATSMap.SubscribersPath = "subscribers.yaml"
+	// NATS.URL intentionally empty
+	if err := cfg.Validate(); err == nil ||
+		!strings.Contains(err.Error(), CodeNATSMapNeedsNATS) {
+		t.Fatalf("want CodeNATSMapNeedsNATS, got %v", err)
+	}
+}
+
+func TestValidate_NATSMapWithNATS_OK(t *testing.T) {
+	cfg := Config{}
+	cfg.NATSMap.PublishersPath = "publishers.yaml"
+	cfg.NATS.URL = "nats://localhost:4222"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
 	}
 }
