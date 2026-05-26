@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -110,5 +111,49 @@ func TestNew_NATSMapOverridePath_FileMissing_ReturnsCodeNATSMapYAMLNotFound(t *t
 	_, err := New[map[string]any, any](context.Background(), cfg)
 	if err == nil || !strings.Contains(err.Error(), CodeNATSMapYAMLNotFound) {
 		t.Fatalf("want CodeNATSMapYAMLNotFound, got %v", err)
+	}
+}
+
+func TestNew_WithAPIMap_DefaultFilePresent_Builds(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	if err := os.WriteFile("clients.yaml", []byte(`clients:
+  - name: x
+    base_url: https://example.com
+    endpoints:
+      - {name: get, method: GET, path: /, decode: json}
+`), 0o644); err != nil {
+		t.Fatalf("write clients.yaml: %v", err)
+	}
+	svc, err := New[map[string]any, any](context.Background(), Config{}, WithAPIMap())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+	if svc.APIMap == nil {
+		t.Fatal("svc.APIMap == nil; WithAPIMap() did not trigger build")
+	}
+}
+
+func TestNew_WithAPIMap_FileMissing_ReturnsCodeAPIMapYAMLNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	_, err := New[map[string]any, any](context.Background(), Config{}, WithAPIMap())
+	if err == nil || !strings.Contains(err.Error(), CodeAPIMapYAMLNotFound) {
+		t.Fatalf("want CodeAPIMapYAMLNotFound, got %v", err)
+	}
+}
+
+func TestNew_WithNATSMap_WithoutNATS_ReturnsCodeNATSMapNeedsNATS(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	if err := os.WriteFile("publishers.yaml", []byte(`publishers:
+  - {name: p, subject: test.x}
+`), 0o644); err != nil {
+		t.Fatalf("write publishers.yaml: %v", err)
+	}
+	_, err := New[map[string]any, any](context.Background(), Config{}, WithNATSMap())
+	if err == nil || !strings.Contains(err.Error(), CodeNATSMapNeedsNATS) {
+		t.Fatalf("want CodeNATSMapNeedsNATS, got %v", err)
 	}
 }

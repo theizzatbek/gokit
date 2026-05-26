@@ -44,14 +44,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	cfg.APIMap.Enabled = true
-	cfg.NATSMap.Enabled = true
-	cfg.Routes.Enabled = true
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
+		service.WithAPIMap(),
+		service.WithNATSMap(),
+		service.WithRoutes(),
 		service.WithOpenAPI(openapi.Info{
 			Title:       "urlshort API",
 			Version:     "0.1.0",

@@ -29,9 +29,12 @@ type options struct {
 	apimapOpts          []apimap.Option
 	apimapRegistration  func(*apimap.Engine)
 	apimapEnv           map[string]string
+	apimapEnable        bool
 	natsmapRegistration func(*natsmap.Engine)
 	natsmapEnv          map[string]string
+	natsmapEnable       bool
 	natsOpts            []natsclient.Option
+	routesEnable        bool
 	runOpts             []fibermap.RunOption
 }
 
@@ -109,6 +112,14 @@ func WithAPIMapEnv(m map[string]string) Option {
 	return func(o *options) { o.apimapEnv = m }
 }
 
+// WithAPIMap enables apimap auto-build using DefaultAPIMapPath when no
+// Config.APIMap.Path override is set. Equivalent to setting
+// Config.APIMap.Enabled = true. Missing file produces
+// CodeAPIMapYAMLNotFound at service.New time.
+func WithAPIMap() Option {
+	return func(o *options) { o.apimapEnable = true }
+}
+
 // WithNATSMapRegistration registers typed subscriber handlers and
 // publishers on the natsmap engine BEFORE Build seals it. Required when
 // using Config.NATSMap.{Subscribers,Publishers}Path.
@@ -130,6 +141,15 @@ func WithNATSMapEnv(m map[string]string) Option {
 	return func(o *options) { o.natsmapEnv = m }
 }
 
+// WithNATSMap enables natsmap auto-build using the default
+// subscribers/publishers paths. Equivalent to setting
+// Config.NATSMap.Enabled = true. Missing both default files produces
+// CodeNATSMapYAMLNotFound; at least one must exist. Requires NATS to
+// be configured (Config.NATS.URL set).
+func WithNATSMap() Option {
+	return func(o *options) { o.natsmapEnable = true }
+}
+
 // WithNATSOptions appends to the natsclient options.
 func WithNATSOptions(opts ...natsclient.Option) Option {
 	return func(o *options) { o.natsOpts = append(o.natsOpts, opts...) }
@@ -139,4 +159,11 @@ func WithNATSOptions(opts ...natsclient.Option) Option {
 // production-ops bundle Run uses.
 func WithRunOptions(opts ...fibermap.RunOption) Option {
 	return func(o *options) { o.runOpts = append(o.runOpts, opts...) }
+}
+
+// WithRoutes enables routes auto-load in svc.Run() using
+// DefaultRoutesPath. Equivalent to setting Config.Routes.Enabled = true.
+// Missing file at Run time produces CodeRoutesYAMLNotFound.
+func WithRoutes() Option {
+	return func(o *options) { o.routesEnable = true }
 }

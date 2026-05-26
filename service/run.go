@@ -21,6 +21,9 @@ import (
 // *errs.Error{Code: CodeRoutesYAMLNotFound}.
 func (s *Service[T, C]) Run() error {
 	defer s.Close()
+	if s.opts.routesEnable {
+		s.cfg.Routes.Enabled = true
+	}
 	if path := resolvePath(s.cfg.Routes.Path, DefaultRoutesPath, s.cfg.Routes.Enabled); path != "" {
 		if _, err := os.Stat(path); err != nil {
 			return xerrs.Wrapf(err, xerrs.KindNotFound, CodeRoutesYAMLNotFound,
