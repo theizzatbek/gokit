@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/theizzatbek/gokit/reqctx"
 )
 
 // newLogger builds a *slog.Logger from the format/level strings in
@@ -25,7 +27,7 @@ func newLogger(format, level, nodeName, serverGroup string) *slog.Logger {
 	default:
 		h = slog.NewJSONHandler(os.Stdout, opts)
 	}
-	l := slog.New(h)
+	l := slog.New(reqctx.SlogHandler(h))
 	if nodeName != "" {
 		l = l.With("node", nodeName)
 	}
