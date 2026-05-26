@@ -137,6 +137,9 @@ func (s *Service[T, C]) buildHTTPC() error {
 }
 
 func (s *Service[T, C]) buildAPIMap() error {
+	if s.opts.apimapEnable {
+		s.cfg.APIMap.Enabled = true
+	}
 	path := resolvePath(s.cfg.APIMap.Path, DefaultAPIMapPath, s.cfg.APIMap.Enabled)
 	if path == "" {
 		return nil
@@ -180,10 +183,17 @@ func (s *Service[T, C]) buildNATS(ctx context.Context) error {
 }
 
 func (s *Service[T, C]) buildNATSMap(ctx context.Context) error {
+	if s.opts.natsmapEnable {
+		s.cfg.NATSMap.Enabled = true
+	}
 	subs := resolvePath(s.cfg.NATSMap.SubscribersPath, DefaultNATSMapSubscribersPath, s.cfg.NATSMap.Enabled)
 	pubs := resolvePath(s.cfg.NATSMap.PublishersPath, DefaultNATSMapPublishersPath, s.cfg.NATSMap.Enabled)
 	if subs == "" && pubs == "" {
 		return nil
+	}
+	if s.NATS == nil {
+		return xerrs.Validation(CodeNATSMapNeedsNATS,
+			"service: NATSMap requires NATS (subscribers + publishers need a connection)")
 	}
 	// Override paths (user explicitly set SubscribersPath/PublishersPath)
 	// are strict: missing file → error. Default paths (used because
