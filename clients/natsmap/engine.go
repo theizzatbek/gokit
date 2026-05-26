@@ -12,6 +12,7 @@ import (
 
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	xerrs "github.com/theizzatbek/gokit/errs"
+	"github.com/theizzatbek/gokit/reqctx"
 )
 
 // Engine is the build-once configurator. Lifecycle:
@@ -308,6 +309,9 @@ func makeRawHandler(t reflect.Type, codec natsclient.Codec,
 		ptr := reflect.New(t)
 		if err := codec.Unmarshal(m.Body, ptr.Interface()); err != nil {
 			return fmt.Errorf("natsmap: decode failed: %w: %w", natsclient.ErrPoison, err)
+		}
+		if hdrs := m.Headers[reqctx.HeaderRequestID]; len(hdrs) > 0 && hdrs[0] != "" {
+			ctx = reqctx.WithRequestID(ctx, hdrs[0])
 		}
 		meta := msgMeta{
 			Subject:      m.Subject,
