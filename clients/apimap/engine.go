@@ -20,15 +20,33 @@ type Engine struct {
 	reqTypes  map[string]reflect.Type // endpoint full-name → registered request type
 	respTypes map[string]reflect.Type // endpoint full-name → registered response type
 
+	envMap map[string]string // nil = no overrides; LoadBytes builds composite lookup
+
 	built bool
 }
 
-// New returns an empty Engine.
-func New() *Engine {
-	return &Engine{
+// EngineOption configures Engine at construction time.
+type EngineOption func(*Engine)
+
+// WithEnv supplies explicit values for ${VAR} substitution at
+// LoadBytes/LoadFile time. The map is consulted first; on miss the
+// lookup falls back to os.LookupEnv. Pass to New(...). nil or empty
+// map is a no-op (falls back to os.LookupEnv for every key).
+func WithEnv(m map[string]string) EngineOption {
+	return func(e *Engine) { e.envMap = m }
+}
+
+// New returns an empty Engine. Pass EngineOption values (e.g.
+// WithEnv) to configure.
+func New(opts ...EngineOption) *Engine {
+	e := &Engine{
 		reqTypes:  map[string]reflect.Type{},
 		respTypes: map[string]reflect.Type{},
 	}
+	for _, fn := range opts {
+		fn(e)
+	}
+	return e
 }
 
 // LoadFile reads a YAML file and appends its clients to the engine.
@@ -45,12 +63,27 @@ func (e *Engine) LoadFile(path string) error {
 
 // LoadBytes parses and appends YAML content.
 func (e *Engine) LoadBytes(b []byte) error {
-	cfg, err := parseBytes(b)
+	cfg, err := parseBytes(b, e.envLookup())
 	if err != nil {
 		return err
 	}
 	e.clients = append(e.clients, cfg.Clients...)
 	return nil
+}
+
+// envLookup returns the composite ${VAR} resolver: engine map first,
+// then os.LookupEnv. Returns nil when no map is set, letting
+// substituteEnv use its default (os.LookupEnv).
+func (e *Engine) envLookup() func(string) (string, bool) {
+	if e.envMap == nil {
+		return nil
+	}
+	return func(name string) (string, bool) {
+		if v, ok := e.envMap[name]; ok {
+			return v, true
+		}
+		return os.LookupEnv(name)
+	}
 }
 
 // RegisterRequest records the Go type used by Exchange for the given
