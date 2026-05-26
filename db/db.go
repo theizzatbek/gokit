@@ -78,6 +78,10 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 		d.readPool = readPool
 	}
 
+	if cfg.HasReadReplica && o.metrics != nil && o.logger != nil {
+		o.logger.Warn("db: metrics with HasReadReplica — db_pool_size_total currently reflects the standby pool only; per-pool metric labels are TODO")
+	}
+
 	return d, nil
 }
 

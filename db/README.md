@@ -220,6 +220,8 @@ rows, err := db.ReadQuery(ctx, `SELECT * FROM links WHERE user_id = $1`, userID)
 **Requirements:** PostgreSQL **14+** (`target_session_attrs=standby` is PG 14+;
 older PG only has `read-only`). The primary URL stays `target_session_attrs=read-write`.
 
+**Boot-time retry budget:** when `HasReadReplica=true`, the kit runs the connect-retry loop against each pool sequentially. Total wait at boot can be roughly **2× the single-pool budget** (with default `ConnectMaxRetries=5` / `ConnectBackoffMax=16s`, ≈30s → ≈60s worst case). Size your K8s readiness probe `failureThreshold` × `periodSeconds` accordingly, or lower `DB_CONNECT_MAX_RETRIES` if you'd rather restart-and-retry than wait at boot.
+
 **Behaviour on master failover:** pgx reconnects the primary pool to whichever
 host in your multi-host URL now reports itself as read-write. No service
 restart or env change needed. The read pool keeps targeting standbys.
