@@ -66,6 +66,14 @@ func main() {
 
 Env-driven via `caarlos0/env/v11`. Compose into your own app config via embedding to add app-specific fields.
 
+### K8s boot resilience
+
+Service initializes DB and NATS with bounded retry (5 attempts,
+1s→16s exponential backoff) by default — accommodates the common
+pattern where postgres/nats containers Ready a few seconds after
+the service container starts. Opt out via `WithoutConnectRetry()`
+or set the per-subsystem env sentinel `_CONNECT_MAX_RETRIES=-1`.
+
 ### Top-level `service.Config`
 
 | Section | Prefix | Trigger | Notes |
@@ -221,6 +229,7 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithFiberMiddleware(handlers...)` | Insert fiber-level middleware before engine (helmet, cors, otelfiber, …) |
 | `WithoutAuthHandlers()` | Skip auto-mount of `/auth/login` `/refresh` `/logout` |
 | `WithoutBearerOptionalLayer()` | Skip the auto `Bearer(BearerOptional)` install |
+| `WithoutConnectRetry()` | Disables the auto-injected K8s-friendly retry defaults for DB and NATS Connect. Without this, service defaults to 5 retries with 1s→16s exponential backoff (~31s budget). See db/README and clients/nats/README. |
 | `WithHTTPCOptions(opts...)` | Extra httpc options (logger + metrics already auto-applied) |
 | `WithAPIMapOptions(opts...)` | Extra apimap options |
 | `WithAPIMap()` | Equivalent to `Config.APIMap.Enabled = true`. Apimap auto-builds from `service.DefaultAPIMapPath` (`clients.yaml`) when no `Path` override is set. Missing file → `service_apimap_yaml_not_found`. |

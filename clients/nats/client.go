@@ -3,6 +3,7 @@ package natsclient
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/nats-io/nats.go"
 
@@ -131,7 +132,31 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*Client, error) {
 		natsOpts = append(natsOpts, nats.ClosedHandler(o.closedHandler))
 	}
 
-	conn, err := nats.Connect(cfg.URL, natsOpts...)
+	var (
+		conn *nats.Conn
+		err  error
+	)
+	for attempt := 0; attempt <= cfg.ConnectMaxRetries; attempt++ {
+		if attempt > 0 {
+			wait := backoffWait(attempt, cfg.ConnectBackoffBase, cfg.ConnectBackoffMax)
+			if o.logger != nil {
+				o.logger.Warn("natsclient: connect failed, retrying",
+					"attempt", attempt,
+					"max_retries", cfg.ConnectMaxRetries,
+					"wait", wait,
+					"err", err)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, xerrs.Wrap(ctx.Err(), xerrs.KindUnavailable, CodeConnectFailed, "natsclient: connect cancelled")
+			case <-time.After(wait):
+			}
+		}
+		conn, err = nats.Connect(cfg.URL, natsOpts...)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return nil, xerrs.Wrap(err, xerrs.KindUnavailable, CodeConnectFailed, "natsclient: connect failed")
 	}
@@ -173,3 +198,16 @@ func (c *Client) JetStream() nats.JetStreamContext { return c.js }
 // Exposed for cross-package use (natsmap reflects payloads at runtime
 // and needs the same codec the client uses).
 func (c *Client) Codec() Codec { return c.opts.codec }
+
+// backoffWait returns the wait duration before attempt N (1-indexed).
+// Exponential: base << (N-1), capped at max. Returns 0 if base <= 0.
+func backoffWait(attempt int, base, max time.Duration) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	w := base << (attempt - 1)
+	if w <= 0 || w > max {
+		return max
+	}
+	return w
+}

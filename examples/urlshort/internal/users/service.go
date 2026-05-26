@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/theizzatbek/gokit/auth"
 	"github.com/theizzatbek/gokit/db"
 	xerrs "github.com/theizzatbek/gokit/errs"
@@ -32,8 +31,7 @@ func (s *Service) Register(ctx context.Context, email, password string) (User, e
 		`INSERT INTO users(email, password_hash) VALUES($1,$2) RETURNING id, email, created_at`,
 		email, hash)
 	if err := row.Scan(&u.ID, &u.Email, &u.CreatedAt); err != nil {
-		var pg *pgconn.PgError
-		if errors.As(err, &pg) && pg.Code == "23505" {
+		if e, ok := errors.AsType[*xerrs.Error](err); ok && e.Kind == xerrs.KindAlreadyExists {
 			return User{}, xerrs.AlreadyExists("user_exists", "urlshort: email already registered")
 		}
 		return User{}, err

@@ -28,6 +28,12 @@ type DB struct {
 // Connect opens a connection pool with cfg + opts. The returned *DB owns the
 // underlying *pgxpool.Pool; call Close to release it. Returns *errs.Error of
 // KindUnavailable if the pool fails its initial sanity ping.
+//
+// When cfg.ConnectMaxRetries > 0, transient pool-create / ping failures are
+// retried with exponential backoff (base = cfg.ConnectBackoffBase, doubling
+// each attempt, capped at cfg.ConnectBackoffMax). The loop honours ctx.Done()
+// during backoff sleeps, returning KindUnavailable with the ctx error. Default
+// 0 = single attempt, preserving fail-fast behaviour for kit-direct callers.
 func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 	pgxCfg, err := pgxpool.ParseConfig(buildConnString(cfg))
 	if err != nil {
@@ -61,26 +67,64 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 		}
 	}
 
-	pool, err := pgxpool.NewWithConfig(ctx, pgxCfg)
+	var pool *pgxpool.Pool
+	for attempt := 0; attempt <= cfg.ConnectMaxRetries; attempt++ {
+		if attempt > 0 {
+			wait := backoffWait(attempt, cfg.ConnectBackoffBase, cfg.ConnectBackoffMax)
+			if o.logger != nil {
+				o.logger.Warn("db: connect failed, retrying",
+					"attempt", attempt,
+					"max_retries", cfg.ConnectMaxRetries,
+					"wait", wait,
+					"err", err)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, errs.Wrap(ctx.Err(), errs.KindUnavailable, "db_unavailable", "connect cancelled")
+			case <-time.After(wait):
+			}
+		}
+		pool, err = pgxpool.NewWithConfig(ctx, pgxCfg)
+		if err != nil {
+			continue
+		}
+		pingCtx := ctx
+		if cfg.ConnectTimeout > 0 {
+			var cancel context.CancelFunc
+			pingCtx, cancel = context.WithTimeout(ctx, cfg.ConnectTimeout)
+			err = pool.Ping(pingCtx)
+			cancel()
+		} else {
+			err = pool.Ping(pingCtx)
+		}
+		if err != nil {
+			pool.Close()
+			pool = nil
+			continue
+		}
+		break
+	}
 	if err != nil {
-		return nil, errs.Wrap(err, errs.KindUnavailable, "db_unavailable", "could not open db pool")
+		return nil, errs.Wrap(err, errs.KindUnavailable, "db_unavailable", "could not reach db")
 	}
 
 	if o.metrics != nil {
 		o.metrics.attach(pool)
 	}
-
-	pingCtx := ctx
-	if cfg.ConnectTimeout > 0 {
-		var cancel context.CancelFunc
-		pingCtx, cancel = context.WithTimeout(ctx, cfg.ConnectTimeout)
-		defer cancel()
-	}
-	if err := pool.Ping(pingCtx); err != nil {
-		pool.Close()
-		return nil, errs.Wrap(err, errs.KindUnavailable, "db_unavailable", "could not reach db")
-	}
 	return &DB{pool: pool, opts: o}, nil
+}
+
+// backoffWait returns the wait duration before attempt N (1-indexed).
+// Exponential: base << (N-1), capped at max. Returns 0 if base <= 0.
+func backoffWait(attempt int, base, max time.Duration) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	w := base << (attempt - 1)
+	if w <= 0 || w > max {
+		return max
+	}
+	return w
 }
 
 // Close releases the underlying pool. Safe to call multiple times.

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/errs"
@@ -109,5 +110,56 @@ func TestConnect_WithLogger_LogsQueries(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "db query") {
 		t.Fatalf("expected tracer log, got %q", buf.String())
+	}
+}
+
+func TestConnect_FailsAfterBudget(t *testing.T) {
+	cfg := db.Config{
+		Host:               "127.0.0.1",
+		Port:               1, // unreachable
+		User:               "x",
+		Password:           "x",
+		Database:           "x",
+		SSLMode:            "disable",
+		ConnectMaxRetries:  2,
+		ConnectBackoffBase: 10 * time.Millisecond,
+		ConnectBackoffMax:  20 * time.Millisecond,
+	}
+	start := time.Now()
+	_, err := db.Connect(context.Background(), cfg)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// 2 retries with 10ms + 20ms backoff = >=30ms, well under 2s.
+	if elapsed > 2*time.Second {
+		t.Fatalf("budget exceeded: %v", elapsed)
+	}
+}
+
+func TestConnect_CtxCancelDuringBackoff(t *testing.T) {
+	cfg := db.Config{
+		Host:               "127.0.0.1",
+		Port:               1,
+		User:               "x",
+		Password:           "x",
+		Database:           "x",
+		SSLMode:            "disable",
+		ConnectMaxRetries:  100,
+		ConnectBackoffBase: 100 * time.Millisecond,
+		ConnectBackoffMax:  1 * time.Second,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := db.Connect(ctx, cfg)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// The retry loop must abort on ctx cancel within ~one backoff period;
+	// must NOT consume the full MaxRetries x backoff_max budget.
+	if elapsed > 1*time.Second {
+		t.Fatalf("did not abort on ctx cancel: %v", elapsed)
 	}
 }

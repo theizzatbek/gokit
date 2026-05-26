@@ -64,8 +64,11 @@ type AuthConfig struct {
 
 // NATSConfig — URL is the opt-in trigger.
 type NATSConfig struct {
-	URL  string `env:"URL"`
-	Name string `env:"NAME"`
+	URL                string        `env:"URL"`
+	Name               string        `env:"NAME"`
+	ConnectMaxRetries  int           `env:"CONNECT_MAX_RETRIES"`
+	ConnectBackoffBase time.Duration `env:"CONNECT_BACKOFF_BASE"`
+	ConnectBackoffMax  time.Duration `env:"CONNECT_BACKOFF_MAX"`
 }
 
 // NATSMapConfig — Enabled (or any *Path override) triggers natsmap

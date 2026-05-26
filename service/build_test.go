@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
@@ -183,5 +184,77 @@ func TestNew_NodeName_ExplicitPreserved(t *testing.T) {
 	t.Cleanup(svc.Close)
 	if svc.cfg.Service.NodeName != "explicit-node" {
 		t.Fatalf("NodeName: got %q want %q", svc.cfg.Service.NodeName, "explicit-node")
+	}
+}
+
+func TestApplyConnectRetryDefaults_DefaultsAllZero(t *testing.T) {
+	maxRetries := 0
+	var base, max time.Duration
+	applyConnectRetryDefaults(false, &maxRetries, &base, &max)
+	if maxRetries != 5 {
+		t.Fatalf("maxRetries = %d, want 5", maxRetries)
+	}
+	if base != time.Second {
+		t.Fatalf("base = %v, want 1s", base)
+	}
+	if max != 16*time.Second {
+		t.Fatalf("max = %v, want 16s", max)
+	}
+}
+
+func TestApplyConnectRetryDefaults_SentinelNegativeOne(t *testing.T) {
+	maxRetries := -1
+	var base, max time.Duration
+	applyConnectRetryDefaults(false, &maxRetries, &base, &max)
+	if maxRetries != 0 {
+		t.Fatalf("maxRetries = %d, want 0 (normalized from -1)", maxRetries)
+	}
+	// base + max remain zero — sentinel short-circuits the rest.
+	if base != 0 || max != 0 {
+		t.Fatalf("base/max should remain 0; got %v / %v", base, max)
+	}
+}
+
+func TestApplyConnectRetryDefaults_ExplicitNonZeroPreserved(t *testing.T) {
+	maxRetries := 10
+	base := 2 * time.Second
+	max := 30 * time.Second
+	applyConnectRetryDefaults(false, &maxRetries, &base, &max)
+	if maxRetries != 10 {
+		t.Fatalf("maxRetries = %d, want 10", maxRetries)
+	}
+	if base != 2*time.Second {
+		t.Fatalf("base = %v, want 2s", base)
+	}
+	if max != 30*time.Second {
+		t.Fatalf("max = %v, want 30s", max)
+	}
+}
+
+func TestApplyConnectRetryDefaults_SkipNoInjection(t *testing.T) {
+	maxRetries := 0
+	var base, max time.Duration
+	applyConnectRetryDefaults(true, &maxRetries, &base, &max)
+	if maxRetries != 0 {
+		t.Fatalf("maxRetries = %d, want 0 (skip)", maxRetries)
+	}
+	if base != 0 || max != 0 {
+		t.Fatalf("base/max should remain 0 with skip; got %v / %v", base, max)
+	}
+}
+
+func TestApplyConnectRetryDefaults_PartialZerosFilled(t *testing.T) {
+	// User sets MaxRetries explicitly but leaves backoffs as zero.
+	maxRetries := 3
+	var base, max time.Duration
+	applyConnectRetryDefaults(false, &maxRetries, &base, &max)
+	if maxRetries != 3 {
+		t.Fatalf("maxRetries = %d, want 3 (preserved)", maxRetries)
+	}
+	if base != time.Second {
+		t.Fatalf("base = %v, want 1s (defaulted)", base)
+	}
+	if max != 16*time.Second {
+		t.Fatalf("max = %v, want 16s (defaulted)", max)
 	}
 }
