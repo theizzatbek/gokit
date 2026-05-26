@@ -14,6 +14,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/apimap"
 	"github.com/theizzatbek/gokit/clients/httpc"
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
+	"github.com/theizzatbek/gokit/clients/natsmap"
 	"github.com/theizzatbek/gokit/db"
 	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/fibermap"
@@ -66,6 +67,10 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		return nil, err
 	}
 	if err := s.buildNATS(ctx); err != nil {
+		s.Close()
+		return nil, err
+	}
+	if err := s.buildNATSMap(ctx); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -167,6 +172,35 @@ func (s *Service[T, C]) buildNATS(ctx context.Context) error {
 		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeNATSConnectFailed, "service: nats connect failed")
 	}
 	s.NATS = c
+	return nil
+}
+
+func (s *Service[T, C]) buildNATSMap(ctx context.Context) error {
+	if s.cfg.NATSMap.SubscribersPath == "" && s.cfg.NATSMap.PublishersPath == "" {
+		return nil
+	}
+	eng := natsmap.New()
+	if p := s.cfg.NATSMap.SubscribersPath; p != "" {
+		if err := eng.LoadFile(p); err != nil {
+			return xerrs.Wrap(err, xerrs.KindValidation, CodeNATSMapLoadFailed,
+				fmt.Sprintf("service: natsmap load subscribers %q failed", p))
+		}
+	}
+	if p := s.cfg.NATSMap.PublishersPath; p != "" {
+		if err := eng.LoadFile(p); err != nil {
+			return xerrs.Wrap(err, xerrs.KindValidation, CodeNATSMapLoadFailed,
+				fmt.Sprintf("service: natsmap load publishers %q failed", p))
+		}
+	}
+	if s.opts.natsmapRegistration != nil {
+		s.opts.natsmapRegistration(eng)
+	}
+	rt, err := eng.Build(ctx, s.NATS, natsmap.WithLogger(s.logger), natsmap.WithMetrics(s.metrics))
+	if err != nil {
+		return xerrs.Wrap(err, xerrs.KindValidation, CodeNATSMapLoadFailed,
+			"service: natsmap build failed")
+	}
+	s.NATSMap = rt
 	return nil
 }
 
