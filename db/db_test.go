@@ -163,3 +163,27 @@ func TestConnect_CtxCancelDuringBackoff(t *testing.T) {
 		t.Fatalf("did not abort on ctx cancel: %v", elapsed)
 	}
 }
+
+func TestConnect_AppName_VisibleInPgStatActivity(t *testing.T) {
+	pgOnce.Do(initPostgresContainer)
+	if pgErr != nil {
+		t.Fatalf("postgres: %v", pgErr)
+	}
+	cfg := pgCfg
+	cfg.AppName = "urlshort-test-pod-7"
+	d, err := db.Connect(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(d.Close)
+
+	var got string
+	if err := d.QueryRow(context.Background(),
+		`SELECT application_name FROM pg_stat_activity WHERE pid = pg_backend_pid()`,
+	).Scan(&got); err != nil {
+		t.Fatalf("query pg_stat_activity: %v", err)
+	}
+	if got != "urlshort-test-pod-7" {
+		t.Fatalf("application_name = %q, want urlshort-test-pod-7", got)
+	}
+}

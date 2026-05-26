@@ -258,3 +258,30 @@ func TestApplyConnectRetryDefaults_PartialZerosFilled(t *testing.T) {
 		t.Fatalf("max = %v, want 16s (defaulted)", max)
 	}
 }
+
+func TestApplyDBAppNameDefault_InjectsWhenEmpty(t *testing.T) {
+	cfg := Config{}
+	cfg.Service.NodeName = "pod-7"
+	applyDBAppNameDefault(&cfg.DB.AppName, cfg.Service.NodeName)
+	if cfg.DB.AppName != "pod-7" {
+		t.Fatalf("AppName = %q, want pod-7", cfg.DB.AppName)
+	}
+}
+
+func TestApplyDBAppNameDefault_PreservesExplicit(t *testing.T) {
+	cfg := Config{}
+	cfg.Service.NodeName = "pod-7"
+	cfg.DB.AppName = "explicit"
+	applyDBAppNameDefault(&cfg.DB.AppName, cfg.Service.NodeName)
+	if cfg.DB.AppName != "explicit" {
+		t.Fatalf("AppName = %q, want explicit", cfg.DB.AppName)
+	}
+}
+
+func TestApplyDBAppNameDefault_NoNodeNameDoesNothing(t *testing.T) {
+	cfg := Config{}
+	applyDBAppNameDefault(&cfg.DB.AppName, cfg.Service.NodeName)
+	if cfg.DB.AppName != "" {
+		t.Fatalf("AppName = %q, want empty", cfg.DB.AppName)
+	}
+}

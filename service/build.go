@@ -97,6 +97,7 @@ func (s *Service[T, C]) buildDB(ctx context.Context) error {
 	if s.cfg.DB.User == "" {
 		return nil
 	}
+	applyDBAppNameDefault(&s.cfg.DB.AppName, s.cfg.Service.NodeName)
 	applyConnectRetryDefaults(s.opts.skipConnectRetry,
 		&s.cfg.DB.ConnectMaxRetries,
 		&s.cfg.DB.ConnectBackoffBase,
@@ -324,5 +325,14 @@ func applyConnectRetryDefaults(skip bool, maxRetries *int, base, max *time.Durat
 	}
 	if *max == 0 {
 		*max = 16 * time.Second
+	}
+}
+
+// applyDBAppNameDefault copies nodeName into appName when appName is empty.
+// Used by buildDB so each instance is visible in pg_stat_activity as the
+// pod hostname (or whatever the user set in Service.NodeName).
+func applyDBAppNameDefault(appName *string, nodeName string) {
+	if *appName == "" && nodeName != "" {
+		*appName = nodeName
 	}
 }
