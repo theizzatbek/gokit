@@ -2,10 +2,12 @@ package natsmap
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	xerrs "github.com/theizzatbek/gokit/errs"
+	"gopkg.in/yaml.v3"
 )
 
 // rawConfig mirrors the top-level YAML document. Either or both blocks
@@ -14,6 +16,7 @@ import (
 type rawConfig struct {
 	Subscribers []rawSubscriber `yaml:"subscribers"`
 	Publishers  []rawPublisher  `yaml:"publishers"`
+	Streams     rawStreamsBlock `yaml:"streams"`
 }
 
 // rawSubscriber is one declared subscription.
@@ -42,6 +45,43 @@ type rawBackoff struct {
 	Type string        `yaml:"type"` // exponential | fixed
 	Base time.Duration `yaml:"base"`
 	Max  time.Duration `yaml:"max"`
+}
+
+// rawStream is one declared JetStream stream that natsmap.Build will
+// EnsureStream against the live connection.
+type rawStream struct {
+	Name      string        `yaml:"name"`
+	Subjects  []string      `yaml:"subjects"`
+	Storage   string        `yaml:"storage,omitempty"`   // "file" (default) | "memory"
+	Retention string        `yaml:"retention,omitempty"` // "limits" (default) | "interest" | "work_queue"
+	MaxAge    time.Duration `yaml:"max_age,omitempty"`
+	MaxBytes  int64         `yaml:"max_bytes,omitempty"`
+	MaxMsgs   int64         `yaml:"max_msgs,omitempty"`
+	Replicas  int           `yaml:"replicas,omitempty"`
+	Dedup     time.Duration `yaml:"dedup,omitempty"`
+}
+
+// rawStreamsBlock represents the YAML `streams:` field, which may be
+// either a scalar `auto` or a list of rawStream entries.
+type rawStreamsBlock struct {
+	Auto bool
+	List []rawStream
+}
+
+// UnmarshalYAML accepts either the scalar `auto` or a sequence.
+func (b *rawStreamsBlock) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		if n.Value == "auto" {
+			b.Auto = true
+			return nil
+		}
+		return fmt.Errorf("natsmap: streams scalar must be `auto`, got %q", n.Value)
+	case yaml.SequenceNode:
+		return n.Decode(&b.List)
+	default:
+		return fmt.Errorf("natsmap: streams must be `auto` or a list, got %v", n.Tag)
+	}
 }
 
 var validStartFromPrefix = map[string]struct{}{
@@ -152,6 +192,41 @@ func (c *rawConfig) validate(handlerNames, publisherNames map[string]struct{}) e
 				errsAcc = append(errsAcc, xerrs.Validationf(CodePublisherUnknown,
 					"natsmap: RegisterPublisher for %q has no matching publisher in YAML", name))
 			}
+		}
+	}
+
+	// streams
+	if c.Streams.Auto && len(c.Streams.List) > 0 {
+		errsAcc = append(errsAcc, xerrs.Validationf(CodeStreamsAutoConflict,
+			"natsmap: streams cannot be both `auto` and an explicit list"))
+	}
+	seenStream := map[string]struct{}{}
+	for i := range c.Streams.List {
+		s := &c.Streams.List[i]
+		if s.Name == "" {
+			errsAcc = append(errsAcc, xerrs.Validationf(CodeStreamMissingName,
+				"natsmap: streams[%d] missing name", i))
+		} else if _, dup := seenStream[s.Name]; dup {
+			errsAcc = append(errsAcc, xerrs.Validationf(CodeStreamDuplicateName,
+				"natsmap: duplicate stream name %q", s.Name))
+		} else {
+			seenStream[s.Name] = struct{}{}
+		}
+		if len(s.Subjects) == 0 {
+			errsAcc = append(errsAcc, xerrs.Validationf(CodeStreamMissingSubjects,
+				"natsmap: stream %q has no subjects", s.Name))
+		}
+		switch strings.ToLower(s.Storage) {
+		case "", "file", "memory":
+		default:
+			errsAcc = append(errsAcc, xerrs.Validationf(CodeStreamInvalidStorage,
+				"natsmap: stream %q storage %q not in {file, memory}", s.Name, s.Storage))
+		}
+		switch strings.ToLower(s.Retention) {
+		case "", "limits", "interest", "work_queue":
+		default:
+			errsAcc = append(errsAcc, xerrs.Validationf(CodeStreamInvalidRetention,
+				"natsmap: stream %q retention %q not in {limits, interest, work_queue}", s.Name, s.Retention))
 		}
 	}
 	return errors.Join(errsAcc...)

@@ -1,0 +1,3 @@
+streams:
+  - { name: X, subjects: [x.>] }
+  - { name: X, subjects: [y.>] }

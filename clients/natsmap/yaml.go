@@ -58,9 +58,10 @@ func parseBytes(b []byte, lookup func(string) (string, bool)) (*rawConfig, error
 		return nil, xerrs.Wrap(err, xerrs.KindValidation, CodeParseYAML,
 			"natsmap: parse yaml")
 	}
-	if len(cfg.Subscribers) == 0 && len(cfg.Publishers) == 0 {
+	if len(cfg.Subscribers) == 0 && len(cfg.Publishers) == 0 &&
+		!cfg.Streams.Auto && len(cfg.Streams.List) == 0 {
 		return nil, xerrs.Validation(CodeNoEntries,
-			"natsmap: yaml has no subscribers and no publishers")
+			"natsmap: yaml has no subscribers, publishers, or streams")
 	}
 	return &cfg, nil
 }

@@ -23,6 +23,13 @@ const (
 	CodeParseYAML              = "natsmap_parse_yaml"
 	CodeEnvVarUnset            = "natsmap_env_var_unset"
 	CodeEnvVarMalformed        = "natsmap_env_var_malformed"
+	CodeStreamMissingName      = "natsmap_stream_missing_name"
+	CodeStreamMissingSubjects  = "natsmap_stream_missing_subjects"
+	CodeStreamDuplicateName    = "natsmap_stream_duplicate_name"
+	CodeStreamInvalidStorage   = "natsmap_stream_invalid_storage"
+	CodeStreamInvalidRetention = "natsmap_stream_invalid_retention"
+	CodeStreamsAutoConflict    = "natsmap_streams_auto_conflict"
+	CodeEnsureStreamFailed     = "natsmap_ensure_stream_failed"
 )
 
 // Runtime error codes returned from Publish / PublishWithHeaders.
