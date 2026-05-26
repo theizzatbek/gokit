@@ -127,3 +127,39 @@ func TestBuildPgxURL_OmitsPasswordWhenEmpty(t *testing.T) {
 		t.Fatalf("expected userinfo without password, got %q", got)
 	}
 }
+
+func TestBuildPgxURL_PreservesUserQueryParamsOverConfig(t *testing.T) {
+	got, err := buildPgxURL(Config{
+		URL:            "postgres://app:p@h:5432/db?application_name=user-set&connect_timeout=3",
+		AppName:        "config-set",
+		ConnectTimeout: 9 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("buildPgxURL: %v", err)
+	}
+	if !strings.Contains(got, "application_name=user-set") {
+		t.Fatalf("kit overwrote user application_name: %q", got)
+	}
+	if strings.Contains(got, "application_name=config-set") {
+		t.Fatalf("kit double-set application_name: %q", got)
+	}
+	if !strings.Contains(got, "connect_timeout=3") {
+		t.Fatalf("kit overwrote user connect_timeout: %q", got)
+	}
+}
+
+func TestBuildPgxURL_EscapesPasswordSpaceAsPercent20(t *testing.T) {
+	got, err := buildPgxURL(Config{
+		Host: "h", Port: 1, User: "u", Password: "a b",
+		Database: "d", SSLMode: "disable",
+	})
+	if err != nil {
+		t.Fatalf("buildPgxURL: %v", err)
+	}
+	if !strings.Contains(got, "a%20b") {
+		t.Fatalf("expected %%20 encoding for space, got %q", got)
+	}
+	if strings.Contains(got, "a+b") {
+		t.Fatalf("space encoded as + (wrong): %q", got)
+	}
+}

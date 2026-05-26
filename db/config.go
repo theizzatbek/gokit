@@ -24,6 +24,10 @@ type Config struct {
 	// Multi-host failover (pgx native):
 	//
 	//   DB_URL=postgres://app:pass@h1,h2,h3:5432/appdb
+	//
+	// AppName and ConnectTimeout are still merged into the URL as query
+	// parameters when they are not already present — only the identity
+	// fields are fully ignored.
 	URL string `env:"URL"`
 
 	Host     string `env:"HOST"          envDefault:"localhost"`
@@ -85,12 +89,14 @@ func buildPgxURL(cfg Config) (string, error) {
 
 // assembleURL renders the non-URL fields into a postgres:// string.
 func assembleURL(cfg Config) string {
-	userinfo := url.QueryEscape(cfg.User)
+	var userinfo *url.Userinfo
 	if cfg.Password != "" {
-		userinfo += ":" + url.QueryEscape(cfg.Password)
+		userinfo = url.UserPassword(cfg.User, cfg.Password)
+	} else {
+		userinfo = url.User(cfg.User)
 	}
 	q := url.Values{}
 	q.Set("sslmode", cfg.SSLMode)
 	return fmt.Sprintf("postgres://%s@%s:%d/%s?%s",
-		userinfo, cfg.Host, cfg.Port, cfg.Database, q.Encode())
+		userinfo.String(), cfg.Host, cfg.Port, cfg.Database, q.Encode())
 }
