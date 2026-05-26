@@ -2,8 +2,12 @@ package natsmap
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"reflect"
+	"strconv"
+	"strings"
 	"time"
 
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
@@ -140,4 +144,197 @@ func (e *Engine) publisherNameSet() map[string]struct{} {
 		out[k] = struct{}{}
 	}
 	return out
+}
+
+// Build opens every subscription and prepares every publisher. Returns
+// *errs.Error (errors.Join when multiple problems co-occur). Calling
+// Build twice returns CodeAlreadyBuilt.
+func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option) (*Runtime, error) {
+	if e.built {
+		return nil, xerrs.Validation(CodeAlreadyBuilt,
+			"natsmap: Engine.Build called twice")
+	}
+	cfg := &rawConfig{Subscribers: e.subscribers, Publishers: e.publishers}
+	if err := cfg.validate(e.handlerNameSet(), e.publisherNameSet()); err != nil {
+		return nil, err
+	}
+
+	o := &options{}
+	for _, fn := range opts {
+		fn(o)
+	}
+
+	rt := &Runtime{
+		publishers: map[string]publishShim{},
+	}
+
+	// Subscribers
+	codec := c.Codec()
+	var buildErrs []error
+	for i := range e.subscribers {
+		s := &e.subscribers[i]
+		handlerFn := e.handlerFns[s.Name]
+		handlerType := e.handlerTypes[s.Name]
+		subOpts, sferr := buildSubscribeOptions(s)
+		if sferr != nil {
+			buildErrs = append(buildErrs, sferr)
+			continue
+		}
+		raw := makeRawHandler(handlerType, codec, handlerFn)
+		sub, err := natsclient.SubscribeRaw(ctx, c, s.Subject, raw, subOpts...)
+		if err != nil {
+			buildErrs = append(buildErrs, xerrs.Wrapf(err, xerrs.KindUnavailable,
+				CodeSubscribeFailed, "natsmap: subscribe %q on %q", s.Name, s.Subject))
+			continue
+		}
+		rt.subs = append(rt.subs, sub)
+		rt.subscriberNames = append(rt.subscriberNames, s.Name)
+	}
+
+	// Publishers: expand map[string]string → map[string][]string for shim.
+	for i := range e.publishers {
+		p := &e.publishers[i]
+		payloadType := e.publisherTypes[p.Name]
+		subject := p.Subject
+		staticHdrs := expandHeaders(p.Headers)
+		rt.publishers[p.Name] = publishShim{
+			subject:     subject,
+			staticHdrs:  staticHdrs,
+			payloadType: payloadType,
+			publish: func(ctx context.Context, payload any, callHdrs map[string][]string) error {
+				return natsclient.PublishViaCodec(ctx, c, subject, payload, callHdrs)
+			},
+		}
+	}
+
+	if err := errors.Join(buildErrs...); err != nil {
+		return nil, err
+	}
+	e.built = true
+	return rt, nil
+}
+
+// expandHeaders turns YAML's scalar map[string]string into the
+// map[string][]string shape natsclient (and nats.Header) expects.
+// Returns nil for an empty/absent map.
+func expandHeaders(in map[string]string) map[string][]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for k, v := range in {
+		out[k] = []string{v}
+	}
+	return out
+}
+
+// makeRawHandler returns a natsclient.RawHandler that decodes the
+// payload into a fresh *T (via reflect.New(handlerType)) and invokes
+// the typed handler fn registered for the subscriber. Decode failures
+// are wrapped with natsclient.ErrPoison so the dispatcher Terms the
+// message instead of Nak'ing.
+func makeRawHandler(t reflect.Type, codec natsclient.Codec,
+	fn func(ctx context.Context, ptr any, meta msgMeta) error) natsclient.RawHandler {
+	return func(ctx context.Context, m *natsclient.RawMsg) error {
+		ptr := reflect.New(t)
+		if err := codec.Unmarshal(m.Body, ptr.Interface()); err != nil {
+			return fmt.Errorf("natsmap: decode failed: %w: %w", natsclient.ErrPoison, err)
+		}
+		meta := msgMeta{
+			Subject:      m.Subject,
+			Headers:      m.Headers,
+			Sequence:     m.Sequence,
+			Redeliveries: m.Redeliveries,
+			Reply:        m.Reply,
+			Timestamp:    m.Timestamp,
+		}
+		return fn(ctx, ptr.Interface(), meta)
+	}
+}
+
+// buildSubscribeOptions translates a rawSubscriber into the
+// natsclient.SubscribeOption list.
+func buildSubscribeOptions(s *rawSubscriber) ([]natsclient.SubscribeOption, error) {
+	var opts []natsclient.SubscribeOption
+	if s.Durable != "" {
+		opts = append(opts, natsclient.WithDurable(s.Durable))
+	}
+	if s.MaxInFlight > 0 {
+		opts = append(opts, natsclient.WithMaxInFlight(s.MaxInFlight))
+	}
+	if s.MaxDeliver > 0 {
+		opts = append(opts, natsclient.WithMaxDeliver(s.MaxDeliver))
+	}
+	if s.AckWait > 0 {
+		opts = append(opts, natsclient.WithAckWait(s.AckWait))
+	}
+	if s.QueueGroup != "" {
+		opts = append(opts, natsclient.WithQueueGroup(s.QueueGroup))
+	}
+	if s.FilterSubject != "" {
+		opts = append(opts, natsclient.WithFilterSubject(s.FilterSubject))
+	}
+	if s.Backoff != nil {
+		bo := buildBackoffFn(s.Backoff)
+		opts = append(opts, natsclient.WithBackoff(bo))
+	}
+	if s.StartFrom != "" {
+		policy, err := parseStartPolicy(s.StartFrom)
+		if err != nil {
+			return nil, err
+		}
+		if policy != nil {
+			opts = append(opts, natsclient.WithStartFrom(policy))
+		}
+	}
+	return opts, nil
+}
+
+func buildBackoffFn(b *rawBackoff) func(int) time.Duration {
+	if strings.ToLower(b.Type) == "fixed" {
+		base := b.Base
+		return func(int) time.Duration { return base }
+	}
+	base := b.Base
+	max := b.Max
+	if max <= 0 {
+		max = base * 32
+	}
+	return func(redeliveries int) time.Duration {
+		if redeliveries < 1 {
+			return base
+		}
+		d := base << (redeliveries - 1)
+		if d > max || d <= 0 {
+			return max
+		}
+		return d
+	}
+}
+
+func parseStartPolicy(s string) (natsclient.StartPolicy, error) {
+	switch s {
+	case "", "new":
+		return natsclient.StartNew(), nil
+	case "all":
+		return natsclient.StartAll(), nil
+	}
+	if rest, ok := strings.CutPrefix(s, "from_seq:"); ok {
+		seq, err := strconv.ParseUint(rest, 10, 64)
+		if err != nil {
+			return nil, xerrs.Wrapf(err, xerrs.KindValidation, CodeInvalidStartFrom,
+				"natsmap: from_seq:%s — invalid sequence", rest)
+		}
+		return natsclient.StartFromSequence(seq), nil
+	}
+	if rest, ok := strings.CutPrefix(s, "from_time:"); ok {
+		t, err := time.Parse(time.RFC3339, rest)
+		if err != nil {
+			return nil, xerrs.Wrapf(err, xerrs.KindValidation, CodeInvalidStartFrom,
+				"natsmap: from_time:%s — must be RFC3339", rest)
+		}
+		return natsclient.StartFromTime(t), nil
+	}
+	return nil, xerrs.Validationf(CodeInvalidStartFrom,
+		"natsmap: start_from %q invalid", s)
 }
