@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -231,4 +232,64 @@ func TestBuildStreamConfig_InvalidStorage(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), CodeStreamInvalidStorage) {
 		t.Fatalf("want CodeStreamInvalidStorage, got %v", err)
 	}
+}
+
+func TestDeriveStreamsFromSubjects(t *testing.T) {
+	cases := []struct {
+		name string
+		subs []rawSubscriber
+		pubs []rawPublisher
+		want []rawStream
+	}{
+		{
+			name: "single segment grouping",
+			subs: []rawSubscriber{{Name: "a", Subject: "orders.created"}},
+			pubs: []rawPublisher{{Name: "p", Subject: "orders.shipped"}},
+			want: []rawStream{{Name: "ORDERS", Subjects: []string{"orders.>"}}},
+		},
+		{
+			name: "wildcard subjects",
+			pubs: []rawPublisher{{Name: "p", Subject: "users.>"}},
+			want: []rawStream{{Name: "USERS", Subjects: []string{"users.>"}}},
+		},
+		{
+			name: "no dots fallback",
+			pubs: []rawPublisher{{Name: "p", Subject: "events"}},
+			want: []rawStream{{Name: "EVENTS", Subjects: []string{"events"}}},
+		},
+		{
+			name: "multiple groups",
+			subs: []rawSubscriber{{Name: "a", Subject: "orders.x"}, {Name: "b", Subject: "users.y"}},
+			want: []rawStream{
+				{Name: "ORDERS", Subjects: []string{"orders.>"}},
+				{Name: "USERS", Subjects: []string{"users.>"}},
+			},
+		},
+		{
+			name: "empty input",
+			want: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deriveStreamsFromSubjects(tc.subs, tc.pubs)
+			sortStreamsByName(got)
+			sortStreamsByName(tc.want)
+			if len(got) != len(tc.want) {
+				t.Fatalf("len: got %d want %d (%+v)", len(got), len(tc.want), got)
+			}
+			for i := range got {
+				if got[i].Name != tc.want[i].Name {
+					t.Fatalf("[%d].Name: got %q want %q", i, got[i].Name, tc.want[i].Name)
+				}
+				if len(got[i].Subjects) != len(tc.want[i].Subjects) || got[i].Subjects[0] != tc.want[i].Subjects[0] {
+					t.Fatalf("[%d].Subjects: got %v want %v", i, got[i].Subjects, tc.want[i].Subjects)
+				}
+			}
+		})
+	}
+}
+
+func sortStreamsByName(s []rawStream) {
+	sort.Slice(s, func(i, j int) bool { return s[i].Name < s[j].Name })
 }

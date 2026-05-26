@@ -207,10 +207,13 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 		publishers: map[string]publishShim{},
 	}
 
-	// EnsureStream for every explicitly declared stream before opening
-	// subscriptions. Auto-derive handling is added in the next task.
-	for i := range e.streams.List {
-		s := &e.streams.List[i]
+	// Resolve streams: explicit list OR auto-derived from subjects.
+	streamsToEnsure := e.streams.List
+	if e.streams.Auto {
+		streamsToEnsure = deriveStreamsFromSubjects(e.subscribers, e.publishers)
+	}
+	for i := range streamsToEnsure {
+		s := &streamsToEnsure[i]
 		streamCfg, err := buildStreamConfig(s)
 		if err != nil {
 			return nil, err
@@ -425,4 +428,48 @@ func buildStreamConfig(s *rawStream) (natsclient.StreamConfig, error) {
 			"natsmap: stream %q retention %q invalid", s.Name, s.Retention)
 	}
 	return cfg, nil
+}
+
+// deriveStreamsFromSubjects walks subscriber + publisher subjects, groups
+// by the first segment (text before the first dot), and returns one
+// rawStream per group. Used by Engine.Build when `streams: auto` is set.
+//
+// Conventions:
+//   - Group key = first segment (e.g. "orders.created" → "orders").
+//   - Stream name = uppercase group key.
+//   - Subjects = ["<group>.>"] for dotted inputs; for inputs without
+//     dots, the literal subject is used.
+//   - Defaults: Storage=File, Retention=Limits, MaxAge=0 (set by
+//     buildStreamConfig from zero values).
+func deriveStreamsFromSubjects(subs []rawSubscriber, pubs []rawPublisher) []rawStream {
+	groups := map[string]string{} // group key (lowercase first segment) → subject pattern
+	collect := func(subject string) {
+		if subject == "" {
+			return
+		}
+		dot := strings.IndexByte(subject, '.')
+		if dot < 0 {
+			groups[subject] = subject // literal fallback
+			return
+		}
+		segment := subject[:dot]
+		groups[segment] = segment + ".>"
+	}
+	for _, s := range subs {
+		collect(s.Subject)
+	}
+	for _, p := range pubs {
+		collect(p.Subject)
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	out := make([]rawStream, 0, len(groups))
+	for segment, subject := range groups {
+		out = append(out, rawStream{
+			Name:     strings.ToUpper(segment),
+			Subjects: []string{subject},
+		})
+	}
+	return out
 }
