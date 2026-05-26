@@ -54,8 +54,6 @@ func TestSmoke_AllSubsystems(t *testing.T) {
 	pemKey := smokeEd25519PEM(t)
 	apimapPath := writeSmokeClientsYAML(t)
 
-	t.Setenv("MICROLINK_BASE_URL", upstream.URL)
-
 	cfg := Config{
 		DB:     dbCfg,
 		Auth:   AuthConfig{PrivateKeyPEM: pemKey, KID: "k1", Issuer: "smoke", AccessTTL: 15 * time.Minute, RefreshTTL: time.Hour},
@@ -65,6 +63,7 @@ func TestSmoke_AllSubsystems(t *testing.T) {
 	cfg.Service.LogLevel = "error"
 
 	svc, err := New[smokeAppCtx, smokeClaims](ctx, cfg,
+		WithAPIMapEnv(map[string]string{"MICROLINK_BASE_URL": upstream.URL}),
 		WithAPIMapRegistration(func(e *apimap.Engine) {
 			apimap.RegisterResponse[map[string]any](e, "stub.get")
 		}),
