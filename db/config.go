@@ -28,6 +28,21 @@ type Config struct {
 	MaxConnLifetime time.Duration `env:"MAX_LIFETIME"  envDefault:"1h"`
 	MaxConnIdle     time.Duration `env:"MAX_IDLE"      envDefault:"30m"`
 	ConnectTimeout  time.Duration `env:"CONN_TIMEOUT"  envDefault:"5s"`
+
+	// ConnectMaxRetries caps the number of retry attempts during the
+	// initial Connect. 0 = no retry (1 attempt). N>0 = N additional
+	// attempts after the first failure. Service.New auto-defaults to 5
+	// when this is 0; pass -1 via env to disable that injection.
+	ConnectMaxRetries int `env:"CONNECT_MAX_RETRIES"`
+
+	// ConnectBackoffBase is the initial wait between connect attempts.
+	// Doubles each attempt, capped at ConnectBackoffMax. Default 0
+	// (service injects 1s).
+	ConnectBackoffBase time.Duration `env:"CONNECT_BACKOFF_BASE"`
+
+	// ConnectBackoffMax caps the per-attempt wait. Default 0 (service
+	// injects 16s).
+	ConnectBackoffMax time.Duration `env:"CONNECT_BACKOFF_MAX"`
 }
 
 // buildConnString renders cfg as a libpq-style URL. Password and user are
