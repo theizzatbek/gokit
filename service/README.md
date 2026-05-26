@@ -86,6 +86,8 @@ Env-driven via `caarlos0/env/v11`. Compose into your own app config via embeddin
 | `Addr` | `ADDR` | `:3000` |
 | `LogLevel` | `LOG_LEVEL` | `info` |
 | `LogFormat` | `LOG_FORMAT` | `json` (also: `text`) |
+| `NodeName` | `SERVICE_NODE_NAME` | `os.Hostname()` if unset. Flows to `natsclient.Config.Name` (when `NATS.Name` is not explicit) and to default slog attrs (`node=...`). |
+| `ServerGroup` | `SERVICE_SERVER_GROUP` | Empty by default. When set, passed to `natsmap.WithServerGroup(...)` — auto-derived subscriber queue groups suffix with `-<ServerGroup>` for cross-region isolation. See [natsmap multi-node](../clients/natsmap/README.md#multi-node-behaviour). |
 
 ### `AuthConfig`
 
