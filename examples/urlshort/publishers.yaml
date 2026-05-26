@@ -1,0 +1,5 @@
+publishers:
+  - name: urlshort.link.created
+    subject: urlshort.link.created
+  - name: urlshort.link.visited
+    subject: urlshort.link.visited
