@@ -11,9 +11,10 @@ import (
 type Option func(*options)
 
 type options struct {
-	logger        *slog.Logger
-	metrics       prometheus.Registerer
-	baseTransport http.RoundTripper
+	logger              *slog.Logger
+	metrics             prometheus.Registerer
+	baseTransport       http.RoundTripper
+	skipRequestIDHeader bool
 }
 
 // WithLogger wires a slog.Logger used for retry-decision and retry-exhaustion
@@ -32,4 +33,14 @@ func WithMetrics(reg prometheus.Registerer) Option {
 // transports underneath the retry logic.
 func WithBaseTransport(rt http.RoundTripper) Option {
 	return func(o *options) { o.baseTransport = rt }
+}
+
+// WithoutRequestIDHeader opts out of automatically setting
+// X-Request-ID on outbound requests. The default behaviour is ON:
+// when a request's context carries a request id (via
+// reqctx.WithRequestID), the transport sets the X-Request-ID header
+// before sending. Explicit per-request headers always win over the
+// ctx-derived value.
+func WithoutRequestIDHeader() Option {
+	return func(o *options) { o.skipRequestIDHeader = true }
 }

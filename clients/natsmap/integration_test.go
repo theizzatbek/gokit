@@ -13,6 +13,7 @@ import (
 	tcnats "github.com/testcontainers/testcontainers-go/modules/nats"
 
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
+	"github.com/theizzatbek/gokit/reqctx"
 )
 
 var testURL string
@@ -372,5 +373,100 @@ func TestRuntime_ServerGroupSuffix(t *testing.T) {
 	}
 	if info.Config.DeliverGroup != "inv-dc1" {
 		t.Fatalf("DeliverGroup: got %q want %q", info.Config.DeliverGroup, "inv-dc1")
+	}
+}
+
+func TestSubscribe_InjectsRequestIDIntoHandlerCtx(t *testing.T) {
+	c := newTestClient(t)
+	if err := c.EnsureStream(context.Background(), natsclient.StreamConfig{
+		Name: "TESTRID", Subjects: []string{"testrid.>"},
+	}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+	yaml := []byte(`subscribers:
+  - name: receiver
+    subject: testrid.x
+`)
+	eng := New()
+	if err := eng.LoadBytes(yaml); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	gotID := make(chan string, 1)
+	RegisterHandler[order](eng, "receiver",
+		func(ctx context.Context, m natsclient.Msg[order]) error {
+			select {
+			case gotID <- reqctx.RequestIDFromContext(ctx):
+			default:
+			}
+			return nil
+		})
+	rt, err := eng.Build(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Drain() })
+
+	// Publish with explicit X-Request-ID header.
+	pub := natsclient.NewPublisher[order](c)
+	if err := pub.PublishWithHeaders(context.Background(), "testrid.x",
+		order{ID: "o"},
+		map[string][]string{reqctx.HeaderRequestID: {"upstream-rid"}}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	select {
+	case got := <-gotID:
+		if got != "upstream-rid" {
+			t.Fatalf("handler ctx request_id = %q, want %q", got, "upstream-rid")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("handler did not receive")
+	}
+}
+
+func TestPublishViaRuntime_RoundTripsRequestID(t *testing.T) {
+	c := newTestClient(t)
+	if err := c.EnsureStream(context.Background(), natsclient.StreamConfig{
+		Name: "TESTRIDRT", Subjects: []string{"testridrt.>"},
+	}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+	yaml := []byte(`subscribers:
+  - name: receiver
+    subject: testridrt.x
+publishers:
+  - name: out
+    subject: testridrt.x
+`)
+	eng := New()
+	if err := eng.LoadBytes(yaml); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	gotID := make(chan string, 1)
+	RegisterHandler[order](eng, "receiver",
+		func(ctx context.Context, m natsclient.Msg[order]) error {
+			select {
+			case gotID <- reqctx.RequestIDFromContext(ctx):
+			default:
+			}
+			return nil
+		})
+	RegisterPublisher[order](eng, "out")
+	rt, err := eng.Build(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Drain() })
+
+	ctx := reqctx.WithRequestID(context.Background(), "end-to-end-rid")
+	if err := Publish[order](ctx, rt, "out", order{ID: "x"}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	select {
+	case got := <-gotID:
+		if got != "end-to-end-rid" {
+			t.Fatalf("handler ctx request_id = %q, want %q", got, "end-to-end-rid")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("handler did not receive")
 	}
 }

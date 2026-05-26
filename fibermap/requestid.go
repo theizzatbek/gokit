@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 
 	"github.com/gofiber/fiber/v2"
+
+	"github.com/theizzatbek/gokit/reqctx"
 )
 
 // LocalsRequestID is the Fiber Locals key under which [RequestID]
@@ -13,8 +15,9 @@ import (
 const LocalsRequestID = "request_id"
 
 // HeaderRequestID is the HTTP header [RequestID] reads from and
-// writes to. Matches the de-facto convention for request correlation.
-const HeaderRequestID = "X-Request-ID"
+// writes to. Aliased to reqctx.HeaderRequestID — single source of truth
+// across the kit.
+const HeaderRequestID = reqctx.HeaderRequestID
 
 // RequestID returns a Fiber-level middleware that ensures every
 // request carries an `X-Request-ID`:
@@ -27,6 +30,9 @@ const HeaderRequestID = "X-Request-ID"
 //     header.
 //  4. Echo the value back as the response `X-Request-ID` header so
 //     callers can correlate logs.
+//  5. Inject the value into `c.UserContext()` via reqctx.WithRequestID
+//     so downstream context-aware code (slog with reqctx.SlogHandler,
+//     httpc outbound calls, natsmap publish) carries it automatically.
 //
 // Install via [Engine.Run] with [WithUse], BEFORE any auth
 // middleware — the ID should appear in auth-failure logs too:
@@ -37,8 +43,8 @@ const HeaderRequestID = "X-Request-ID"
 //
 //	app.Use(fibermap.RequestID())
 //
-// For different header/key conventions, copy the eight-line body
-// of this function and adjust.
+// For different header/key conventions, copy the body of this function
+// and adjust.
 func RequestID() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		id := c.Get(HeaderRequestID)
@@ -49,6 +55,7 @@ func RequestID() fiber.Handler {
 		}
 		c.Locals(LocalsRequestID, id)
 		c.Set(HeaderRequestID, id)
+		c.SetUserContext(reqctx.WithRequestID(c.UserContext(), id))
 		return c.Next()
 	}
 }

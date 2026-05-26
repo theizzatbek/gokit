@@ -8,6 +8,7 @@ import (
 
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	xerrs "github.com/theizzatbek/gokit/errs"
+	"github.com/theizzatbek/gokit/reqctx"
 )
 
 // Runtime is the post-Build dispatcher. Goroutine-safe.
@@ -72,6 +73,7 @@ func Publish[T any](ctx context.Context, r *Runtime, name string, payload T) err
 
 // PublishWithHeaders is Publish with per-call headers (merged over the
 // YAML-declared static headers; per-call wins on collision).
+// Automatically injects X-Request-ID from ctx unless explicitly supplied.
 func PublishWithHeaders[T any](ctx context.Context, r *Runtime, name string,
 	payload T, headers map[string][]string) error {
 	shim, ok := r.publishers[name]
@@ -83,6 +85,14 @@ func PublishWithHeaders[T any](ctx context.Context, r *Runtime, name string,
 	if shim.payloadType != want {
 		return xerrs.Validationf(CodePublisherTypeMismatch,
 			"natsmap: publisher %q registered for %s, got %s", name, shim.payloadType, want)
+	}
+	if id := reqctx.RequestIDFromContext(ctx); id != "" {
+		if _, explicit := headers[reqctx.HeaderRequestID]; !explicit {
+			if headers == nil {
+				headers = map[string][]string{}
+			}
+			headers[reqctx.HeaderRequestID] = []string{id}
+		}
 	}
 	merged := mergeHeaders(shim.staticHdrs, headers)
 	if err := shim.publish(ctx, payload, merged); err != nil {

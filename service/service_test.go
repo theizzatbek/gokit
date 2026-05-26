@@ -340,3 +340,70 @@ func TestService_NATSMapRoundTrip(t *testing.T) {
 type smokeOrder struct {
 	ID string `json:"id"`
 }
+
+func TestService_RequestIDPropagatesToDownstreamHTTP(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Downstream stub captures the X-Request-ID it receives.
+	var gotID string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotID = r.Header.Get("X-Request-ID")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+
+	cfg := Config{}
+	cfg.Service.LogLevel = "error"
+
+	svc, err := New[smokeAppCtx, smokeClaims](ctx, cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	svc.SetContextBuilder(func(c *fiber.Ctx) (smokeAppCtx, error) {
+		return smokeAppCtx{}, nil
+	})
+
+	// Register a handler that calls the downstream via svc.HTTPC.
+	fibermap.RegisterHandler(svc.Engine, "smoke.fanout",
+		func(c *fibermap.Context[smokeAppCtx]) error {
+			req, _ := http.NewRequestWithContext(c.Ctx.UserContext(), "GET", upstream.URL, nil)
+			resp, err := svc.HTTPC.Do(req)
+			if err != nil {
+				return err
+			}
+			_ = resp.Body.Close()
+			return c.SendStatus(http.StatusOK)
+		})
+	if err := svc.Engine.LoadBytes([]byte(`
+groups:
+  - prefix: /
+    routes:
+      - {method: GET, path: /fanout, handler: smoke.fanout, name: smoke.fanout}
+`)); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+
+	app := fiber.New(fiber.Config{ErrorHandler: fibermap.ErrorHandler(svc.Logger())})
+	// fibermap.RequestID middleware must run so id is set in UserContext.
+	app.Use(fibermap.RequestID())
+	if err := svc.Engine.Mount(app); err != nil {
+		t.Fatalf("Mount: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/fanout", nil)
+	req.Header.Set("X-Request-ID", "smoke-rid")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if gotID != "smoke-rid" {
+		t.Fatalf("downstream X-Request-ID = %q, want %q (propagation broken)", gotID, "smoke-rid")
+	}
+}

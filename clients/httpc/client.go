@@ -40,8 +40,12 @@ func NewTransport(cfg Config, opts ...Option) (http.RoundTripper, error) {
 		logger:      o.logger,
 		collectors:  cols,
 	}
-	if cols == nil {
-		return retry, nil
+	var top http.RoundTripper = retry
+	if cols != nil {
+		top = &metricsTransport{base: retry, collectors: cols}
 	}
-	return &metricsTransport{base: retry, collectors: cols}, nil
+	if !o.skipRequestIDHeader {
+		top = &requestIDTransport{base: top}
+	}
+	return top, nil
 }
