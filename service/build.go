@@ -270,4 +270,3 @@ func (s *Service[T, C]) mountAuthHandlers() error {
 	s.Engine.Add("POST", "/auth/logout", "auth.logout", wrap(s.Auth.LogoutHandler))
 	return nil
 }
-

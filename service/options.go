@@ -20,7 +20,7 @@ type Option func(*options)
 type options struct {
 	logger              *slog.Logger
 	metrics             prometheus.Registerer
-	openapiEnable       bool          // WithOpenAPI() flips this
+	openapiEnable       bool // WithOpenAPI() flips this
 	openapiOpts         []openapi.Option
 	fiberMiddleware     []fiber.Handler
 	skipAuthHandlers    bool
