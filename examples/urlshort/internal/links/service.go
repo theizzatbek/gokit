@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/theizzatbek/gokit/db"
 	xerrs "github.com/theizzatbek/gokit/errs"
 
@@ -58,8 +57,7 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 			})
 			return l, nil
 		}
-		var pg *pgconn.PgError
-		if errors.As(err, &pg) && pg.Code == "23505" {
+		if e, ok := errors.AsType[*xerrs.Error](err); ok && e.Kind == xerrs.KindAlreadyExists {
 			continue // unique-violation on code — retry with a new one
 		}
 		return Link{}, err
