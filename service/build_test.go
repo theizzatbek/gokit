@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	xerrs "github.com/theizzatbek/gokit/errs"
@@ -60,7 +61,54 @@ func TestNew_APIMapLoadFailure_PropagatesAsCodeAPIMapLoadFailed(t *testing.T) {
 		t.Fatal("expected error")
 	}
 	var e *xerrs.Error
-	if !errors.As(err, &e) || e.Code != CodeAPIMapLoadFailed {
-		t.Errorf("err = %v, want code %q", err, CodeAPIMapLoadFailed)
+	if !errors.As(err, &e) || e.Code != CodeAPIMapYAMLNotFound {
+		t.Errorf("err = %v, want code %q", err, CodeAPIMapYAMLNotFound)
+	}
+}
+
+func TestNew_APIMapEnabled_FileMissing_ReturnsCodeAPIMapYAMLNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	cfg := Config{}
+	cfg.APIMap.Enabled = true
+	_, err := New[map[string]any, any](context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), CodeAPIMapYAMLNotFound) {
+		t.Fatalf("want CodeAPIMapYAMLNotFound, got %v", err)
+	}
+}
+
+func TestNew_NATSMapEnabled_BothFilesMissing_ReturnsCodeNATSMapYAMLNotFound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test — Docker required")
+	}
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	natsURL := startSmokeNATS(t, context.Background())
+	cfg := Config{
+		NATS:    NATSConfig{URL: natsURL},
+		NATSMap: NATSMapConfig{Enabled: true},
+	}
+	cfg.Service.LogLevel = "error"
+	_, err := New[map[string]any, any](context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), CodeNATSMapYAMLNotFound) {
+		t.Fatalf("want CodeNATSMapYAMLNotFound, got %v", err)
+	}
+}
+
+func TestNew_NATSMapOverridePath_FileMissing_ReturnsCodeNATSMapYAMLNotFound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test — Docker required")
+	}
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	natsURL := startSmokeNATS(t, context.Background())
+	cfg := Config{
+		NATS:    NATSConfig{URL: natsURL},
+		NATSMap: NATSMapConfig{SubscribersPath: "nonexistent.yaml"},
+	}
+	cfg.Service.LogLevel = "error"
+	_, err := New[map[string]any, any](context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), CodeNATSMapYAMLNotFound) {
+		t.Fatalf("want CodeNATSMapYAMLNotFound, got %v", err)
 	}
 }
