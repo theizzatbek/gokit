@@ -52,8 +52,6 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	upstream := startUpstreamStub(t)
 	pemKey := generateEd25519PEM(t)
 
-	t.Setenv("MICROLINK_BASE_URL", upstream.URL)
-
 	cfg := config.Config{
 		Config: service.Config{
 			DB:      dbCfg,
@@ -68,6 +66,9 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	cfg.Service.LogLevel = "error"
 
 	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
+		service.WithAPIMapEnv(map[string]string{
+			"MICROLINK_BASE_URL": upstream.URL,
+		}),
 		service.WithAPIMapRegistration(func(e *apimap.Engine) {
 			apimap.RegisterResponse[enrich.MicroLinkResp](e, "microlink.metadata")
 		}),
