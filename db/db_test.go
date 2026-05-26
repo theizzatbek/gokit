@@ -239,3 +239,40 @@ func TestConnect_AppName_VisibleInPgStatActivity(t *testing.T) {
 		t.Fatalf("application_name = %q, want urlshort-test-pod-7", got)
 	}
 }
+
+func TestReadQuery_FallsBackToPrimary_WhenNoReplica(t *testing.T) {
+	d := startTestDB(t)
+	rows, err := d.ReadQuery(context.Background(), "SELECT 1")
+	if err != nil {
+		t.Fatalf("ReadQuery: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatal("expected one row")
+	}
+	var n int
+	if err := rows.Scan(&n); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("got %d, want 1", n)
+	}
+}
+
+func TestReadQueryRow_FallsBackToPrimary_WhenNoReplica(t *testing.T) {
+	d := startTestDB(t)
+	var n int
+	if err := d.ReadQueryRow(context.Background(), "SELECT 42").Scan(&n); err != nil {
+		t.Fatalf("ReadQueryRow: %v", err)
+	}
+	if n != 42 {
+		t.Fatalf("got %d, want 42", n)
+	}
+}
+
+func TestReadPool_NilWhenNoReplica(t *testing.T) {
+	d := startTestDB(t)
+	if d.ReadPool() != nil {
+		t.Fatal("expected ReadPool() == nil with HasReadReplica=false")
+	}
+}

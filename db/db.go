@@ -169,8 +169,13 @@ func backoffWait(attempt int, base, max time.Duration) time.Duration {
 	return w
 }
 
-// Close releases the underlying pool. Safe to call multiple times.
+// Close releases the primary pool and the read pool when present.
+// Safe to call multiple times.
 func (d *DB) Close() {
+	if d.readPool != nil {
+		d.readPool.Close()
+		d.readPool = nil
+	}
 	if d.pool == nil {
 		return
 	}
@@ -198,5 +203,32 @@ func (d *DB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 func (d *DB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return doExec(ctx, d.pool, sql, args...)
 }
+
+// ReadQuery runs sql against the read-replica pool when HasReadReplica was
+// true at Connect time; otherwise falls back to the primary pool. Use for
+// SELECTs that tolerate replica lag — listings, search, analytics, plain
+// GETs. NEVER use for SELECT FOR UPDATE or queries that must see
+// just-written data; use Query for those.
+func (d *DB) ReadQuery(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	pool := d.readPool
+	if pool == nil {
+		pool = d.pool
+	}
+	return doQuery(ctx, pool, sql, args...)
+}
+
+// ReadQueryRow is the single-row companion to ReadQuery; same semantics.
+func (d *DB) ReadQueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	pool := d.readPool
+	if pool == nil {
+		pool = d.pool
+	}
+	return doQueryRow(ctx, pool, sql, args...)
+}
+
+// ReadPool returns the underlying standby *pgxpool.Pool when HasReadReplica
+// was true at Connect time; nil otherwise. Use only for LISTEN/NOTIFY, COPY,
+// or custom isolation — most code wants ReadQuery / ReadQueryRow.
+func (d *DB) ReadPool() *pgxpool.Pool { return d.readPool }
 
 var _ Querier = (*DB)(nil)
