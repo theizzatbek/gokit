@@ -15,6 +15,17 @@ import (
 //	}
 //	if err := env.Parse(&cfg); err != nil { ... }
 type Config struct {
+	// URL is the full postgres connection string. When set, all
+	// connection-identity fields (Host, Port, User, Password, Database,
+	// SSLMode) are ignored. K8s-native pattern:
+	//
+	//   DB_URL=postgres://app:pass@postgres-svc.default:5432/appdb?sslmode=disable
+	//
+	// Multi-host failover (pgx native):
+	//
+	//   DB_URL=postgres://app:pass@h1,h2,h3:5432/appdb
+	URL string `env:"URL"`
+
 	Host     string `env:"HOST"          envDefault:"localhost"`
 	Port     int    `env:"PORT"          envDefault:"5432"`
 	User     string `env:"USER,required"`
@@ -45,23 +56,41 @@ type Config struct {
 	ConnectBackoffMax time.Duration `env:"CONNECT_BACKOFF_MAX"`
 }
 
-// buildConnString renders cfg as a libpq-style URL. Password and user are
-// URL-escaped so special characters (slashes, at-signs) don't break parsing.
-func buildConnString(cfg Config) string {
+// buildPgxURL renders cfg as a libpq-style URL suitable for pgxpool.ParseConfig.
+//
+// When cfg.URL is non-empty it is used verbatim as the base; otherwise the URL
+// is assembled from Host/Port/User/Password/Database/SSLMode with AppName and
+// ConnectTimeout injected as query parameters.
+func buildPgxURL(cfg Config) (string, error) {
+	var raw string
+	if cfg.URL != "" {
+		raw = cfg.URL
+	} else {
+		raw = assembleURL(cfg)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	if cfg.AppName != "" && q.Get("application_name") == "" {
+		q.Set("application_name", cfg.AppName)
+	}
+	if cfg.ConnectTimeout > 0 && q.Get("connect_timeout") == "" {
+		q.Set("connect_timeout", strconv.Itoa(int(cfg.ConnectTimeout.Seconds())))
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+// assembleURL renders the non-URL fields into a postgres:// string.
+func assembleURL(cfg Config) string {
 	userinfo := url.QueryEscape(cfg.User)
 	if cfg.Password != "" {
 		userinfo += ":" + url.QueryEscape(cfg.Password)
 	}
-
 	q := url.Values{}
 	q.Set("sslmode", cfg.SSLMode)
-	if cfg.AppName != "" {
-		q.Set("application_name", cfg.AppName)
-	}
-	if cfg.ConnectTimeout > 0 {
-		q.Set("connect_timeout", strconv.Itoa(int(cfg.ConnectTimeout.Seconds())))
-	}
-
 	return fmt.Sprintf("postgres://%s@%s:%d/%s?%s",
 		userinfo, cfg.Host, cfg.Port, cfg.Database, q.Encode())
 }

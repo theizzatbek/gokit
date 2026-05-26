@@ -35,7 +35,11 @@ type DB struct {
 // during backoff sleeps, returning KindUnavailable with the ctx error. Default
 // 0 = single attempt, preserving fail-fast behaviour for kit-direct callers.
 func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
-	pgxCfg, err := pgxpool.ParseConfig(buildConnString(cfg))
+	raw, err := buildPgxURL(cfg)
+	if err != nil {
+		return nil, errs.Wrap(err, errs.KindInternal, "db_config_invalid", "could not build db url")
+	}
+	pgxCfg, err := pgxpool.ParseConfig(raw)
 	if err != nil {
 		return nil, errs.Wrap(err, errs.KindInternal, "db_config_invalid", "could not parse db config")
 	}
