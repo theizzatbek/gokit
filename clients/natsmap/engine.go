@@ -349,17 +349,17 @@ func buildBackoffFn(b *rawBackoff) func(int) time.Duration {
 		return func(int) time.Duration { return base }
 	}
 	base := b.Base
-	max := b.Max
-	if max <= 0 {
-		max = base * 32
+	maxBackoff := b.Max
+	if maxBackoff <= 0 {
+		maxBackoff = base * 32
 	}
 	return func(redeliveries int) time.Duration {
 		if redeliveries < 1 {
 			return base
 		}
 		d := base << (redeliveries - 1)
-		if d > max || d <= 0 {
-			return max
+		if d > maxBackoff || d <= 0 {
+			return maxBackoff
 		}
 		return d
 	}
