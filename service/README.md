@@ -151,6 +151,15 @@ Each YAML-driven subsystem exposes an `Enabled` flag plus an optional `Path` ove
 - Default paths (via `Enabled=true`) are strict for apimap and routes (single file).
 - NATSMap default paths are silent-skip on miss — supports publish-only and subscribe-only services that only drop one of the two files. If both default files are missing, returns `service_natsmap_yaml_not_found`.
 
+### Code-driven vs env-driven enable
+
+Two equivalent ways to opt in:
+
+- **Code:** pass `service.WithAPIMap()` / `WithNATSMap()` / `WithRoutes()` to `service.New`. Best when `main.go` already chains other `With*` options.
+- **Env:** set `APIMAP_ENABLED=true` / `NATSMAP_ENABLED=true` / `ROUTES_ENABLED=true`. Best for env-driven deployments where Go-side flags would be awkward.
+
+Both flip the same internal flag; pass either or both — both setting `Enabled = true` is idempotent.
+
 ## Options
 
 | Option | Notes |
@@ -163,10 +172,13 @@ Each YAML-driven subsystem exposes an `Enabled` flag plus an optional `Path` ove
 | `WithoutBearerOptionalLayer()` | Skip the auto `Bearer(BearerOptional)` install |
 | `WithHTTPCOptions(opts...)` | Extra httpc options (logger + metrics already auto-applied) |
 | `WithAPIMapOptions(opts...)` | Extra apimap options |
+| `WithAPIMap()` | Equivalent to `Config.APIMap.Enabled = true`. Apimap auto-builds from `service.DefaultAPIMapPath` (`clients.yaml`) when no `Path` override is set. Missing file → `service_apimap_yaml_not_found`. |
 | `WithAPIMapRegistration(fn)` | Register typed Request/Response models BEFORE `apimap.Build` seals the engine |
 | `WithAPIMapEnv(m map[string]string)` | Explicit `${VAR}` values for apimap's clients.yaml. Map consulted before `os.LookupEnv`. |
+| `WithNATSMap()` | Equivalent to `Config.NATSMap.Enabled = true`. Natsmap auto-builds from default subscribers/publishers paths. Requires NATS. |
 | `WithNATSMapRegistration(fn)` | Register typed subscriber handlers + publishers via `natsmap.RegisterHandler[T]` / `natsmap.RegisterPublisher[T]` BEFORE `natsmap.Build` opens subscriptions. Required when `NATSMap.*Path` is set. |
 | `WithNATSMapEnv(m map[string]string)` | Explicit `${VAR}` values for natsmap's subscribers/publishers YAML. Map consulted before `os.LookupEnv`. |
+| `WithRoutes()` | Equivalent to `Config.Routes.Enabled = true`. Routes auto-load in `svc.Run()` from `service.DefaultRoutesPath` (`routes.yaml`). |
 | `WithNATSOptions(opts...)` | Extra natsclient options |
 | `WithRunOptions(opts...)` | Append `fibermap.RunOption`s to the default production-ops bundle |
 
