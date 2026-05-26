@@ -74,6 +74,28 @@ func main() {
 | `NKeySeed` | "" | Raw NKey seed |
 | `MaxReconnects` | -1 (infinite) | Set positive to give up |
 | `ReconnectWait` | 2s | Delay between reconnect attempts |
+| `ConnectMaxRetries` | `0` (no retry) | K8s boot resilience |
+| `ConnectBackoffBase` | `0` | K8s boot resilience |
+| `ConnectBackoffMax` | `0` | K8s boot resilience |
+
+### Connect retry (K8s boot resilience)
+
+Three optional Config fields cap initial-Connect retry behaviour:
+
+| Field | Env (via `gokit/service`) | Default |
+|---|---|---|
+| `ConnectMaxRetries` | `NATS_CONNECT_MAX_RETRIES` | `0` (no retry) |
+| `ConnectBackoffBase` | `NATS_CONNECT_BACKOFF_BASE` | `0` |
+| `ConnectBackoffMax` | `NATS_CONNECT_BACKOFF_MAX` | `0` |
+
+Kit default is fail-fast (1 attempt). When using `gokit/service`,
+the service auto-injects 5 retries with 1s base / 16s cap (~31s
+total). To disable, set `NATS_CONNECT_MAX_RETRIES=-1` or call
+`service.WithoutConnectRetry()`.
+
+This is initial-Connect retry only. Post-connection drops are
+handled by `nats.go`'s existing `MaxReconnects` + `ReconnectWait`
+(unchanged by this feature).
 
 ### Options
 

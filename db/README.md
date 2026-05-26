@@ -58,6 +58,27 @@ func main() {
 | `MaxConnLifetime` | `DB_MAX_LIFETIME` | 1h | |
 | `MaxConnIdle` | `DB_MAX_IDLE` | 30m | |
 | `ConnectTimeout` | `DB_CONN_TIMEOUT` | 5s | applied to initial connect |
+| `ConnectMaxRetries` | `DB_CONNECT_MAX_RETRIES` | `0` (no retry) | K8s boot resilience |
+| `ConnectBackoffBase` | `DB_CONNECT_BACKOFF_BASE` | `0` | K8s boot resilience |
+| `ConnectBackoffMax` | `DB_CONNECT_BACKOFF_MAX` | `0` | K8s boot resilience |
+
+### Connect retry (K8s boot resilience)
+
+Three optional Config fields cap initial-Connect retry behaviour:
+
+| Field | Env | Default |
+|---|---|---|
+| `ConnectMaxRetries` | `DB_CONNECT_MAX_RETRIES` | `0` (no retry) |
+| `ConnectBackoffBase` | `DB_CONNECT_BACKOFF_BASE` | `0` (kit fail-fast) |
+| `ConnectBackoffMax` | `DB_CONNECT_BACKOFF_MAX` | `0` |
+
+Kit default is fail-fast (1 attempt). When using `gokit/service`,
+the service auto-injects K8s-friendly defaults: 5 retries with 1s
+base / 16s cap (~31s total). To disable, set
+`DB_CONNECT_MAX_RETRIES=-1` or call `service.WithoutConnectRetry()`.
+
+The retry loop respects `ctx.Done()` — a deadline-bounded ctx
+aborts mid-backoff rather than hanging.
 
 ### Options
 
