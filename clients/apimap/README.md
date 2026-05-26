@@ -94,6 +94,19 @@ clients:
 
 `${VAR_NAME}` anywhere in the YAML is replaced from `os.Getenv` at LoadFile time (regex `[A-Z_][A-Z0-9_]*` — uppercase only). Missing env → `*errs.Error{Code: "apimap_env_var_unset"}`. Use this for secrets — never literal-write tokens.
 
+### Explicit env values via `WithEnv`
+
+If your service already has typed config, pass values explicitly instead of relying on process env:
+
+```go
+e := apimap.New(apimap.WithEnv(map[string]string{
+    "MICROLINK_BASE_URL": cfg.MicrolinkBaseURL,
+}))
+e.LoadFile("clients.yaml")
+```
+
+`WithEnv` map is consulted first; on miss, falls back to `os.LookupEnv`. Both miss → `apimap_env_var_unset`. Useful when typed config is the source of truth and you don't want apimap-only values polluting process env.
+
 ## Public API
 
 ```go
