@@ -293,3 +293,75 @@ func TestDeriveStreamsFromSubjects(t *testing.T) {
 func sortStreamsByName(s []rawStream) {
 	sort.Slice(s, func(i, j int) bool { return s[i].Name < s[j].Name })
 }
+
+func TestResolveDurableQueueGroup_Matrix(t *testing.T) {
+	cases := []struct {
+		name           string
+		sub            rawSubscriber
+		serverGroup    string
+		wantDurable    string
+		wantQueueGroup string
+	}{
+		{
+			name:           "both empty → auto both",
+			sub:            rawSubscriber{Name: "inv", Durable: "", QueueGroup: ""},
+			wantDurable:    "inv",
+			wantQueueGroup: "inv",
+		},
+		{
+			name:           "explicit queue_group only",
+			sub:            rawSubscriber{Name: "inv", Durable: "", QueueGroup: "workers"},
+			wantDurable:    "inv",
+			wantQueueGroup: "workers",
+		},
+		{
+			name:           "explicit durable only",
+			sub:            rawSubscriber{Name: "inv", Durable: "foo", QueueGroup: ""},
+			wantDurable:    "foo",
+			wantQueueGroup: "",
+		},
+		{
+			name:           "both explicit",
+			sub:            rawSubscriber{Name: "inv", Durable: "foo", QueueGroup: "bar"},
+			wantDurable:    "foo",
+			wantQueueGroup: "bar",
+		},
+		{
+			name:           "ephemeral sentinel",
+			sub:            rawSubscriber{Name: "inv", Durable: "ephemeral", QueueGroup: ""},
+			wantDurable:    "",
+			wantQueueGroup: "",
+		},
+		{
+			name:           "ephemeral + explicit queue_group",
+			sub:            rawSubscriber{Name: "inv", Durable: "ephemeral", QueueGroup: "bar"},
+			wantDurable:    "",
+			wantQueueGroup: "bar",
+		},
+		{
+			name:           "auto both with server group suffix",
+			sub:            rawSubscriber{Name: "inv", Durable: "", QueueGroup: ""},
+			serverGroup:    "dc1",
+			wantDurable:    "inv",
+			wantQueueGroup: "inv-dc1",
+		},
+		{
+			name:           "explicit queue_group NOT suffixed",
+			sub:            rawSubscriber{Name: "inv", Durable: "", QueueGroup: "workers"},
+			serverGroup:    "dc1",
+			wantDurable:    "inv",
+			wantQueueGroup: "workers",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d, qg := resolveDurableQueueGroup(&tc.sub, tc.serverGroup)
+			if d != tc.wantDurable {
+				t.Fatalf("durable: got %q want %q", d, tc.wantDurable)
+			}
+			if qg != tc.wantQueueGroup {
+				t.Fatalf("queue_group: got %q want %q", qg, tc.wantQueueGroup)
+			}
+		})
+	}
+}

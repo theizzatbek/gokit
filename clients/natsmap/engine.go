@@ -231,7 +231,8 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 		s := &e.subscribers[i]
 		handlerFn := e.handlerFns[s.Name]
 		handlerType := e.handlerTypes[s.Name]
-		subOpts, sferr := buildSubscribeOptions(s)
+		durable, queueGroup := resolveDurableQueueGroup(s, e.serverGroup)
+		subOpts, sferr := buildSubscribeOptions(s, durable, queueGroup)
 		if sferr != nil {
 			buildErrs = append(buildErrs, sferr)
 			continue
@@ -308,12 +309,49 @@ func makeRawHandler(t reflect.Type, codec natsclient.Codec,
 	}
 }
 
+// resolveDurableQueueGroup applies the auto-default rules described in
+// the multi-node README section:
+//
+//	durable=""           → durable = sub.Name
+//	durable="ephemeral"  → durable = "" (true ephemeral)
+//	durable=other        → durable = other (unchanged)
+//
+//	if durable was auto-derived AND queue_group is empty:
+//	    queue_group = sub.Name (+ "-" + serverGroup if non-empty)
+//
+// Explicit queue_group is never suffixed; explicit durable does NOT
+// trigger queue_group auto-derive (user controls durable → user
+// controls qg).
+func resolveDurableQueueGroup(s *rawSubscriber, serverGroup string) (durable, queueGroup string) {
+	durable = s.Durable
+	queueGroup = s.QueueGroup
+
+	autoDurable := false
+	if durable == "" {
+		durable = s.Name
+		autoDurable = true
+	} else if durable == "ephemeral" {
+		durable = ""
+	}
+
+	if autoDurable && queueGroup == "" {
+		queueGroup = s.Name
+		if serverGroup != "" {
+			queueGroup += "-" + serverGroup
+		}
+	}
+	return durable, queueGroup
+}
+
 // buildSubscribeOptions translates a rawSubscriber into the
-// natsclient.SubscribeOption list.
-func buildSubscribeOptions(s *rawSubscriber) ([]natsclient.SubscribeOption, error) {
+// natsclient.SubscribeOption list. durable and queueGroup are
+// pre-resolved by resolveDurableQueueGroup (applying auto-default and
+// ServerGroup-suffix rules); buildSubscribeOptions reads neither
+// s.Durable nor s.QueueGroup directly.
+func buildSubscribeOptions(s *rawSubscriber, durable, queueGroup string) ([]natsclient.SubscribeOption, error) {
 	var opts []natsclient.SubscribeOption
-	if s.Durable != "" {
-		opts = append(opts, natsclient.WithDurable(s.Durable))
+	if durable != "" {
+		opts = append(opts, natsclient.WithDurable(durable))
 	}
 	if s.MaxInFlight > 0 {
 		opts = append(opts, natsclient.WithMaxInFlight(s.MaxInFlight))
@@ -324,8 +362,8 @@ func buildSubscribeOptions(s *rawSubscriber) ([]natsclient.SubscribeOption, erro
 	if s.AckWait > 0 {
 		opts = append(opts, natsclient.WithAckWait(s.AckWait))
 	}
-	if s.QueueGroup != "" {
-		opts = append(opts, natsclient.WithQueueGroup(s.QueueGroup))
+	if queueGroup != "" {
+		opts = append(opts, natsclient.WithQueueGroup(queueGroup))
 	}
 	if s.FilterSubject != "" {
 		opts = append(opts, natsclient.WithFilterSubject(s.FilterSubject))
