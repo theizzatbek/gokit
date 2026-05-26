@@ -5,6 +5,11 @@ OpenAPI 3.0 spec generation + UI mounting from a `*fibermap.Engine[T]`. Reflects
 **Import:** `github.com/theizzatbek/gokit/fibermap/openapi`
 **Depends on:** `github.com/theizzatbek/gokit/fibermap`
 
+> **Tip:** When using `gokit/service`, you can declare Info / Servers /
+> SecuritySchemes / MiddlewareSecurity in `routes.yaml`'s top-level
+> `openapi:` block instead of passing them via Go code. See
+> [service README](../../service/README.md#openapi-from-routesyaml).
+
 ## Why use it
 
 Writing OpenAPI by hand is a chore: routes and schemas duplicate code that's already in your handlers + routes.yaml. fibermap already has the route table (`Engine.Routes()`) and the typed-handler registration knobs (`WithBody`, `WithResponse`). `openapi.NewGenerator(eng).Mount()` joins them and gives you `/openapi.json` + `/docs` with no maintenance burden — and `tags`/`summary`/`description` from your routes.yaml flow straight in.

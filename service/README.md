@@ -151,6 +151,55 @@ Each YAML-driven subsystem exposes an `Enabled` flag plus an optional `Path` ove
 - Default paths (via `Enabled=true`) are strict for apimap and routes (single file).
 - NATSMap default paths are silent-skip on miss — supports publish-only and subscribe-only services that only drop one of the two files. If both default files are missing, returns `service_natsmap_yaml_not_found`.
 
+## OpenAPI from routes.yaml
+
+Declare the OpenAPI document metadata next to your routes:
+
+```yaml
+groups:
+  - prefix: /v1
+    routes: [...]
+
+openapi:
+  info:
+    title: My API
+    version: 1.0.0
+    description: Public REST API.
+    contact:
+      name: Maintainer
+      email: maintainer@example.com
+  servers:
+    - url: https://api.example.com
+      description: production
+  security_schemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearer_format: JWT
+  middleware_security:
+    auth: [BearerAuth]
+```
+
+When this block is present, `service` mounts `/openapi.json` and `/docs`
+automatically. Call `service.WithOpenAPI()` to opt in explicitly without
+a YAML block (uses openapi package defaults), or pass openapi options to
+override or augment YAML values:
+
+```go
+service.WithOpenAPI(
+    openapi.WithInfo(openapi.Info{Title: "Override", Version: "2"}),
+    openapi.WithDefaultResponse(404, ErrorResp{}),
+)
+```
+
+**Precedence:** YAML applies first. Then user opts. `Info`: last-write-wins
+(code overrides). `Servers` / `SecuritySchemes` / `MiddlewareSecurity`:
+accumulating append.
+
+**Out of scope for YAML:** `WithDefaultResponse(status, model)` and the
+typed-schema builders (`gen.OnHandler(...).Body(...).Response(...)`) need
+Go types — pass them via the option chain.
+
 ### Code-driven vs env-driven enable
 
 Two equivalent ways to opt in:
@@ -164,7 +213,7 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 
 | Option | Notes |
 |---|---|
-| `WithOpenAPI(info, opts...)` | Mounts `/openapi.json` + `/docs` (Scalar UI) |
+| `WithOpenAPI(opts ...openapi.Option)` | Enable OpenAPI mounting. With no args, Info/Servers/SecuritySchemes/MiddlewareSecurity come from `routes.yaml`'s top-level `openapi:` block. Pass `openapi.WithInfo(...)` / `WithServer(...)` / `WithSecurity(...)` / `WithDefaultResponse(...)` to override or augment. Auto-mounts even without this call when the YAML block is present. |
 | `WithLogger(*slog.Logger)` | Override the auto-built logger |
 | `WithMetrics(prometheus.Registerer)` | Override the default `prometheus.NewRegistry()` |
 | `WithFiberMiddleware(handlers...)` | Insert fiber-level middleware before engine (helmet, cors, otelfiber, …) |

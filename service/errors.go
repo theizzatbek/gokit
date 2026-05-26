@@ -15,4 +15,5 @@ const (
 	CodeAPIMapYAMLNotFound  = "service_apimap_yaml_not_found"
 	CodeNATSMapYAMLNotFound = "service_natsmap_yaml_not_found"
 	CodeRoutesYAMLNotFound  = "service_routes_yaml_not_found"
+	CodeOpenAPIYAMLParse    = "service_openapi_yaml_parse"
 )

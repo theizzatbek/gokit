@@ -8,6 +8,7 @@ import (
 	"github.com/theizzatbek/gokit/auth"
 	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/fibermap"
+	"github.com/theizzatbek/gokit/fibermap/openapi"
 )
 
 // Run applies the production-ops bundle on top of any user-supplied
@@ -19,21 +20,58 @@ import (
 // Run loads the routes YAML via Engine.LoadFile after user-side
 // RegisterHandler calls and before Engine.Mount. Missing file returns
 // *errs.Error{Code: CodeRoutesYAMLNotFound}.
+//
+// OpenAPI: if WithOpenAPI() was passed OR routes.yaml contains a
+// top-level `openapi:` block, Run generates and mounts the document
+// (/openapi.json + /docs) before Engine.Run.
 func (s *Service[T, C]) Run() error {
 	defer s.Close()
 	if s.opts.routesEnable {
 		s.cfg.Routes.Enabled = true
 	}
-	if path := resolvePath(s.cfg.Routes.Path, DefaultRoutesPath, s.cfg.Routes.Enabled); path != "" {
-		if _, err := os.Stat(path); err != nil {
+	routesPath := resolvePath(s.cfg.Routes.Path, DefaultRoutesPath, s.cfg.Routes.Enabled)
+	if routesPath != "" {
+		if _, err := os.Stat(routesPath); err != nil {
 			return xerrs.Wrapf(err, xerrs.KindNotFound, CodeRoutesYAMLNotFound,
-				"service: routes yaml not found at %q (set ROUTES_PATH or disable with ROUTES_ENABLED=false)", path)
+				"service: routes yaml not found at %q (set ROUTES_PATH or disable with ROUTES_ENABLED=false)", routesPath)
 		}
-		if err := s.Engine.LoadFile(path); err != nil {
+		if err := s.Engine.LoadFile(routesPath); err != nil {
 			return err
 		}
 	}
+	if err := s.mountOpenAPI(routesPath); err != nil {
+		return err
+	}
 	return s.Engine.Run(s.runOptions()...)
+}
+
+// mountOpenAPI generates and mounts the OpenAPI document if either:
+//   - WithOpenAPI() was passed, OR
+//   - routes.yaml contains a top-level openapi: block.
+//
+// YAML opts apply first, then user opts (Info: last-write-wins;
+// Servers / SecuritySchemes / MiddlewareSecurity: append).
+func (s *Service[T, C]) mountOpenAPI(routesPath string) error {
+	var yamlOpts []openapi.Option
+	if routesPath != "" {
+		y, err := parseOpenAPIBlock(routesPath)
+		if err != nil {
+			return err
+		}
+		if y != nil {
+			yamlOpts = y.toOpenAPIOptions()
+		}
+	}
+	if !s.opts.openapiEnable && len(yamlOpts) == 0 {
+		return nil
+	}
+	allOpts := append(yamlOpts, s.opts.openapiOpts...)
+	gen := openapi.NewGenerator(s.Engine, allOpts...)
+	if err := gen.Mount(); err != nil {
+		return xerrs.Wrap(err, xerrs.KindInternal, CodeOpenAPIMountFailed,
+			"service: openapi mount failed")
+	}
+	return nil
 }
 
 func (s *Service[T, C]) runOptions() []fibermap.RunOption {

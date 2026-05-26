@@ -28,7 +28,6 @@ import (
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/events"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/links"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/users"
-	"github.com/theizzatbek/gokit/fibermap/openapi"
 	"github.com/theizzatbek/gokit/service"
 )
 
@@ -52,11 +51,7 @@ func run() error {
 		service.WithAPIMap(),
 		service.WithNATSMap(),
 		service.WithRoutes(),
-		service.WithOpenAPI(openapi.Info{
-			Title:       "urlshort API",
-			Version:     "0.1.0",
-			Description: "gokit integration example — URL shortener.",
-		}),
+		service.WithOpenAPI(),
 		service.WithAPIMapEnv(map[string]string{
 			"MICROLINK_BASE_URL": cfg.MicrolinkBaseURL,
 		}),

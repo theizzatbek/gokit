@@ -10,6 +10,12 @@
 # auth/fibermount.MountMiddlewareFactories; empty args list means
 # "verify Bearer token, no extra scope/role check".
 
+openapi:
+  info:
+    title: urlshort API
+    version: 0.1.0
+    description: gokit integration example — URL shortener.
+
 groups:
   - prefix: /auth
     routes:
