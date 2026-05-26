@@ -54,11 +54,9 @@ func TestSmoke_EndToEnd(t *testing.T) {
 
 	cfg := config.Config{
 		Config: service.Config{
-			DB:      dbCfg,
-			Auth:    service.AuthConfig{PrivateKeyPEM: pemKey, KID: "k1", Issuer: "urlshort", AccessTTL: 15 * time.Minute, RefreshTTL: time.Hour},
-			NATS:    service.NATSConfig{URL: natsURL},
-			APIMap:  service.APIMapConfig{Enabled: true}, // working dir is examples/urlshort/ during tests
-			NATSMap: service.NATSMapConfig{Enabled: true},
+			DB:   dbCfg,
+			Auth: service.AuthConfig{PrivateKeyPEM: pemKey, KID: "k1", Issuer: "urlshort", AccessTTL: 15 * time.Minute, RefreshTTL: time.Hour},
+			NATS: service.NATSConfig{URL: natsURL},
 		},
 		MicrolinkBaseURL: upstream.URL,
 		ShortURLBase:     "http://test.local",
@@ -66,6 +64,9 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	cfg.Service.LogLevel = "error"
 
 	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
+		service.WithAPIMap(),
+		service.WithNATSMap(),
+		service.WithRoutes(),
 		service.WithAPIMapEnv(map[string]string{
 			"MICROLINK_BASE_URL": upstream.URL,
 		}),
