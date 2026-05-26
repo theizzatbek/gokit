@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
+	"gopkg.in/yaml.v3"
 )
 
 type tHandlerPayload struct {
@@ -179,5 +180,55 @@ func TestWithEnv_BothMissingReturnsCodeEnvVarUnset(t *testing.T) {
 	err := e.LoadBytes(yaml)
 	if err == nil || !strings.Contains(err.Error(), CodeEnvVarUnset) {
 		t.Fatalf("want CodeEnvVarUnset, got %v", err)
+	}
+}
+
+func TestRawStreamsBlock_UnmarshalAuto(t *testing.T) {
+	var b rawStreamsBlock
+	if err := yaml.Unmarshal([]byte(`auto`), &b); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !b.Auto || len(b.List) != 0 {
+		t.Fatalf("got %+v want Auto=true List=[]", b)
+	}
+}
+
+func TestRawStreamsBlock_UnmarshalList(t *testing.T) {
+	var b rawStreamsBlock
+	if err := yaml.Unmarshal([]byte("- {name: X, subjects: [x.>]}\n"), &b); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if b.Auto || len(b.List) != 1 || b.List[0].Name != "X" {
+		t.Fatalf("got %+v", b)
+	}
+}
+
+func TestRawStreamsBlock_UnmarshalGarbage(t *testing.T) {
+	var b rawStreamsBlock
+	err := yaml.Unmarshal([]byte("manual"), &b)
+	if err == nil || !strings.Contains(err.Error(), "must be `auto`") {
+		t.Fatalf("want scalar-error, got %v", err)
+	}
+}
+
+func TestBuildStreamConfig_Defaults(t *testing.T) {
+	s := &rawStream{Name: "X", Subjects: []string{"x.>"}}
+	cfg, err := buildStreamConfig(s)
+	if err != nil {
+		t.Fatalf("buildStreamConfig: %v", err)
+	}
+	if cfg.Storage != natsclient.StorageFile {
+		t.Fatalf("Storage: got %v want File", cfg.Storage)
+	}
+	if cfg.Retention != natsclient.RetentionLimits {
+		t.Fatalf("Retention: got %v want Limits", cfg.Retention)
+	}
+}
+
+func TestBuildStreamConfig_InvalidStorage(t *testing.T) {
+	s := &rawStream{Name: "X", Subjects: []string{"x.>"}, Storage: "weird"}
+	_, err := buildStreamConfig(s)
+	if err == nil || !strings.Contains(err.Error(), CodeStreamInvalidStorage) {
+		t.Fatalf("want CodeStreamInvalidStorage, got %v", err)
 	}
 }

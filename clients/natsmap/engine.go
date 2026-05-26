@@ -33,6 +33,9 @@ type Engine struct {
 
 	envMap map[string]string // nil = no overrides; LoadBytes builds composite lookup
 
+	streams     rawStreamsBlock
+	serverGroup string
+
 	built bool
 }
 
@@ -93,6 +96,10 @@ func (e *Engine) LoadBytes(b []byte) error {
 	}
 	e.subscribers = append(e.subscribers, cfg.Subscribers...)
 	e.publishers = append(e.publishers, cfg.Publishers...)
+	if cfg.Streams.Auto {
+		e.streams.Auto = true
+	}
+	e.streams.List = append(e.streams.List, cfg.Streams.List...)
 	return nil
 }
 
@@ -186,7 +193,7 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 		return nil, xerrs.Validation(CodeAlreadyBuilt,
 			"natsmap: Engine.Build called twice")
 	}
-	cfg := &rawConfig{Subscribers: e.subscribers, Publishers: e.publishers}
+	cfg := &rawConfig{Subscribers: e.subscribers, Publishers: e.publishers, Streams: e.streams}
 	if err := cfg.validate(e.handlerNameSet(), e.publisherNameSet()); err != nil {
 		return nil, err
 	}
@@ -198,6 +205,20 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 
 	rt := &Runtime{
 		publishers: map[string]publishShim{},
+	}
+
+	// EnsureStream for every explicitly declared stream before opening
+	// subscriptions. Auto-derive handling is added in the next task.
+	for i := range e.streams.List {
+		s := &e.streams.List[i]
+		streamCfg, err := buildStreamConfig(s)
+		if err != nil {
+			return nil, err
+		}
+		if err := c.EnsureStream(ctx, streamCfg); err != nil {
+			return nil, xerrs.Wrapf(err, xerrs.KindUnavailable,
+				CodeEnsureStreamFailed, "natsmap: ensure stream %q", s.Name)
+		}
 	}
 
 	// Subscribers
@@ -369,4 +390,39 @@ func parseStartPolicy(s string) (natsclient.StartPolicy, error) {
 	}
 	return nil, xerrs.Validationf(CodeInvalidStartFrom,
 		"natsmap: start_from %q invalid", s)
+}
+
+// buildStreamConfig translates rawStream → natsclient.StreamConfig.
+// Returns *errs.Error for invalid storage / retention values.
+func buildStreamConfig(s *rawStream) (natsclient.StreamConfig, error) {
+	cfg := natsclient.StreamConfig{
+		Name:     s.Name,
+		Subjects: s.Subjects,
+		MaxAge:   s.MaxAge,
+		MaxBytes: s.MaxBytes,
+		MaxMsgs:  s.MaxMsgs,
+		Replicas: s.Replicas,
+		Dedup:    s.Dedup,
+	}
+	switch strings.ToLower(s.Storage) {
+	case "", "file":
+		cfg.Storage = natsclient.StorageFile
+	case "memory":
+		cfg.Storage = natsclient.StorageMemory
+	default:
+		return cfg, xerrs.Validationf(CodeStreamInvalidStorage,
+			"natsmap: stream %q storage %q invalid", s.Name, s.Storage)
+	}
+	switch strings.ToLower(s.Retention) {
+	case "", "limits":
+		cfg.Retention = natsclient.RetentionLimits
+	case "interest":
+		cfg.Retention = natsclient.RetentionInterest
+	case "work_queue":
+		cfg.Retention = natsclient.RetentionWorkQueue
+	default:
+		return cfg, xerrs.Validationf(CodeStreamInvalidRetention,
+			"natsmap: stream %q retention %q invalid", s.Name, s.Retention)
+	}
+	return cfg, nil
 }
