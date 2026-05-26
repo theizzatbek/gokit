@@ -3,10 +3,13 @@ package links
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/theizzatbek/gokit/db"
 	xerrs "github.com/theizzatbek/gokit/errs"
+
+	"github.com/theizzatbek/gokit/examples/urlshort/internal/events"
 )
 
 // EnrichFn is the metadata fetcher injected by main.go. The service
@@ -14,22 +17,14 @@ import (
 // flat (handlers wire enrich.FetchMetadata in here).
 type EnrichFn func(ctx context.Context, url string) (title, description, imageURL string)
 
-// PublishCreated is the NATS publisher injected by main.go. Best-effort
-// — the service never blocks or errors on publish failure.
-type PublishCreated func(ctx context.Context, l Link)
-
-// PublishVisited fires on redirect.
-type PublishVisited func(ctx context.Context, code, userAgent, ip string)
-
 type Service struct {
-	db        *db.DB
-	enrich    EnrichFn
-	pubCreate PublishCreated
-	pubVisit  PublishVisited
+	db     *db.DB
+	enrich EnrichFn
+	pub    *events.Publisher
 }
 
-func NewService(d *db.DB, enrich EnrichFn, pc PublishCreated, pv PublishVisited) *Service {
-	return &Service{db: d, enrich: enrich, pubCreate: pc, pubVisit: pv}
+func NewService(d *db.DB, enrich EnrichFn, pub *events.Publisher) *Service {
+	return &Service{db: d, enrich: enrich, pub: pub}
 }
 
 // Create enriches metadata best-effort, generates a unique code (with
@@ -53,7 +48,14 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 		err = row.Scan(&l.ID, &l.UserID, &l.Code, &l.OriginalURL, &l.Title,
 			&l.Description, &l.ImageURL, &l.VisitCount, &l.LastVisitedAt, &l.CreatedAt)
 		if err == nil {
-			s.pubCreate(ctx, l)
+			s.pub.LinkCreated(ctx, events.LinkCreated{
+				LinkID:    l.ID,
+				UserID:    l.UserID,
+				Code:      l.Code,
+				URL:       l.OriginalURL,
+				Title:     l.Title,
+				CreatedAt: l.CreatedAt,
+			})
 			return l, nil
 		}
 		var pg *pgconn.PgError
@@ -94,7 +96,12 @@ func (s *Service) IncVisit(ctx context.Context, code, userAgent, ip string) (Lin
 		&l.Description, &l.ImageURL, &l.VisitCount, &l.LastVisitedAt, &l.CreatedAt); err != nil {
 		return Link{}, xerrs.NotFound("link_not_found", "urlshort: link not found")
 	}
-	s.pubVisit(ctx, code, userAgent, ip)
+	s.pub.LinkVisited(ctx, events.LinkVisited{
+		Code:      code,
+		VisitedAt: time.Now(),
+		UserAgent: userAgent,
+		IP:        ip,
+	})
 	return l, nil
 }
 

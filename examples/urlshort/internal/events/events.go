@@ -29,22 +29,47 @@ type LinkVisited struct {
 	IP        string    `json:"ip,omitempty"`
 }
 
-// PublishCreated is best-effort. log == nil uses slog.Default.
-func PublishCreated(ctx context.Context, rt *natsmap.Runtime, log *slog.Logger, e LinkCreated) {
+// Publisher publishes link lifecycle events via natsmap. Best-effort:
+// every method swallows publish failures (logs a Warn) so analytics
+// never blocks the foreground request.
+//
+// Construct via NewPublisher; safe to embed in domain services that
+// shouldn't know about natsmap directly.
+type Publisher struct {
+	rt  *natsmap.Runtime
+	log *slog.Logger
+}
+
+// NewPublisher wires the natsmap runtime + logger used by every method.
+// log == nil falls back to slog.Default at call time.
+func NewPublisher(rt *natsmap.Runtime, log *slog.Logger) *Publisher {
+	return &Publisher{rt: rt, log: log}
+}
+
+// LinkCreated publishes e on urlshort.link.created. Nil-receiver safe.
+func (p *Publisher) LinkCreated(ctx context.Context, e LinkCreated) {
+	if p == nil {
+		return
+	}
+	log := p.log
 	if log == nil {
 		log = slog.Default()
 	}
-	if err := natsmap.Publish[LinkCreated](ctx, rt, "urlshort.link.created", e); err != nil {
+	if err := natsmap.Publish[LinkCreated](ctx, p.rt, "urlshort.link.created", e); err != nil {
 		log.Warn("urlshort events: publish created failed", "code", e.Code, "err", err.Error())
 	}
 }
 
-// PublishVisited is best-effort. log == nil uses slog.Default.
-func PublishVisited(ctx context.Context, rt *natsmap.Runtime, log *slog.Logger, e LinkVisited) {
+// LinkVisited publishes e on urlshort.link.visited. Nil-receiver safe.
+func (p *Publisher) LinkVisited(ctx context.Context, e LinkVisited) {
+	if p == nil {
+		return
+	}
+	log := p.log
 	if log == nil {
 		log = slog.Default()
 	}
-	if err := natsmap.Publish[LinkVisited](ctx, rt, "urlshort.link.visited", e); err != nil {
+	if err := natsmap.Publish[LinkVisited](ctx, p.rt, "urlshort.link.visited", e); err != nil {
 		log.Warn("urlshort events: publish visited failed", "code", e.Code, "err", err.Error())
 	}
 }
