@@ -32,9 +32,9 @@ type rawSubscriber struct {
 
 // rawPublisher is one declared publisher.
 type rawPublisher struct {
-	Name    string              `yaml:"name"`
-	Subject string              `yaml:"subject"`
-	Headers map[string][]string `yaml:"headers,omitempty"`
+	Name    string            `yaml:"name"`
+	Subject string            `yaml:"subject"`
+	Headers map[string]string `yaml:"headers,omitempty"`
 }
 
 // rawBackoff is the per-subscriber backoff override.

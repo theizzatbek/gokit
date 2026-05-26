@@ -61,6 +61,23 @@ func TestValidate_InvalidFixtures(t *testing.T) {
 	}
 }
 
+func TestParseBytes_PublishersFixture(t *testing.T) {
+	b, err := os.ReadFile("testdata/publishers.yaml")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	cfg, err := parseBytes(b)
+	if err != nil {
+		t.Fatalf("parseBytes: %v", err)
+	}
+	if len(cfg.Publishers) != 1 {
+		t.Fatalf("want 1 publisher, got %d", len(cfg.Publishers))
+	}
+	if got, want := cfg.Publishers[0].Headers["X-Source"], "invoice-svc"; got != want {
+		t.Fatalf("header X-Source: got %q want %q", got, want)
+	}
+}
+
 func errorContainsCode(err error, code string) bool {
 	if err == nil {
 		return false
