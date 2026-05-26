@@ -20,9 +20,12 @@ type Querier interface {
 }
 
 // DB wraps a *pgxpool.Pool with the kit's error-mapping and transaction helpers.
+// When cfg.HasReadReplica was true at Connect time, DB also holds a second
+// pool against target_session_attrs=standby exposed via ReadQuery/ReadQueryRow/ReadPool.
 type DB struct {
-	pool *pgxpool.Pool
-	opts options
+	pool     *pgxpool.Pool // primary (target_session_attrs=read-write)
+	readPool *pgxpool.Pool // standby (target_session_attrs=standby); nil when HasReadReplica=false
+	opts     options
 }
 
 // Connect opens a connection pool with cfg + opts. The returned *DB owns the
@@ -34,11 +37,54 @@ type DB struct {
 // each attempt, capped at cfg.ConnectBackoffMax). The loop honours ctx.Done()
 // during backoff sleeps, returning KindUnavailable with the ctx error. Default
 // 0 = single attempt, preserving fail-fast behaviour for kit-direct callers.
+//
+// When cfg.HasReadReplica is true, a second pool is opened against the same
+// connection string with target_session_attrs=standby. If the standby pool
+// fails to connect, the primary pool is closed and an *errs.Error of
+// KindUnavailable is returned — no silent degradation.
 func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
-	raw, err := buildPgxURL(cfg, "read-write")
+	o := options{}
+	for _, fn := range opts {
+		fn(&o)
+	}
+	if o.logger != nil || o.metrics != nil {
+		if o.slowThreshold == 0 {
+			o.slowThreshold = 500 * time.Millisecond
+		}
+	}
+
+	primaryURL, err := buildPgxURL(cfg, "read-write")
 	if err != nil {
 		return nil, errs.Wrap(err, errs.KindInternal, "db_config_invalid", "could not build db url")
 	}
+	primary, err := connectPool(ctx, primaryURL, cfg, &o)
+	if err != nil {
+		return nil, err
+	}
+
+	d := &DB{pool: primary, opts: o}
+
+	if cfg.HasReadReplica {
+		readURL, err := buildPgxURL(cfg, "standby")
+		if err != nil {
+			primary.Close()
+			return nil, errs.Wrap(err, errs.KindInternal, "db_config_invalid", "could not build read replica url")
+		}
+		readPool, err := connectPool(ctx, readURL, cfg, &o)
+		if err != nil {
+			primary.Close()
+			return nil, err
+		}
+		d.readPool = readPool
+	}
+
+	return d, nil
+}
+
+// connectPool opens one pool against raw, applies cfg knobs and the tracer
+// from o, and runs the retry loop. Returns *errs.Error{Kind:KindUnavailable}
+// on exhausted budget or ctx cancellation during backoff.
+func connectPool(ctx context.Context, raw string, cfg Config, o *options) (*pgxpool.Pool, error) {
 	pgxCfg, err := pgxpool.ParseConfig(raw)
 	if err != nil {
 		return nil, errs.Wrap(err, errs.KindInternal, "db_config_invalid", "could not parse db config")
@@ -55,15 +101,7 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 	if cfg.MaxConnIdle > 0 {
 		pgxCfg.MaxConnIdleTime = cfg.MaxConnIdle
 	}
-
-	o := options{}
-	for _, fn := range opts {
-		fn(&o)
-	}
 	if o.logger != nil || o.metrics != nil {
-		if o.slowThreshold == 0 {
-			o.slowThreshold = 500 * time.Millisecond
-		}
 		pgxCfg.ConnConfig.Tracer = &tracer{
 			logger:        o.logger,
 			metrics:       o.metrics,
@@ -115,7 +153,7 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 	if o.metrics != nil {
 		o.metrics.attach(pool)
 	}
-	return &DB{pool: pool, opts: o}, nil
+	return pool, nil
 }
 
 // backoffWait returns the wait duration before attempt N (1-indexed).

@@ -30,6 +30,13 @@ type Config struct {
 	// fields are fully ignored.
 	URL string `env:"URL"`
 
+	// HasReadReplica enables a second internal pgxpool against the same
+	// URL with target_session_attrs=standby. ReadQuery / ReadQueryRow
+	// route to it; everything else uses the primary pool. Requires
+	// PostgreSQL 14+. Default false; ReadQuery falls back to the primary
+	// pool in that case.
+	HasReadReplica bool `env:"HAS_READ_REPLICA"`
+
 	Host     string `env:"HOST"          envDefault:"localhost"`
 	Port     int    `env:"PORT"          envDefault:"5432"`
 	User     string `env:"USER,required"`
