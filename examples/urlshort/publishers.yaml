@@ -1,3 +1,5 @@
+streams: auto
+
 publishers:
   - name: urlshort.link.created
     subject: urlshort.link.created

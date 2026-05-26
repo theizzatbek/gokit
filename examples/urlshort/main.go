@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/theizzatbek/gokit/clients/apimap"
-	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/appctx"
@@ -69,14 +68,6 @@ func run() error {
 	defer svc.Close()
 
 	if err := applyMigrations(ctx, svc.DB, "migrations/0001_init.sql"); err != nil {
-		return err
-	}
-	if err := svc.NATS.EnsureStream(ctx, natsclient.StreamConfig{
-		Name:     "URLSHORT",
-		Subjects: []string{"urlshort.>"},
-		MaxAge:   7 * 24 * time.Hour,
-		Storage:  natsclient.StorageFile,
-	}); err != nil {
 		return err
 	}
 
