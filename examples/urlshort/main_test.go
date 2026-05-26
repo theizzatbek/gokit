@@ -57,8 +57,8 @@ func TestSmoke_EndToEnd(t *testing.T) {
 			DB:      dbCfg,
 			Auth:    service.AuthConfig{PrivateKeyPEM: pemKey, KID: "k1", Issuer: "urlshort", AccessTTL: 15 * time.Minute, RefreshTTL: time.Hour},
 			NATS:    service.NATSConfig{URL: natsURL},
-			APIMap:  service.APIMapConfig{Path: "clients.yaml"}, // working dir is examples/urlshort/ during tests
-			NATSMap: service.NATSMapConfig{PublishersPath: "publishers.yaml"},
+			APIMap:  service.APIMapConfig{Enabled: true}, // working dir is examples/urlshort/ during tests
+			NATSMap: service.NATSMapConfig{Enabled: true},
 		},
 		MicrolinkBaseURL: upstream.URL,
 		ShortURLBase:     "http://test.local",
@@ -115,8 +115,8 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	users.RegisterHandlers(svc.Engine, usersSvc, svc.Auth)
 	links.RegisterHandlers(svc.Engine, linksSvc, cfg.ShortURLBase)
 
-	// Load routes.yaml explicitly — service.Run normally does this, but the
-	// test calls Mount directly to drive via app.Test.
+	// Load routes.yaml explicitly — svc.Run() auto-loads when Routes.Enabled,
+	// but this test exercises app.Test (no Run), so we load here.
 	if err := svc.Engine.LoadFile("routes.yaml"); err != nil {
 		t.Fatalf("LoadFile routes.yaml: %v", err)
 	}

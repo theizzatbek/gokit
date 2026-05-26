@@ -44,8 +44,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	cfg.APIMap.Path = "clients.yaml"
-	cfg.NATSMap.PublishersPath = "publishers.yaml"
+	cfg.APIMap.Enabled = true
+	cfg.NATSMap.Enabled = true
+	cfg.Routes.Enabled = true
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
