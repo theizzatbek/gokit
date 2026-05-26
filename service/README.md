@@ -97,6 +97,17 @@ or set the per-subsystem env sentinel `_CONNECT_MAX_RETRIES=-1`.
 | `NodeName` | `SERVICE_NODE_NAME` | `os.Hostname()` if unset. Flows to `natsclient.Config.Name` (when `NATS.Name` is not explicit) and to default slog attrs (`node=...`). |
 | `ServerGroup` | `SERVICE_SERVER_GROUP` | Empty by default. When set, passed to `natsmap.WithServerGroup(...)` — auto-derived subscriber queue groups suffix with `-<ServerGroup>` for cross-region isolation. See [natsmap multi-node](../clients/natsmap/README.md#multi-node-behaviour). |
 
+### `DBConfig`
+
+Full field list lives in [db/README](../db/README.md#configuration). The
+multi-node-relevant env vars surfaced through service:
+
+| Field | Env | Notes |
+|---|---|---|
+| `URL` | `DB_URL` | full postgres connection string (overrides `DB_HOST`/`DB_PORT`/…). Supports comma-separated multi-host URLs for primary failover. |
+| `AppName` | `DB_APP_NAME` | `application_name` sent to Postgres; auto-set from `SERVICE_NODE_NAME` when empty. |
+| `HasReadReplica` | `DB_HAS_READ_REPLICA` | opt into the standby pool; `svc.DB.ReadQuery(...)` then targets a standby. Requires PG 14+. |
+
 ### `AuthConfig`
 
 | Field | Env | Default |
