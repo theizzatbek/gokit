@@ -1,9 +1,12 @@
 package service
 
 import (
+	"os"
+
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/theizzatbek/gokit/auth"
+	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/fibermap"
 )
 
@@ -11,8 +14,22 @@ import (
 // RunOptions and blocks on engine.Run. SIGINT/SIGTERM handling is
 // handled by Engine.Run itself. Close is deferred internally — calling
 // it again from main is safe (Close is idempotent).
+//
+// When Config.Routes.Enabled is true (or Config.Routes.Path is set),
+// Run loads the routes YAML via Engine.LoadFile after user-side
+// RegisterHandler calls and before Engine.Mount. Missing file returns
+// *errs.Error{Code: CodeRoutesYAMLNotFound}.
 func (s *Service[T, C]) Run() error {
 	defer s.Close()
+	if path := resolvePath(s.cfg.Routes.Path, DefaultRoutesPath, s.cfg.Routes.Enabled); path != "" {
+		if _, err := os.Stat(path); err != nil {
+			return xerrs.Wrapf(err, xerrs.KindNotFound, CodeRoutesYAMLNotFound,
+				"service: routes yaml not found at %q (set ROUTES_PATH or disable with ROUTES_ENABLED=false)", path)
+		}
+		if err := s.Engine.LoadFile(path); err != nil {
+			return err
+		}
+	}
 	return s.Engine.Run(s.runOptions()...)
 }
 

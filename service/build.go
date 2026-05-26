@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -136,27 +137,26 @@ func (s *Service[T, C]) buildHTTPC() error {
 }
 
 func (s *Service[T, C]) buildAPIMap() error {
-	if s.cfg.APIMap.Path == "" {
+	path := resolvePath(s.cfg.APIMap.Path, DefaultAPIMapPath, s.cfg.APIMap.Enabled)
+	if path == "" {
 		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return xerrs.Wrapf(err, xerrs.KindNotFound, CodeAPIMapYAMLNotFound,
+			"service: apimap yaml not found at %q (set APIMAP_PATH or disable with APIMAP_ENABLED=false)", path)
 	}
 	var apimapNewOpts []apimap.EngineOption
 	if s.opts.apimapEnv != nil {
 		apimapNewOpts = append(apimapNewOpts, apimap.WithEnv(s.opts.apimapEnv))
 	}
 	eng := apimap.New(apimapNewOpts...)
-	if err := eng.LoadFile(s.cfg.APIMap.Path); err != nil {
+	if err := eng.LoadFile(path); err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation, CodeAPIMapLoadFailed,
-			fmt.Sprintf("service: apimap load %q failed", s.cfg.APIMap.Path))
+			fmt.Sprintf("service: apimap load %q failed", path))
 	}
 	if s.opts.apimapRegistration != nil {
 		s.opts.apimapRegistration(eng)
 	}
-	// Do NOT auto-pass WithMetrics — apimap.Build constructs its own
-	// inner *http.Client per upstream which would re-register the same
-	// httpc_* collectors we already registered on the top-level HTTPC,
-	// panicking the shared registry. Users who want per-upstream
-	// metrics pass apimap.WithMetrics via WithAPIMapOptions with a
-	// dedicated Registerer.
 	apimapOpts := append([]apimap.Option{apimap.WithLogger(s.logger)}, s.opts.apimapOpts...)
 	c, err := eng.Build(apimapOpts...)
 	if err != nil {
@@ -180,24 +180,56 @@ func (s *Service[T, C]) buildNATS(ctx context.Context) error {
 }
 
 func (s *Service[T, C]) buildNATSMap(ctx context.Context) error {
-	if s.cfg.NATSMap.SubscribersPath == "" && s.cfg.NATSMap.PublishersPath == "" {
+	subs := resolvePath(s.cfg.NATSMap.SubscribersPath, DefaultNATSMapSubscribersPath, s.cfg.NATSMap.Enabled)
+	pubs := resolvePath(s.cfg.NATSMap.PublishersPath, DefaultNATSMapPublishersPath, s.cfg.NATSMap.Enabled)
+	if subs == "" && pubs == "" {
 		return nil
 	}
+	// Override paths (user explicitly set SubscribersPath/PublishersPath)
+	// are strict: missing file → error. Default paths (used because
+	// Enabled=true and no override) are silent-skip on miss; this
+	// supports publish-only and subscribe-only services that only
+	// drop one of the two default files.
+	var firstErr error
+	check := func(resolved string, isOverride bool) string {
+		if resolved == "" {
+			return ""
+		}
+		if _, err := os.Stat(resolved); err != nil {
+			if isOverride && firstErr == nil {
+				firstErr = xerrs.Wrapf(err, xerrs.KindNotFound, CodeNATSMapYAMLNotFound,
+					"service: natsmap yaml not found at %q", resolved)
+			}
+			return ""
+		}
+		return resolved
+	}
+	subs = check(subs, s.cfg.NATSMap.SubscribersPath != "")
+	pubs = check(pubs, s.cfg.NATSMap.PublishersPath != "")
+	if firstErr != nil {
+		return firstErr
+	}
+	if subs == "" && pubs == "" {
+		return xerrs.NotFoundf(CodeNATSMapYAMLNotFound,
+			"service: natsmap enabled but neither %q nor %q found in CWD",
+			DefaultNATSMapSubscribersPath, DefaultNATSMapPublishersPath)
+	}
+
 	var natsmapNewOpts []natsmap.EngineOption
 	if s.opts.natsmapEnv != nil {
 		natsmapNewOpts = append(natsmapNewOpts, natsmap.WithEnv(s.opts.natsmapEnv))
 	}
 	eng := natsmap.New(natsmapNewOpts...)
-	if p := s.cfg.NATSMap.SubscribersPath; p != "" {
-		if err := eng.LoadFile(p); err != nil {
+	if subs != "" {
+		if err := eng.LoadFile(subs); err != nil {
 			return xerrs.Wrap(err, xerrs.KindValidation, CodeNATSMapLoadFailed,
-				fmt.Sprintf("service: natsmap load subscribers %q failed", p))
+				fmt.Sprintf("service: natsmap load subscribers %q failed", subs))
 		}
 	}
-	if p := s.cfg.NATSMap.PublishersPath; p != "" {
-		if err := eng.LoadFile(p); err != nil {
+	if pubs != "" {
+		if err := eng.LoadFile(pubs); err != nil {
 			return xerrs.Wrap(err, xerrs.KindValidation, CodeNATSMapLoadFailed,
-				fmt.Sprintf("service: natsmap load publishers %q failed", p))
+				fmt.Sprintf("service: natsmap load publishers %q failed", pubs))
 		}
 	}
 	if s.opts.natsmapRegistration != nil {

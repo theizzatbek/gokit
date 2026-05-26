@@ -74,9 +74,10 @@ Env-driven via `caarlos0/env/v11`. Compose into your own app config via embeddin
 | `DB` | `DB_` | `DB_USER` set | When omitted, `svc.DB == nil` |
 | `Auth` | `AUTH_` | `AUTH_PRIVATE_KEY_PEM` set | Requires DB (refreshpg store) |
 | `NATS` | `NATS_` | `NATS_URL` set | Independent |
-| `NATSMap` | `NATSMAP_` | `NATSMAP_SUBSCRIBERS_PATH` or `NATSMAP_PUBLISHERS_PATH` set | Requires NATS |
+| `NATSMap` | `NATSMAP_` | `NATSMAP_ENABLED=true` or path set | Requires NATS |
 | `HTTPC` | `HTTPC_` | always | Zero-value → sensible defaults |
-| `APIMap` | `APIMAP_` | `APIMAP_PATH` set | Path to clients.yaml |
+| `APIMap` | `APIMAP_` | `APIMAP_ENABLED=true` or `APIMAP_PATH` set | Clients YAML |
+| `Routes` | `ROUTES_` | `ROUTES_ENABLED=true` or `ROUTES_PATH` set | Routes YAML |
 
 ### `ServiceConfig`
 
@@ -107,16 +108,48 @@ Env-driven via `caarlos0/env/v11`. Compose into your own app config via embeddin
 
 | Field | Env |
 |---|---|
+| `Enabled` | `APIMAP_ENABLED` |
 | `Path` | `APIMAP_PATH` |
 
 ### `NATSMapConfig`
 
 | Field | Env |
 |---|---|
+| `Enabled` | `NATSMAP_ENABLED` |
 | `SubscribersPath` | `NATSMAP_SUBSCRIBERS_PATH` |
 | `PublishersPath` | `NATSMAP_PUBLISHERS_PATH` |
 
-Either path triggers auto-build via `clients/natsmap`. Both paths may point at the same combined YAML. Requires `NATS` to be configured (`service_natsmap_needs_nats` otherwise).
+Either path (or `Enabled=true`) triggers auto-build via `clients/natsmap`. Both paths may point at the same combined YAML. Requires `NATS` to be configured (`service_natsmap_needs_nats` otherwise).
+
+### `RoutesConfig`
+
+| Field | Env |
+|---|---|
+| `Enabled` | `ROUTES_ENABLED` |
+| `Path` | `ROUTES_PATH` |
+
+When `Enabled=true` or `Path` is set, routes YAML is loaded and mounted at `svc.Run()` time. If `Path` is empty and `Enabled=true`, uses `service.DefaultRoutesPath` (`routes.yaml`).
+
+## Default paths convention
+
+Each YAML-driven subsystem exposes an `Enabled` flag plus an optional `Path` override. When `Enabled=true` and no `Path` is set, service uses the canonical default filename — drop the file in your binary's working directory and you're done.
+
+| Subsystem | Enabled env | Default filename | Path override env |
+|---|---|---|---|
+| apimap | `APIMAP_ENABLED` | `service.DefaultAPIMapPath` (`clients.yaml`) | `APIMAP_PATH` |
+| natsmap subscribers | `NATSMAP_ENABLED` | `service.DefaultNATSMapSubscribersPath` (`subscribers.yaml`) | `NATSMAP_SUBSCRIBERS_PATH` |
+| natsmap publishers | `NATSMAP_ENABLED` | `service.DefaultNATSMapPublishersPath` (`publishers.yaml`) | `NATSMAP_PUBLISHERS_PATH` |
+| routes | `ROUTES_ENABLED` | `service.DefaultRoutesPath` (`routes.yaml`) | `ROUTES_PATH` |
+
+**Trigger logic** (same for every subsystem):
+- Build the subsystem if `Enabled=true` **OR** the matching `Path` field is set.
+- If `Path` is empty and `Enabled=true`, use the default const.
+- Override `Path` always wins.
+
+**Missing files:**
+- Explicit `Path` overrides are strict — a missing file produces `service_*_yaml_not_found`.
+- Default paths (via `Enabled=true`) are strict for apimap and routes (single file).
+- NATSMap default paths are silent-skip on miss — supports publish-only and subscribe-only services that only drop one of the two files. If both default files are missing, returns `service_natsmap_yaml_not_found`.
 
 ## Options
 
