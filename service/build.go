@@ -19,7 +19,6 @@ import (
 	"github.com/theizzatbek/gokit/db"
 	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/fibermap"
-	"github.com/theizzatbek/gokit/fibermap/openapi"
 )
 
 // New constructs the bundled Service. Subsystems are built in dependency
@@ -80,10 +79,6 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		return nil, err
 	}
 	if err := s.mountAuthHandlers(); err != nil {
-		s.Close()
-		return nil, err
-	}
-	if err := s.mountOpenAPI(); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -276,14 +271,3 @@ func (s *Service[T, C]) mountAuthHandlers() error {
 	return nil
 }
 
-func (s *Service[T, C]) mountOpenAPI() error {
-	if s.opts.openapiInfo == nil {
-		return nil
-	}
-	openapiOpts := append([]openapi.Option{openapi.WithInfo(*s.opts.openapiInfo)}, s.opts.openapiOpts...)
-	gen := openapi.NewGenerator(s.Engine, openapiOpts...)
-	if err := gen.Mount(); err != nil {
-		return xerrs.Wrap(err, xerrs.KindInternal, CodeOpenAPIMountFailed, "service: openapi mount failed")
-	}
-	return nil
-}

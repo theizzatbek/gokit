@@ -20,7 +20,7 @@ type Option func(*options)
 type options struct {
 	logger              *slog.Logger
 	metrics             prometheus.Registerer
-	openapiInfo         *openapi.Info // nil = disabled
+	openapiEnable       bool          // WithOpenAPI() flips this
 	openapiOpts         []openapi.Option
 	fiberMiddleware     []fiber.Handler
 	skipAuthHandlers    bool
@@ -46,13 +46,23 @@ func WithMetrics(reg prometheus.Registerer) Option {
 	return func(o *options) { o.metrics = reg }
 }
 
-// WithOpenAPI enables OpenAPI generation — /openapi.json + /docs are
-// mounted by service.New. Pass extra openapi.Option entries (security
-// schemes, default responses, servers) after info.
-func WithOpenAPI(info openapi.Info, opts ...openapi.Option) Option {
+// WithOpenAPI enables OpenAPI mounting (/openapi.json + /docs). When
+// routes.yaml contains an `openapi:` block, its Info/Servers/
+// SecuritySchemes/MiddlewareSecurity populate the document; opts
+// passed here apply on top (Info: last-write-wins; Servers /
+// SecuritySchemes / MiddlewareSecurity: accumulating append).
+//
+// Calling WithOpenAPI() with no opts is the typical YAML-driven case.
+// Pass openapi.WithInfo(...) / WithServer(...) / WithSecurity(...) /
+// MapMiddlewareToSecurity(...) / WithDefaultResponse(...) to override
+// or augment from code.
+//
+// OpenAPI also auto-mounts when routes.yaml contains an openapi: block,
+// even if WithOpenAPI is not called explicitly.
+func WithOpenAPI(opts ...openapi.Option) Option {
 	return func(o *options) {
-		o.openapiInfo = &info
-		o.openapiOpts = opts
+		o.openapiEnable = true
+		o.openapiOpts = append(o.openapiOpts, opts...)
 	}
 }
 
