@@ -8,6 +8,15 @@ import (
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
+// Default YAML file paths used by service subsystems when Enabled is set
+// but no explicit Path override is supplied.
+const (
+	DefaultAPIMapPath             = "clients.yaml"
+	DefaultNATSMapSubscribersPath = "subscribers.yaml"
+	DefaultNATSMapPublishersPath  = "publishers.yaml"
+	DefaultRoutesPath             = "routes.yaml"
+)
+
 // Config is the env-driven service configuration. Compose into your own
 // app config via embedding to add app-specific fields:
 //
@@ -23,6 +32,7 @@ type Config struct {
 	NATSMap NATSMapConfig `envPrefix:"NATSMAP_"`
 	HTTPC   httpc.Config  `envPrefix:"HTTPC_"`
 	APIMap  APIMapConfig  `envPrefix:"APIMAP_"`
+	Routes  RoutesConfig  `envPrefix:"ROUTES_"`
 }
 
 // ServiceConfig — server + logging knobs.
@@ -48,16 +58,30 @@ type NATSConfig struct {
 	Name string `env:"NAME"`
 }
 
-// NATSMapConfig — paths to YAML files. Either is the opt-in trigger;
-// both may be set (one combined engine) or only one. Requires NATS.
+// NATSMapConfig — Enabled (or any *Path override) triggers natsmap
+// auto-build. When Enabled is true and no override is set, the default
+// paths (DefaultNATSMapSubscribersPath / DefaultNATSMapPublishersPath)
+// are used; missing default files are skipped silently (supports
+// publish-only / subscribe-only services). Override paths are strict —
+// a missing file produces CodeNATSMapYAMLNotFound. Requires NATS.
 type NATSMapConfig struct {
+	Enabled         bool   `env:"ENABLED"`
 	SubscribersPath string `env:"SUBSCRIBERS_PATH"`
 	PublishersPath  string `env:"PUBLISHERS_PATH"`
 }
 
-// APIMapConfig — Path to clients.yaml is the opt-in trigger.
+// APIMapConfig — Enabled (or Path override) triggers apimap auto-build.
 type APIMapConfig struct {
-	Path string `env:"PATH"`
+	Enabled bool   `env:"ENABLED"`
+	Path    string `env:"PATH"`
+}
+
+// RoutesConfig — Enabled (or Path override) triggers routes auto-load
+// in svc.Run, after user-side RegisterHandler calls and before
+// engine.Mount.
+type RoutesConfig struct {
+	Enabled bool   `env:"ENABLED"`
+	Path    string `env:"PATH"`
 }
 
 // Validate cross-subsystem invariants. Per-subsystem validation
@@ -67,7 +91,8 @@ func (c Config) Validate() error {
 		return xerrs.Validation(CodeAuthNeedsDB,
 			"service: Auth.PrivateKeyPEM requires DB (refreshpg store needs a Querier)")
 	}
-	if (c.NATSMap.SubscribersPath != "" || c.NATSMap.PublishersPath != "") && c.NATS.URL == "" {
+	natsmapOn := c.NATSMap.Enabled || c.NATSMap.SubscribersPath != "" || c.NATSMap.PublishersPath != ""
+	if natsmapOn && c.NATS.URL == "" {
 		return xerrs.Validation(CodeNATSMapNeedsNATS,
 			"service: NATSMap requires NATS (subscribers + publishers need a connection)")
 	}
