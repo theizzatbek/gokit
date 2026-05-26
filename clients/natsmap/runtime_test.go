@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/theizzatbek/gokit/reqctx"
 )
 
 type wrongType struct{ X int }
@@ -76,5 +78,72 @@ func TestPublisherNames_Sorted(t *testing.T) {
 	got := rt.PublisherNames()
 	if !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
 		t.Fatalf("PublisherNames not sorted: %v", got)
+	}
+}
+
+func TestPublish_InjectsRequestIDFromCtx(t *testing.T) {
+	var capturedHeaders map[string][]string
+	rt := &Runtime{publishers: map[string]publishShim{
+		"out": {
+			subject:     "x.y",
+			payloadType: reflect.TypeOf(tHandlerPayload{}),
+			publish: func(ctx context.Context, payload any, hdrs map[string][]string) error {
+				capturedHeaders = hdrs
+				return nil
+			},
+		},
+	}}
+	ctx := reqctx.WithRequestID(context.Background(), "ctx-rid")
+	if err := Publish[tHandlerPayload](ctx, rt, "out", tHandlerPayload{ID: "x"}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	got := capturedHeaders[reqctx.HeaderRequestID]
+	if len(got) != 1 || got[0] != "ctx-rid" {
+		t.Fatalf("X-Request-ID header: %v", got)
+	}
+}
+
+func TestPublish_PerCallHeaderWinsOverCtx(t *testing.T) {
+	var capturedHeaders map[string][]string
+	rt := &Runtime{publishers: map[string]publishShim{
+		"out": {
+			subject:     "x.y",
+			payloadType: reflect.TypeOf(tHandlerPayload{}),
+			publish: func(ctx context.Context, payload any, hdrs map[string][]string) error {
+				capturedHeaders = hdrs
+				return nil
+			},
+		},
+	}}
+	ctx := reqctx.WithRequestID(context.Background(), "from-ctx")
+	if err := PublishWithHeaders[tHandlerPayload](ctx, rt, "out",
+		tHandlerPayload{ID: "x"},
+		map[string][]string{reqctx.HeaderRequestID: {"from-caller"}}); err != nil {
+		t.Fatalf("PublishWithHeaders: %v", err)
+	}
+	got := capturedHeaders[reqctx.HeaderRequestID]
+	if len(got) != 1 || got[0] != "from-caller" {
+		t.Fatalf("explicit header should win, got %v", got)
+	}
+}
+
+func TestPublish_NoCtxNoHeader(t *testing.T) {
+	var capturedHeaders map[string][]string
+	rt := &Runtime{publishers: map[string]publishShim{
+		"out": {
+			subject:     "x.y",
+			payloadType: reflect.TypeOf(tHandlerPayload{}),
+			publish: func(ctx context.Context, payload any, hdrs map[string][]string) error {
+				capturedHeaders = hdrs
+				return nil
+			},
+		},
+	}}
+	if err := Publish[tHandlerPayload](context.Background(), rt, "out",
+		tHandlerPayload{ID: "x"}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if got := capturedHeaders[reqctx.HeaderRequestID]; len(got) != 0 {
+		t.Fatalf("expected no X-Request-ID, got %v", got)
 	}
 }
