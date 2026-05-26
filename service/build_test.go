@@ -157,3 +157,31 @@ func TestNew_WithNATSMap_WithoutNATS_ReturnsCodeNATSMapNeedsNATS(t *testing.T) {
 		t.Fatalf("want CodeNATSMapNeedsNATS, got %v", err)
 	}
 }
+
+func TestNew_NodeName_DefaultsToHostname(t *testing.T) {
+	cfg := Config{}
+	cfg.Service.LogLevel = "error"
+	svc, err := New[map[string]any, any](context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+	want, _ := os.Hostname()
+	if svc.cfg.Service.NodeName != want {
+		t.Fatalf("NodeName: got %q want hostname %q", svc.cfg.Service.NodeName, want)
+	}
+}
+
+func TestNew_NodeName_ExplicitPreserved(t *testing.T) {
+	cfg := Config{}
+	cfg.Service.LogLevel = "error"
+	cfg.Service.NodeName = "explicit-node"
+	svc, err := New[map[string]any, any](context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+	if svc.cfg.Service.NodeName != "explicit-node" {
+		t.Fatalf("NodeName: got %q want %q", svc.cfg.Service.NodeName, "explicit-node")
+	}
+}

@@ -30,6 +30,12 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		return nil, err
 	}
 
+	if cfg.Service.NodeName == "" {
+		if h, err := os.Hostname(); err == nil {
+			cfg.Service.NodeName = h
+		}
+	}
+
 	o := &options{}
 	for _, fn := range opts {
 		fn(o)
@@ -37,7 +43,8 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 
 	logger := o.logger
 	if logger == nil {
-		logger = newLogger(cfg.Service.LogFormat, cfg.Service.LogLevel)
+		logger = newLogger(cfg.Service.LogFormat, cfg.Service.LogLevel,
+			cfg.Service.NodeName, cfg.Service.ServerGroup)
 	}
 	metrics := o.metrics
 	if metrics == nil {
@@ -169,7 +176,11 @@ func (s *Service[T, C]) buildNATS(ctx context.Context) error {
 		return nil
 	}
 	natsOpts := append([]natsclient.Option{natsclient.WithLogger(s.logger), natsclient.WithMetrics(s.metrics)}, s.opts.natsOpts...)
-	c, err := natsclient.Connect(ctx, natsclient.Config{URL: s.cfg.NATS.URL, Name: s.cfg.NATS.Name}, natsOpts...)
+	natsName := s.cfg.NATS.Name
+	if natsName == "" {
+		natsName = s.cfg.Service.NodeName
+	}
+	c, err := natsclient.Connect(ctx, natsclient.Config{URL: s.cfg.NATS.URL, Name: natsName}, natsOpts...)
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeNATSConnectFailed, "service: nats connect failed")
 	}
@@ -223,6 +234,9 @@ func (s *Service[T, C]) buildNATSMap(ctx context.Context) error {
 	var natsmapNewOpts []natsmap.EngineOption
 	if s.opts.natsmapEnv != nil {
 		natsmapNewOpts = append(natsmapNewOpts, natsmap.WithEnv(s.opts.natsmapEnv))
+	}
+	if s.cfg.Service.ServerGroup != "" {
+		natsmapNewOpts = append(natsmapNewOpts, natsmap.WithServerGroup(s.cfg.Service.ServerGroup))
 	}
 	eng := natsmap.New(natsmapNewOpts...)
 	if subs != "" {
