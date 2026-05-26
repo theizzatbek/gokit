@@ -16,12 +16,16 @@ var envVarPattern = regexp.MustCompile(`\$\{([A-Z_][A-Z0-9_]*)\}`)
 // ones are substituted — used to flag malformed references.
 var envVarCatchAll = regexp.MustCompile(`\$\{[^}]*\}`)
 
-// substituteEnv replaces every ${VAR} reference in b with os.Getenv(VAR).
-func substituteEnv(b []byte) ([]byte, error) {
+// substituteEnv replaces every ${VAR} reference in b. lookup is the
+// resolver; if nil, falls back to os.LookupEnv.
+func substituteEnv(b []byte, lookup func(string) (string, bool)) ([]byte, error) {
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
 	var firstErr error
 	out := envVarPattern.ReplaceAllFunc(b, func(match []byte) []byte {
 		name := envVarPattern.FindSubmatch(match)[1]
-		val, ok := os.LookupEnv(string(name))
+		val, ok := lookup(string(name))
 		if !ok {
 			if firstErr == nil {
 				firstErr = xerrs.Validationf(CodeEnvVarUnset,
@@ -43,9 +47,9 @@ func substituteEnv(b []byte) ([]byte, error) {
 
 // parseBytes runs env-var substitution and decodes the YAML document.
 // Returns CodeNoEntries when the parsed document has no subscribers and
-// no publishers.
-func parseBytes(b []byte) (*rawConfig, error) {
-	substituted, err := substituteEnv(b)
+// no publishers. lookup is the env resolver; nil falls back to os.LookupEnv.
+func parseBytes(b []byte, lookup func(string) (string, bool)) (*rawConfig, error) {
+	substituted, err := substituteEnv(b, lookup)
 	if err != nil {
 		return nil, err
 	}

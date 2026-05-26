@@ -12,7 +12,7 @@ func TestParseBytes_Happy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	cfg, err := parseBytes(b)
+	cfg, err := parseBytes(b, nil)
 	if err != nil {
 		t.Fatalf("parseBytes: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestValidate_InvalidFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read: %v", err)
 			}
-			cfg, err := parseBytes(b)
+			cfg, err := parseBytes(b, nil)
 			if err != nil && strings.Contains(err.Error(), tc.code) {
 				return
 			}
@@ -66,7 +66,7 @@ func TestParseBytes_PublishersFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	cfg, err := parseBytes(b)
+	cfg, err := parseBytes(b, nil)
 	if err != nil {
 		t.Fatalf("parseBytes: %v", err)
 	}

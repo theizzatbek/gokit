@@ -2,6 +2,7 @@ package natsmap
 
 import (
 	"context"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -135,5 +136,48 @@ func stringifyPanic(v any) string {
 		return x
 	default:
 		return ""
+	}
+}
+
+func TestWithEnv_MapWinsOverProcessEnv(t *testing.T) {
+	t.Setenv("NATSMAP_TEST_KEY", "from-env")
+	e := New(WithEnv(map[string]string{"NATSMAP_TEST_KEY": "from-map"}))
+	yaml := []byte(`publishers:
+  - name: p
+    subject: ${NATSMAP_TEST_KEY}.created
+`)
+	if err := e.LoadBytes(yaml); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	if got, want := e.publishers[0].Subject, "from-map.created"; got != want {
+		t.Fatalf("Subject: got %q want %q (map should win)", got, want)
+	}
+}
+
+func TestWithEnv_FallsBackToProcessEnv(t *testing.T) {
+	t.Setenv("NATSMAP_TEST_KEY_X", "from-env-only")
+	e := New(WithEnv(map[string]string{"OTHER_KEY": "y"}))
+	yaml := []byte(`publishers:
+  - name: p
+    subject: ${NATSMAP_TEST_KEY_X}.created
+`)
+	if err := e.LoadBytes(yaml); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	if got, want := e.publishers[0].Subject, "from-env-only.created"; got != want {
+		t.Fatalf("Subject: got %q want %q (process env fallback)", got, want)
+	}
+}
+
+func TestWithEnv_BothMissingReturnsCodeEnvVarUnset(t *testing.T) {
+	os.Unsetenv("NATSMAP_TEST_KEY_MISSING")
+	e := New(WithEnv(map[string]string{}))
+	yaml := []byte(`publishers:
+  - name: p
+    subject: ${NATSMAP_TEST_KEY_MISSING}.created
+`)
+	err := e.LoadBytes(yaml)
+	if err == nil || !strings.Contains(err.Error(), CodeEnvVarUnset) {
+		t.Fatalf("want CodeEnvVarUnset, got %v", err)
 	}
 }
