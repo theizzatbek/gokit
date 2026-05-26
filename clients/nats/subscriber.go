@@ -281,7 +281,7 @@ func Subscribe[T any](
 			if metrics != nil {
 				metrics.IncHandlerDecodeError(m.Subject)
 			}
-			return fmt.Errorf("natsclient: decode: %w: %s", ErrPoison, err.Error())
+			return fmt.Errorf("natsclient: decode: %w: %w", ErrPoison, err)
 		}
 		return handler(ctx, Msg[T]{
 			Data:         data,

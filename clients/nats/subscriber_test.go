@@ -14,6 +14,27 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// TestErrPoison_WrapPolicy verifies that the wrap pattern used by Subscribe[T]'s
+// decode-failure path produces an error that:
+//   - errors.Is(err, ErrPoison) == true  (dispatchRaw will Term)
+//   - errors.Is(err, underlyingErr) == true (cause preserved for callers)
+//
+// Hermetic — no NATS server needed.
+func TestErrPoison_WrapPolicy(t *testing.T) {
+	underlying := errors.New("simulated decode failure")
+	wrapped := fmt.Errorf("natsclient: decode: %w: %w", ErrPoison, underlying)
+	if !errors.Is(wrapped, ErrPoison) {
+		t.Fatal("errors.Is(wrapped, ErrPoison) == false; dispatchRaw would Nak instead of Term")
+	}
+	if !errors.Is(wrapped, underlying) {
+		t.Fatal("errors.Is(wrapped, underlying) == false; cause not preserved")
+	}
+	plain := errors.New("transient: try again later")
+	if errors.Is(plain, ErrPoison) {
+		t.Fatal("errors.Is(plain, ErrPoison) == true; would Term a transient error")
+	}
+}
+
 func TestSubscribe_RoundTrip(t *testing.T) {
 	c := newTestClient(t)
 	ctx, cancel := context.WithCancel(context.Background())
