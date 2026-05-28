@@ -56,7 +56,7 @@ user, err := apimap.Decode[User](ctx, client, "github.get_user",
 ```yaml
 clients:
   - name: <string>                          # required, unique within engine
-    base_url: <absolute URL>                # required
+    base_url: <absolute URL>                # optional; omit for "open client" mode (caller passes Call.URL)
     timeout: <duration>                     # optional → httpc.Config.Timeout
     max_retries: <int>                      # optional → httpc.Config.MaxRetries
     backoff_base: <duration>                # optional → httpc.Config.BackoffBase
@@ -178,6 +178,44 @@ endpoints:
 ```
 
 At Build, endpoints with overrides get their own `*http.Client` (via `httpc.New`); endpoints without overrides share the per-API-client `*http.Client`. Free per-endpoint retry/timeout policy.
+
+### Open client (ad-hoc URLs, multi-host fetcher)
+
+When the upstream isn't one stable origin — e.g. a metadata fetcher that pulls
+arbitrary user-supplied URLs, a webhook responder that posts to caller-provided
+endpoints, a sandbox/prod switchboard — omit `base_url` and pass the full URL
+per request via `Call.URL`:
+
+```yaml
+clients:
+  - name: web
+    # base_url omitted → "open client"
+    timeout: 10s
+    max_retries: 2
+    default_headers:
+      User-Agent: urlshort/1.0
+    endpoints:
+      - name: fetch
+        method: GET
+        decode: raw       # most open-client uses are "give me the body bytes"
+```
+
+```go
+body, err := apimap.Decode[[]byte](ctx, client, "web.fetch", apimap.Call{
+    URL: "https://nytimes.com/some-article",
+})
+```
+
+**Rules:**
+- The two URL sources are mutually exclusive — declaring `base_url` AND passing `Call.URL` returns `*errs.Error{Code: "apimap_url_conflict"}` at request time.
+- Open client + empty `Call.URL` → `apimap_missing_request_url`.
+- Open client + `Call.Path` → `apimap_unknown_path_var` (no template to substitute against).
+- `Call.Query` still merges over the URL's existing query string.
+- All client-level knobs (timeout, max_retries, backoff, default_headers, auth, custom signers) apply as usual.
+
+**When to prefer open client over a raw `*http.Client`:** if you want the kit's unified observability (slog + Prometheus), the `*errs.Error` mapping on non-2xx, the typed `Decode[T] / Exchange[Req,Resp]` API, or YAML-level retry/timeout knobs — even when the URL is dynamic. If none of that matters, the bare `httpc.New(...)` is one less indirection.
+
+**Connection pooling caveat:** open clients commonly call many different hosts. Go's `http.DefaultTransport` pools per-host, so this is fine for moderate traffic; if you're hitting thousands of distinct hosts/sec, tune `MaxIdleConnsPerHost` via a custom transport passed through `WithBaseTransport`.
 
 ### Auth declared in YAML
 

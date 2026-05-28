@@ -72,6 +72,7 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		}),
 		service.WithAPIMapRegistration(func(e *apimap.Engine) {
 			apimap.RegisterResponse[enrich.MicroLinkResp](e, "microlink.metadata")
+			apimap.RegisterResponse[[]byte](e, "web.fetch")
 		}),
 		service.WithNATSMapRegistration(func(e *natsmap.Engine) {
 			natsmap.RegisterPublisher[events.LinkCreated](e, "urlshort.link.created")
@@ -97,7 +98,7 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Fatalf("ensure stream: %v", err)
 	}
 
-	fetcher := enrich.NewFetcher(svc.HTTPC, svc.APIMap, svc.Logger())
+	fetcher := enrich.NewFetcher(svc.APIMap, svc.Logger())
 	usersSvc := users.NewService(svc.DB, svc.Hasher)
 	pub := events.NewPublisher(svc.NATSMap, svc.Logger())
 	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub)

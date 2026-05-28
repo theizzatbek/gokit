@@ -393,6 +393,128 @@ func TestClient_Do_Auth_Custom_ReSignsOnRetry(t *testing.T) {
 	}
 }
 
+func TestClient_Do_OpenClient_HappyPath(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("hello"))
+	}))
+	t.Cleanup(srv.Close)
+
+	// Open client: no base_url. Caller supplies full URL via Call.URL.
+	c := buildClientWithYAML(t, `clients:
+  - name: web
+    endpoints:
+      - {name: fetch, method: GET, decode: raw}
+`, "")
+
+	target := srv.URL + "/any/path"
+	resp, err := c.Do(context.Background(), "web.fetch", Call{URL: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if gotPath != "/any/path" {
+		t.Errorf("server saw path = %q, want /any/path", gotPath)
+	}
+}
+
+func TestClient_Do_OpenClient_MissingURL(t *testing.T) {
+	c := buildClientWithYAML(t, `clients:
+  - name: web
+    endpoints:
+      - {name: fetch, method: GET}
+`, "")
+
+	_, err := c.Do(context.Background(), "web.fetch", Call{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var xe *xerrs.Error
+	if !errors.As(err, &xe) || xe.Code != CodeMissingRequestURL {
+		t.Fatalf("got %v, want CodeMissingRequestURL", err)
+	}
+}
+
+func TestClient_Do_OpenClient_ConflictWithBaseURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithYAML(t, `clients:
+  - name: c1
+    base_url: <BASE>
+    endpoints:
+      - {name: a, method: GET, path: /a}
+`, srv.URL)
+
+	_, err := c.Do(context.Background(), "c1.a", Call{URL: "https://elsewhere.example/x"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var xe *xerrs.Error
+	if !errors.As(err, &xe) || xe.Code != CodeURLConflict {
+		t.Fatalf("got %v, want CodeURLConflict", err)
+	}
+}
+
+func TestClient_Do_OpenClient_RejectsPathVars(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithYAML(t, `clients:
+  - name: web
+    endpoints:
+      - {name: fetch, method: GET}
+`, "")
+
+	_, err := c.Do(context.Background(), "web.fetch", Call{
+		URL:  srv.URL + "/x",
+		Path: map[string]string{"username": "alice"},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var xe *xerrs.Error
+	if !errors.As(err, &xe) || xe.Code != CodeUnknownPathVar {
+		t.Fatalf("got %v, want CodeUnknownPathVar", err)
+	}
+}
+
+func TestClient_Do_OpenClient_QueryStillMerges(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithYAML(t, `clients:
+  - name: web
+    endpoints:
+      - {name: fetch, method: GET}
+`, "")
+
+	target := srv.URL + "/p?baked=1"
+	_, err := c.Do(context.Background(), "web.fetch", Call{
+		URL:   target,
+		Query: map[string][]string{"extra": {"yes"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotQuery == "" || !strings.Contains(gotQuery, "extra=yes") || !strings.Contains(gotQuery, "baked=1") {
+		t.Errorf("query = %q, want both baked=1 and extra=yes", gotQuery)
+	}
+}
+
 func TestClient_Do_PerEndpointHTTPClient_Used(t *testing.T) {
 	var n int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
