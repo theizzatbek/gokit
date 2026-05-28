@@ -287,6 +287,112 @@ func TestClient_Do_Auth_CallOverrides(t *testing.T) {
 	}
 }
 
+func TestClient_Do_Auth_Custom_HappyPath(t *testing.T) {
+	var (
+		gotSig    string
+		gotMethod string
+		gotPath   string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSig = r.Header.Get("X-Test-Signature")
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	var signerCalls atomic.Int32
+	e := New()
+	yaml := strings.ReplaceAll(`clients:
+  - name: c1
+    base_url: <BASE>
+    auth:
+      type: custom
+      name: hmac
+    endpoints: [{name: a, method: GET, path: /a}]
+`, "<BASE>", srv.URL)
+	if err := e.LoadBytes([]byte(yaml)); err != nil {
+		t.Fatal(err)
+	}
+	RegisterAuth(e, "hmac", func(req *http.Request) error {
+		signerCalls.Add(1)
+		req.Header.Set("X-Test-Signature", "sig:"+req.Method+":"+req.URL.Path)
+		return nil
+	})
+	c, err := e.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := c.Do(context.Background(), "c1.a", Call{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if got := signerCalls.Load(); got != 1 {
+		t.Errorf("signer called %d times, want 1", got)
+	}
+	if gotSig != "sig:GET:/a" {
+		t.Errorf("X-Test-Signature = %q, want sig:GET:/a (signer must see final method+path)", gotSig)
+	}
+	_ = gotMethod
+	_ = gotPath
+}
+
+func TestClient_Do_Auth_Custom_ReSignsOnRetry(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := hits.Add(1)
+		if n == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	var signerCalls atomic.Int32
+	e := New()
+	yaml := strings.ReplaceAll(`clients:
+  - name: c1
+    base_url: <BASE>
+    max_retries: 2
+    backoff_base: 1ms
+    backoff_max: 2ms
+    auth:
+      type: custom
+      name: hmac
+    endpoints: [{name: a, method: GET, path: /a}]
+`, "<BASE>", srv.URL)
+	if err := e.LoadBytes([]byte(yaml)); err != nil {
+		t.Fatal(err)
+	}
+	RegisterAuth(e, "hmac", func(req *http.Request) error {
+		signerCalls.Add(1)
+		return nil
+	})
+	c, err := e.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := c.Do(context.Background(), "c1.a", Call{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Errorf("server hits = %d, want 2 (one 503 + one 200)", got)
+	}
+	if got := signerCalls.Load(); got != 2 {
+		t.Errorf("signer called %d times, want 2 (must re-sign on retry)", got)
+	}
+}
+
 func TestClient_Do_PerEndpointHTTPClient_Used(t *testing.T) {
 	var n int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

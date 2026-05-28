@@ -268,6 +268,72 @@ func TestEngine_Build_AuthHeaderStoredOnResolvedEndpoint(t *testing.T) {
 	}
 }
 
+func TestEngine_Build_CustomAuth_UnknownSigner(t *testing.T) {
+	e := New()
+	yaml := []byte(`clients:
+  - name: c1
+    base_url: https://example.com
+    auth:
+      type: custom
+      name: hmac
+    endpoints: [{name: a, method: GET, path: /a}]
+`)
+	if err := e.LoadBytes(yaml); err != nil {
+		t.Fatal(err)
+	}
+	// No RegisterAuth(e, "hmac", ...) → Build must surface the missing-signer error.
+	_, err := e.Build()
+	if err == nil {
+		t.Fatal("expected build error, got nil")
+	}
+	var xe *xerrs.Error
+	if !errors.As(err, &xe) || xe.Code != CodeUnknownCustomAuth {
+		t.Fatalf("got %v, want CodeUnknownCustomAuth", err)
+	}
+}
+
+func TestEngine_RegisterAuth_DuplicatePanics(t *testing.T) {
+	e := New()
+	RegisterAuth(e, "hmac", func(*http.Request) error { return nil })
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on duplicate RegisterAuth, got none")
+		}
+		err, ok := r.(error)
+		if !ok {
+			t.Fatalf("recover returned non-error %T", r)
+		}
+		var xe *xerrs.Error
+		if !errors.As(err, &xe) || xe.Code != CodeDuplicateCustomAuth {
+			t.Fatalf("got %v, want CodeDuplicateCustomAuth", err)
+		}
+	}()
+	RegisterAuth(e, "hmac", func(*http.Request) error { return nil })
+}
+
+func TestEngine_Build_CustomAuth_MissingName(t *testing.T) {
+	e := New()
+	yaml := []byte(`clients:
+  - name: c1
+    base_url: https://example.com
+    auth:
+      type: custom
+    endpoints: [{name: a, method: GET, path: /a}]
+`)
+	if err := e.LoadBytes(yaml); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.Build()
+	if err == nil {
+		t.Fatal("expected build error, got nil")
+	}
+	var xe *xerrs.Error
+	if !errors.As(err, &xe) || xe.Code != CodeAuthMissingField {
+		t.Fatalf("got %v, want CodeAuthMissingField", err)
+	}
+}
+
 // Silence unused import warning if http isn't used directly elsewhere.
 var _ = http.DefaultTransport
 

@@ -13,12 +13,13 @@ import (
 )
 
 // Engine is the build-once configurator. New → LoadFile/LoadBytes (n) →
-// RegisterRequest/RegisterResponse (n) → Build (once).
+// RegisterRequest/RegisterResponse/RegisterAuth (n) → Build (once).
 type Engine struct {
 	clients []rawClient
 
-	reqTypes  map[string]reflect.Type // endpoint full-name → registered request type
-	respTypes map[string]reflect.Type // endpoint full-name → registered response type
+	reqTypes  map[string]reflect.Type              // endpoint full-name → registered request type
+	respTypes map[string]reflect.Type              // endpoint full-name → registered response type
+	authFns   map[string]func(*http.Request) error // signer id → request-mutating function
 
 	envMap map[string]string // nil = no overrides; LoadBytes builds composite lookup
 
@@ -42,6 +43,7 @@ func New(opts ...EngineOption) *Engine {
 	e := &Engine{
 		reqTypes:  map[string]reflect.Type{},
 		respTypes: map[string]reflect.Type{},
+		authFns:   map[string]func(*http.Request) error{},
 	}
 	for _, fn := range opts {
 		fn(e)
@@ -100,6 +102,35 @@ func RegisterResponse[T any](e *Engine, endpoint string) {
 	registerType(e, endpoint, e.respTypes, reflect.TypeOf((*T)(nil)).Elem(), "response")
 }
 
+// RegisterAuth registers a request-mutating function under name. YAML
+// clients declaring `auth: { type: custom, name: <name> }` resolve at
+// Build time to this function. Typical use is HMAC / sign-with-secret
+// integrations where the signature depends on per-request method, path,
+// body, timestamp or nonce.
+//
+// The function runs as a transport-level wrapper BELOW httpc's retry
+// layer — every retry attempt re-invokes fn(req) with the same *http.Request
+// (Go re-sets the body via req.GetBody before each attempt), so
+// timestamp-bearing signatures stay valid across retries.
+//
+// If fn must read the request body (e.g. compute a body hash) it should
+// drain it via req.GetBody() rather than req.Body — pgx-style — otherwise
+// the body is consumed before reaching the upstream.
+//
+// Panics with *errs.Error on duplicate name or post-Build registration —
+// same convention as RegisterRequest/RegisterResponse.
+func RegisterAuth(e *Engine, name string, fn func(*http.Request) error) {
+	if e.built {
+		panic(xerrs.Validationf(CodeAlreadyBuilt,
+			"apimap: cannot RegisterAuth %q after Build", name))
+	}
+	if _, exists := e.authFns[name]; exists {
+		panic(xerrs.Validationf(CodeDuplicateCustomAuth,
+			"apimap: duplicate RegisterAuth for name %q", name))
+	}
+	e.authFns[name] = fn
+}
+
 func registerType(e *Engine, endpoint string, store map[string]reflect.Type, t reflect.Type, role string) {
 	if e.built {
 		panic(xerrs.Validationf(CodeAlreadyBuilt,
@@ -149,7 +180,15 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 
 	for i := range cfg.Clients {
 		cl := &cfg.Clients[i]
-		clientHTTP, err := buildHTTPClient(cl, nil, o)
+		// Resolve a custom signer ahead of HTTP-client construction so the
+		// transport chain can include it. Header-style auth (basic/bearer/
+		// header) is applied later as a per-request header.
+		signFn, signErr := e.resolveSigner(cl)
+		if signErr != nil {
+			buildErrs = append(buildErrs, signErr)
+			continue
+		}
+		clientHTTP, err := buildHTTPClient(cl, nil, o, signFn)
 		if err != nil {
 			buildErrs = append(buildErrs, err)
 			continue
@@ -165,7 +204,7 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 			}
 			epHTTP := clientHTTP
 			if ep.hasHTTPCOverride() {
-				epHTTP, err = buildHTTPClient(cl, ep, o)
+				epHTTP, err = buildHTTPClient(cl, ep, o, signFn)
 				if err != nil {
 					buildErrs = append(buildErrs, err)
 					continue
@@ -198,9 +237,9 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 }
 
 // resolveAuthHeader returns the header name+value to apply for the given
-// auth block. Returns ("", "") for nil or type=none auth. Validation
-// already guaranteed the per-type fields are present; this function
-// just assembles the header.
+// auth block. Returns ("", "") for nil, type=none, or type=custom auth
+// (the custom case is handled transport-side, not as a static header).
+// Validation already guaranteed the per-type fields are present.
 func resolveAuthHeader(a *rawAuth) (name, value string) {
 	if a == nil {
 		return "", ""
@@ -217,10 +256,46 @@ func resolveAuthHeader(a *rawAuth) (name, value string) {
 	return "", ""
 }
 
+// resolveSigner looks up the request-mutating function for an auth block
+// of type=custom against the engine's RegisterAuth registry. Returns
+// (nil, nil) for any other type (incl. nil auth). Returns an error of
+// CodeUnknownCustomAuth when YAML references a name that was not
+// registered.
+func (e *Engine) resolveSigner(cl *rawClient) (func(*http.Request) error, error) {
+	if cl.Auth == nil || strings.ToLower(cl.Auth.Type) != "custom" {
+		return nil, nil
+	}
+	fn, ok := e.authFns[cl.Auth.Name]
+	if !ok {
+		return nil, xerrs.Validationf(CodeUnknownCustomAuth,
+			"apimap: client %q auth.type=custom references unknown signer %q (RegisterAuth was never called for it)",
+			cl.Name, cl.Auth.Name)
+	}
+	return fn, nil
+}
+
+// signingRoundTripper is the transport-level wrapper inserted below
+// httpc's retry layer for type=custom auth. RoundTrip mutates req via
+// the registered signer, then forwards to base. httpc calls RoundTrip
+// once per retry attempt, so every attempt re-signs.
+type signingRoundTripper struct {
+	sign func(*http.Request) error
+	base http.RoundTripper
+}
+
+func (s *signingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := s.sign(req); err != nil {
+		return nil, err
+	}
+	return s.base.RoundTrip(req)
+}
+
 // buildHTTPClient constructs a *http.Client via httpc.New, applying
 // client-level config and (when ep != nil and has overrides) per-endpoint
 // overrides. The observability options are passed through unchanged.
-func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options) (*http.Client, error) {
+// When signFn is non-nil, it is inserted as a transport-level signer
+// below httpc's retry layer so every attempt re-invokes the signer.
+func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*http.Request) error) (*http.Client, error) {
 	cfg := httpc.Config{
 		Timeout:     cl.Timeout,
 		BackoffBase: cl.BackoffBase,
@@ -250,8 +325,19 @@ func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options) (*http.Client, 
 	if o.metrics != nil {
 		httpcOpts = append(httpcOpts, httpc.WithMetrics(o.metrics))
 	}
-	if o.baseTransport != nil {
-		httpcOpts = append(httpcOpts, httpc.WithBaseTransport(o.baseTransport))
+	// Layering when signFn is set:
+	//   httpc retry → signingRoundTripper → (o.baseTransport | http.DefaultTransport)
+	// httpc's WithBaseTransport receives the signing wrapper as its base.
+	baseRT := o.baseTransport
+	if signFn != nil {
+		under := baseRT
+		if under == nil {
+			under = http.DefaultTransport
+		}
+		baseRT = &signingRoundTripper{sign: signFn, base: under}
+	}
+	if baseRT != nil {
+		httpcOpts = append(httpcOpts, httpc.WithBaseTransport(baseRT))
 	}
 	return httpc.New(cfg, httpcOpts...)
 }
