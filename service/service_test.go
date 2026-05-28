@@ -37,6 +37,10 @@ type smokeAppCtx struct {
 type smokeClaims struct {
 	Email string `json:"email"`
 }
+type smokeLoginReq struct {
+	Login    string `json:"login"    validate:"required"`
+	Password string `json:"password" validate:"required"`
+}
 
 // TestSmoke_AllSubsystems exercises service.New with DB, Auth, NATS,
 // APIMap, HTTPC, Engine all enabled. Register → login → authenticated
@@ -88,13 +92,20 @@ func TestSmoke_AllSubsystems(t *testing.T) {
 	svc.SetContextBuilder(func(c *fiber.Ctx) (smokeAppCtx, error) {
 		return smokeAppCtx{UserID: svc.Auth.Subject(c)}, nil
 	})
-	svc.SetCredentialsVerifier(func(ctx context.Context, req auth.LoginRequest) (auth.LoginResult[smokeClaims], error) {
-		if req.Login != "user" || req.Password != "pass" {
-			return auth.LoginResult[smokeClaims]{}, xerrs.Unauthorized("invalid_credentials", "bad creds")
-		}
-		return auth.LoginResult[smokeClaims]{Subject: "subject-1", Custom: smokeClaims{Email: "user@example.com"}}, nil
-	})
 
+	// service.New no longer auto-mounts /auth/login — the service registers
+	// its own login handler that owns body shape and credential verification,
+	// then delegates token issuance to svc.Auth.IssueLogin.
+	fibermap.RegisterHandlerWithBody(svc.Engine, "smoke.login",
+		func(c *fibermap.Context[smokeAppCtx], body smokeLoginReq) error {
+			if body.Login != "user" || body.Password != "pass" {
+				return xerrs.Unauthorized("invalid_credentials", "bad creds")
+			}
+			return svc.Auth.IssueLogin(c.Ctx, auth.LoginResult[smokeClaims]{
+				Subject: "subject-1",
+				Custom:  smokeClaims{Email: "user@example.com"},
+			})
+		})
 	fibermap.RegisterHandler(svc.Engine, "smoke.me",
 		func(c *fibermap.Context[smokeAppCtx]) error {
 			return c.JSON(map[string]string{"user_id": c.Data.UserID})
@@ -110,7 +121,7 @@ func TestSmoke_AllSubsystems(t *testing.T) {
 		t.Fatalf("Mount: %v", err)
 	}
 
-	// /auth/login (auto-mounted by service.New) returns access_token.
+	// /auth/login (the smoke.login handler registered above) returns access_token.
 	loginResp := doSmokeJSON(t, app, "POST", "/auth/login",
 		`{"login":"user","password":"pass"}`, "")
 	if loginResp.StatusCode != 200 {
@@ -160,6 +171,12 @@ CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
 
 const smokeRoutesYAML = `
 groups:
+  - prefix: /auth
+    routes:
+      - method: POST
+        path: /login
+        handler: smoke.login
+        name: smoke.login
   - prefix: /
     middleware:
       - bearer: []

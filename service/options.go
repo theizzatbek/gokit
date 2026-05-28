@@ -23,7 +23,6 @@ type options struct {
 	openapiEnable       bool // WithOpenAPI() flips this
 	openapiOpts         []openapi.Option
 	fiberMiddleware     []fiber.Handler
-	skipAuthHandlers    bool
 	skipBearerLayer     bool
 	httpcOpts           []httpc.Option
 	apimapOpts          []apimap.Option
@@ -72,13 +71,6 @@ func WithOpenAPI(opts ...openapi.Option) Option {
 // stays unless WithoutBearerOptionalLayer is also passed.
 func WithFiberMiddleware(handlers ...fiber.Handler) Option {
 	return func(o *options) { o.fiberMiddleware = append(o.fiberMiddleware, handlers...) }
-}
-
-// WithoutAuthHandlers skips the auto-mount of /auth/login, /refresh,
-// /logout. Use when you want full manual control over the auth route
-// surface.
-func WithoutAuthHandlers() Option {
-	return func(o *options) { o.skipAuthHandlers = true }
 }
 
 // WithoutBearerOptionalLayer skips installing auth.Bearer(BearerOptional)

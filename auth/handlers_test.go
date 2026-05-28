@@ -36,8 +36,19 @@ func testErrorHandler(c *fiber.Ctx, err error) error {
 	return fiber.DefaultErrorHandler(c, err)
 }
 
+// loginReq is the local body shape these tests use to drive their custom
+// login handler. The kit no longer owns this — kit only sees the verified
+// LoginResult[C] passed into IssueLogin.
+type loginReq struct {
+	Login    string `json:"login"`
+	Password string `json:"password"`
+}
+
+// loginVerifier is the test-local equivalent of the old kit-owned
+// CredentialsVerifier: parse body → either return LoginResult or an error.
+type loginVerifier func(r loginReq) (auth.LoginResult[appClaims], error)
+
 // newAuth builds an *auth.Auth[appClaims] with a fresh in-memory refresh store.
-// Equivalent to mustNewAuth used in internal tests, but built for external use.
 func newAuth(t *testing.T) *auth.Auth[appClaims] {
 	t.Helper()
 	keys, err := auth.GenerateEd25519Key("k1")
@@ -54,17 +65,34 @@ func newAuth(t *testing.T) *auth.Auth[appClaims] {
 	return a
 }
 
-func loginApp(t *testing.T, verifier auth.CredentialsVerifier[appClaims]) *fiber.App {
+// loginHandlerOn wraps a verifier into a fiber.Handler that uses the new
+// kit API (a.IssueLogin). This is the same pattern callers will use in
+// production — body parsing and credential check stay in the service.
+func loginHandlerOn(a *auth.Auth[appClaims], verify loginVerifier) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		var req loginReq
+		if err := c.BodyParser(&req); err != nil {
+			return errs.Wrap(err, errs.KindValidation, "invalid_body", "could not decode login body")
+		}
+		res, err := verify(req)
+		if err != nil {
+			return err
+		}
+		return a.IssueLogin(c, res)
+	}
+}
+
+// loginApp wires the test-local login handler over a fresh Auth instance.
+func loginApp(t *testing.T, verify loginVerifier) *fiber.App {
 	t.Helper()
 	a := newAuth(t)
-	a.SetCredentialsVerifier(verifier)
 	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-	app.Post("/auth/login", a.LoginHandler)
+	app.Post("/auth/login", loginHandlerOn(a, verify))
 	return app
 }
 
-func TestLogin_HappyPath(t *testing.T) {
-	app := loginApp(t, func(ctx context.Context, r auth.LoginRequest) (auth.LoginResult[appClaims], error) {
+func TestIssueLogin_HappyPath(t *testing.T) {
+	app := loginApp(t, func(r loginReq) (auth.LoginResult[appClaims], error) {
 		if r.Login != "alice" || r.Password != "hunter2" {
 			return auth.LoginResult[appClaims]{}, errs.Unauthorized(auth.CodeInvalidCredentials, "no")
 		}
@@ -111,8 +139,8 @@ func TestLogin_HappyPath(t *testing.T) {
 	}
 }
 
-func TestLogin_BadCredentialsIs401(t *testing.T) {
-	app := loginApp(t, func(ctx context.Context, r auth.LoginRequest) (auth.LoginResult[appClaims], error) {
+func TestIssueLogin_VerifierError_PropagatesAs401(t *testing.T) {
+	app := loginApp(t, func(r loginReq) (auth.LoginResult[appClaims], error) {
 		return auth.LoginResult[appClaims]{}, errs.Unauthorized(auth.CodeInvalidCredentials, "invalid login or password")
 	})
 	req := httptest.NewRequest("POST", "/auth/login",
@@ -124,22 +152,21 @@ func TestLogin_BadCredentialsIs401(t *testing.T) {
 	}
 }
 
-func TestLogin_MalformedBodyIs400(t *testing.T) {
-	app := loginApp(t, func(ctx context.Context, r auth.LoginRequest) (auth.LoginResult[appClaims], error) {
-		return auth.LoginResult[appClaims]{Subject: "u-1"}, nil
-	})
-	req := httptest.NewRequest("POST", "/auth/login", strings.NewReader(`{"login":""}`))
-	req.Header.Set("Content-Type", "application/json")
-	resp, _ := app.Test(req)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", resp.StatusCode)
+func TestIssueLogin_NoStore_Is500(t *testing.T) {
+	// Build an Auth without a RefreshStore — IssueTokens must refuse with
+	// KindInternal so callers don't silently lose the refresh side of the flow.
+	keys, _ := auth.GenerateEd25519Key("k1")
+	a, err := auth.New[appClaims](auth.Config{
+		Issuer: "myapp", Audience: []string{"web"},
+		Keys: keys, AccessTTL: 15 * time.Minute, RefreshTTL: 30 * 24 * time.Hour,
+	}, auth.WithCookieSecure(false))
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
-}
-
-func TestLogin_NoVerifierIs500(t *testing.T) {
-	a := newAuth(t)
 	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-	app.Post("/auth/login", a.LoginHandler)
+	app.Post("/auth/login", loginHandlerOn(a, func(r loginReq) (auth.LoginResult[appClaims], error) {
+		return auth.LoginResult[appClaims]{Subject: "u-1"}, nil
+	}))
 	req := httptest.NewRequest("POST", "/auth/login",
 		strings.NewReader(`{"login":"a","password":"b"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -156,15 +183,14 @@ func refreshAppWithStore(t *testing.T, store auth.RefreshStore, refresher auth.C
 		Issuer: "myapp", Audience: []string{"web"},
 		Keys: ks, AccessTTL: 15 * time.Minute, RefreshTTL: 30 * 24 * time.Hour,
 	}, auth.WithRefreshStore(store), auth.WithCookieSecure(false))
-	a.SetCredentialsVerifier(func(ctx context.Context, r auth.LoginRequest) (auth.LoginResult[appClaims], error) {
-		return auth.LoginResult[appClaims]{Subject: "u-1"}, nil
-	})
 	if refresher != nil {
 		a.SetClaimsRefresher(refresher)
 	}
 	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-	app.Post("/auth/login", a.LoginHandler)
-	app.Post("/auth/refresh", a.RefreshHandler)
+	app.Post("/auth/login", loginHandlerOn(a, func(r loginReq) (auth.LoginResult[appClaims], error) {
+		return auth.LoginResult[appClaims]{Subject: "u-1"}, nil
+	}))
+	app.Post("/auth/refresh", a.IssueRefresh)
 	return app, a
 }
 
@@ -186,7 +212,7 @@ func loginAndGetRefreshCookie(t *testing.T, app *fiber.App) *http.Cookie {
 	return nil
 }
 
-func TestRefresh_RotatesAndIssuesNewPair(t *testing.T) {
+func TestIssueRefresh_RotatesAndIssuesNewPair(t *testing.T) {
 	store := memstore.New()
 	app, _ := refreshAppWithStore(t, store, nil)
 	rc := loginAndGetRefreshCookie(t, app)
@@ -197,7 +223,6 @@ func TestRefresh_RotatesAndIssuesNewPair(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("refresh status = %d", resp.StatusCode)
 	}
-	// New refresh cookie issued, value differs from the original.
 	var newRC *http.Cookie
 	for _, c := range resp.Cookies() {
 		if c.Name == "refresh_token" {
@@ -212,12 +237,11 @@ func TestRefresh_RotatesAndIssuesNewPair(t *testing.T) {
 	}
 }
 
-func TestRefresh_ReuseDetected_RevokesFamily(t *testing.T) {
+func TestIssueRefresh_ReuseDetected_RevokesFamily(t *testing.T) {
 	store := memstore.New()
 	app, _ := refreshAppWithStore(t, store, nil)
 	rc := loginAndGetRefreshCookie(t, app)
 
-	// First refresh: ok.
 	req := httptest.NewRequest("POST", "/auth/refresh", nil)
 	req.AddCookie(rc)
 	resp1, _ := app.Test(req)
@@ -225,8 +249,7 @@ func TestRefresh_ReuseDetected_RevokesFamily(t *testing.T) {
 		t.Fatalf("first refresh = %d", resp1.StatusCode)
 	}
 	// Second refresh with the OLD cookie: store sees already-consumed, must
-	// 401 with refresh_reused and revoke the family — so the new cookie also
-	// stops working on its next /refresh.
+	// 401 with refresh_reused and revoke the family.
 	req2 := httptest.NewRequest("POST", "/auth/refresh", nil)
 	req2.AddCookie(rc)
 	resp2, _ := app.Test(req2)
@@ -248,7 +271,7 @@ func TestRefresh_ReuseDetected_RevokesFamily(t *testing.T) {
 	}
 }
 
-func TestRefresh_MissingCookieIs401(t *testing.T) {
+func TestIssueRefresh_MissingCookieIs401(t *testing.T) {
 	store := memstore.New()
 	app, _ := refreshAppWithStore(t, store, nil)
 	resp, _ := app.Test(httptest.NewRequest("POST", "/auth/refresh", nil))
@@ -257,7 +280,7 @@ func TestRefresh_MissingCookieIs401(t *testing.T) {
 	}
 }
 
-func TestRefresh_ClaimsRefresherInvoked(t *testing.T) {
+func TestIssueRefresh_ClaimsRefresherInvoked(t *testing.T) {
 	store := memstore.New()
 	var called bool
 	app, _ := refreshAppWithStore(t, store, func(ctx context.Context, sub string) (auth.LoginResult[appClaims], error) {
@@ -279,9 +302,9 @@ func TestLogout_RevokesFamilyAndClearsCookie(t *testing.T) {
 	rc := loginAndGetRefreshCookie(t, app)
 
 	// Build a parallel app sharing the same store; mount logout there.
+	a2 := authWithStore(t, store)
 	app2 := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-	app2.Post("/auth/login", appLoginHandlerWithStore(t, store))
-	app2.Post("/auth/logout", appLogoutHandlerWithStore(t, store))
+	app2.Post("/auth/logout", a2.Logout)
 
 	req := httptest.NewRequest("POST", "/auth/logout", nil)
 	req.AddCookie(rc)
@@ -289,7 +312,6 @@ func TestLogout_RevokesFamilyAndClearsCookie(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("logout status = %d", resp.StatusCode)
 	}
-	// Cookie cleared (Max-Age=-1).
 	cleared := false
 	for _, c := range resp.Cookies() {
 		if c.Name == "refresh_token" && c.MaxAge < 0 {
@@ -303,8 +325,9 @@ func TestLogout_RevokesFamilyAndClearsCookie(t *testing.T) {
 
 func TestLogout_MissingCookieIs204Idempotent(t *testing.T) {
 	store := memstore.New()
+	a := authWithStore(t, store)
 	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-	app.Post("/auth/logout", appLogoutHandlerWithStore(t, store))
+	app.Post("/auth/logout", a.Logout)
 	resp, _ := app.Test(httptest.NewRequest("POST", "/auth/logout", nil))
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", resp.StatusCode)
@@ -314,12 +337,11 @@ func TestLogout_MissingCookieIs204Idempotent(t *testing.T) {
 func TestLogoutAll_RequiresBearerSubject(t *testing.T) {
 	store := memstore.New()
 	a := authWithStore(t, store)
-	a.SetCredentialsVerifier(func(ctx context.Context, r auth.LoginRequest) (auth.LoginResult[appClaims], error) {
-		return auth.LoginResult[appClaims]{Subject: "u-1"}, nil
-	})
 	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-	app.Post("/auth/login", a.LoginHandler)
-	app.Post("/auth/logout-all", a.Bearer(auth.BearerRequired), a.LogoutAllHandler)
+	app.Post("/auth/login", loginHandlerOn(a, func(r loginReq) (auth.LoginResult[appClaims], error) {
+		return auth.LoginResult[appClaims]{Subject: "u-1"}, nil
+	}))
+	app.Post("/auth/logout-all", a.Bearer(auth.BearerRequired), a.LogoutAll)
 	// Login to get an access token.
 	loginReq := httptest.NewRequest("POST", "/auth/login",
 		strings.NewReader(`{"login":"a","password":"b"}`))
@@ -339,22 +361,6 @@ func TestLogoutAll_RequiresBearerSubject(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("logout-all = %d", resp.StatusCode)
 	}
-}
-
-// helpers ---
-
-func appLoginHandlerWithStore(t *testing.T, store auth.RefreshStore) fiber.Handler {
-	t.Helper()
-	a := authWithStore(t, store)
-	a.SetCredentialsVerifier(func(ctx context.Context, r auth.LoginRequest) (auth.LoginResult[appClaims], error) {
-		return auth.LoginResult[appClaims]{Subject: "u-1"}, nil
-	})
-	return a.LoginHandler
-}
-
-func appLogoutHandlerWithStore(t *testing.T, store auth.RefreshStore) fiber.Handler {
-	t.Helper()
-	return authWithStore(t, store).LogoutHandler
 }
 
 func authWithStore(t *testing.T, store auth.RefreshStore) *auth.Auth[appClaims] {

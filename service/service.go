@@ -47,15 +47,6 @@ func (s *Service[T, C]) SetContextBuilder(fn fibermap.ContextBuilder[T]) {
 	s.Engine.SetContextBuilder(fn)
 }
 
-// SetCredentialsVerifier is the typed proxy for Auth.SetCredentialsVerifier.
-// Panics with a clear message if Auth was not configured (programmer error).
-func (s *Service[T, C]) SetCredentialsVerifier(v auth.CredentialsVerifier[C]) {
-	if s.Auth == nil {
-		panic("service: SetCredentialsVerifier called but Config.Auth.PrivateKeyPEM is empty")
-	}
-	s.Auth.SetCredentialsVerifier(v)
-}
-
 // SetClaimsRefresher is the typed proxy for Auth.SetClaimsRefresher.
 func (s *Service[T, C]) SetClaimsRefresher(r auth.ClaimsRefresher[C]) {
 	if s.Auth == nil {

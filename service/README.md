@@ -1,13 +1,13 @@
 # service
 
-All-in-one service helper. One `service.New(ctx, cfg)` builds the bundled runtime — `*db.DB`, `*auth.Auth[C]`, `*natsclient.Client`, `*natsmap.Runtime`, `*http.Client`, `*apimap.Client`, `*fibermap.Engine[T]` — with auto-detect optionality (subsystems with empty config stay nil). Auto-mounts `/auth/login` `/auth/refresh` `/auth/logout` when Auth configured. Auto-installs `auth.Bearer(BearerOptional)` at fiber.App level via `WithUse` so `ContextBuilder` reads JWT subject correctly (fixes a real gotcha). `Run()` blocks with the production-ops bundle. Service is additive over the existing subpackages — go straight to `svc.DB.Tx(...)` / `svc.Auth.Sign(...)` for anything Service doesn't shortcut.
+All-in-one service helper. One `service.New(ctx, cfg)` builds the bundled runtime — `*db.DB`, `*auth.Auth[C]`, `*natsclient.Client`, `*natsmap.Runtime`, `*http.Client`, `*apimap.Client`, `*fibermap.Engine[T]` — with auto-detect optionality (subsystems with empty config stay nil). Auto-installs `auth.Bearer(BearerOptional)` at fiber.App level via `WithUse` so `ContextBuilder` reads JWT subject correctly (fixes a real gotcha) and wires the `bearer:` middleware factory onto the engine; `/auth/login` `/auth/refresh` `/auth/logout` are NOT auto-mounted — declare your own login handler and call `svc.Auth.IssueLogin / IssueRefresh / Logout`. `Run()` blocks with the production-ops bundle. Service is additive over the existing subpackages — go straight to `svc.DB.Tx(...)` / `svc.Auth.Sign(...)` for anything Service doesn't shortcut.
 
 **Import:** `github.com/theizzatbek/gokit/service`
 **Depends on:** every other `gokit/*` subpackage
 
 ## Why use it
 
-Wiring a kit-based service hand-rolls ~200 lines: `KeySet` from PEM, `auth.New` + `refreshpg.New` plumbing, `httpc.New`, `apimap.New + LoadFile + Build` (with the `${MICROLINK_BASE_URL}` env trick), `natsclient.Connect`, `fibermap.Default + SetValidator`, `fibermount.MountMiddlewareFactories`, wrap each of the three `auth.{Login,Refresh,Logout}Handler` as fibermap programmatic routes, install `Bearer(BearerOptional)` at fiber.App level via `WithUse` (or quietly hit the "AppCtx.UserID is empty in handlers" trap), assemble `RunOption`s, manage graceful shutdown, set up `slog`. `service` is that bundle.
+Wiring a kit-based service hand-rolls ~200 lines: `KeySet` from PEM, `auth.New` + `refreshpg.New` plumbing, `httpc.New`, `apimap.New + LoadFile + Build` (with the `${MICROLINK_BASE_URL}` env trick), `natsclient.Connect`, `fibermap.Default + SetValidator`, `fibermount.MountMiddlewareFactories`, install `Bearer(BearerOptional)` at fiber.App level via `WithUse` (or quietly hit the "AppCtx.UserID is empty in handlers" trap), assemble `RunOption`s, manage graceful shutdown, set up `slog`. `service` is that bundle. Your service still registers its own auth handlers (login body shape, credential check, custom auth schemes) — typically a few lines that delegate to `svc.Auth.IssueLogin` / `IssueRefresh` / `Logout`.
 
 The `examples/urlshort` `main.go` shrinks from ~270 → ~80 lines after switching to Service.
 
@@ -49,10 +49,24 @@ func main() {
     svc.SetContextBuilder(func(c *fiber.Ctx) (AppCtx, error) {
         return AppCtx{UserID: svc.Auth.Subject(c)}, nil
     })
-    svc.SetCredentialsVerifier(func(ctx context.Context, req auth.LoginRequest) (auth.LoginResult[Claims], error) {
-        // your verifier — look up user, check password
-        return auth.LoginResult[Claims]{Subject: "uid", Custom: Claims{Email: req.Login}}, nil
-    })
+
+    // Custom login handler — service owns body shape and verification.
+    type LoginRequest struct {
+        Login    string `json:"login"    validate:"required"`
+        Password string `json:"password" validate:"required,min=1"`
+    }
+    fibermap.RegisterHandlerWithBody(svc.Engine, "auth.login",
+        func(c *fibermap.Context[AppCtx], body LoginRequest) error {
+            // look up user, check password ...
+            return svc.Auth.IssueLogin(c.Ctx, auth.LoginResult[Claims]{
+                Subject: "uid",
+                Custom:  Claims{Email: body.Login},
+            })
+        })
+    fibermap.RegisterHandler(svc.Engine, "auth.refresh",
+        func(c *fibermap.Context[AppCtx]) error { return svc.Auth.IssueRefresh(c.Ctx) })
+    fibermap.RegisterHandler(svc.Engine, "auth.logout",
+        func(c *fibermap.Context[AppCtx]) error { return svc.Auth.Logout(c.Ctx) })
 
     fibermap.RegisterHandler(svc.Engine, "ping", func(c *fibermap.Context[AppCtx]) error {
         return c.SendString("pong")
@@ -238,7 +252,6 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithLogger(*slog.Logger)` | Override the auto-built logger |
 | `WithMetrics(prometheus.Registerer)` | Override the default `prometheus.NewRegistry()` |
 | `WithFiberMiddleware(handlers...)` | Insert fiber-level middleware before engine (helmet, cors, otelfiber, …) |
-| `WithoutAuthHandlers()` | Skip auto-mount of `/auth/login` `/refresh` `/logout` |
 | `WithoutBearerOptionalLayer()` | Skip the auto `Bearer(BearerOptional)` install |
 | `WithoutConnectRetry()` | Disables the auto-injected K8s-friendly retry defaults for DB and NATS Connect. Without this, service defaults to 5 retries with 1s→16s exponential backoff (~31s budget). See db/README and clients/nats/README. |
 | `WithHTTPCOptions(opts...)` | Extra httpc options (logger + metrics already auto-applied) |
@@ -294,13 +307,6 @@ svc, _ := service.New[AppCtx, Claims](ctx, cfg,
 ```
 
 The fiber-level middlewares run BEFORE the engine's contextInit, alongside the auto-installed `Bearer(BearerOptional)` layer.
-
-### Disabling auto-mounted auth handlers
-
-```go
-svc, _ := service.New[AppCtx, Claims](ctx, cfg, service.WithoutAuthHandlers())
-// Now mount your own auth routes via svc.Engine.Add(...) or a custom routes.yaml.
-```
 
 ### Going around Service for one operation
 

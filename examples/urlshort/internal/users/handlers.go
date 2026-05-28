@@ -8,29 +8,23 @@ import (
 	"github.com/theizzatbek/gokit/fibermap"
 )
 
-// RegisterHandlers wires:
-//   - POST /auth/register as a fibermap handler ("users.register").
-//   - The CredentialsVerifier consumed by authObj.LoginHandler when the
-//     route POST /auth/login is mounted elsewhere.
-//   - The ClaimsRefresher consumed by authObj.RefreshHandler.
+// RegisterHandlers wires every users-area fibermap handler:
+//   - POST /auth/register  → users.register  (creates a user)
+//   - POST /auth/login     → users.login     (verifies password, issues tokens)
+//   - POST /auth/refresh   → users.refresh   (rotates refresh cookie)
+//   - POST /auth/logout    → users.logout    (clears refresh cookie + family)
 //
-// LoginHandler / RefreshHandler / LogoutHandler are mounted as raw
-// Fiber routes in main.go since they don't take a typed AppCtx.
+// The kit no longer owns /auth/login etc. — this handler is where body
+// parsing and credential verification live. Token issuance is delegated to
+// authObj.IssueLogin / IssueRefresh / Logout.
+//
+// SetClaimsRefresher is still registered so RotateRefresh can re-read fresh
+// custom claims (e.g. Email) from the users table on each rotation.
 func RegisterHandlers(
 	eng *fibermap.Engine[appctx.AppCtx],
 	svc *Service,
 	authObj *auth.Auth[Claims],
 ) {
-	authObj.SetCredentialsVerifier(func(ctx context.Context, req auth.LoginRequest) (auth.LoginResult[Claims], error) {
-		u, err := svc.Authenticate(ctx, req.Login, req.Password)
-		if err != nil {
-			return auth.LoginResult[Claims]{}, err
-		}
-		return auth.LoginResult[Claims]{
-			Subject: u.ID,
-			Custom:  Claims{Email: u.Email},
-		}, nil
-	})
 	authObj.SetClaimsRefresher(func(ctx context.Context, subject string) (auth.LoginResult[Claims], error) {
 		u, err := svc.ByID(ctx, subject)
 		if err != nil {
@@ -49,5 +43,27 @@ func RegisterHandlers(
 				return err
 			}
 			return c.Status(201).JSON(RegisterResponse{UserID: u.ID})
+		})
+
+	fibermap.RegisterHandlerWithBody(eng, "users.login",
+		func(c *fibermap.Context[appctx.AppCtx], body LoginRequest) error {
+			u, err := svc.Authenticate(c.UserContext(), body.Login, body.Password)
+			if err != nil {
+				return err
+			}
+			return authObj.IssueLogin(c.Ctx, auth.LoginResult[Claims]{
+				Subject: u.ID,
+				Custom:  Claims{Email: u.Email},
+			})
+		})
+
+	fibermap.RegisterHandler(eng, "users.refresh",
+		func(c *fibermap.Context[appctx.AppCtx]) error {
+			return authObj.IssueRefresh(c.Ctx)
+		})
+
+	fibermap.RegisterHandler(eng, "users.logout",
+		func(c *fibermap.Context[appctx.AppCtx]) error {
+			return authObj.Logout(c.Ctx)
 		})
 }

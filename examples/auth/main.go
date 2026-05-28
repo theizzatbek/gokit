@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/theizzatbek/gokit/auth"
@@ -29,6 +30,14 @@ type appClaims struct {
 
 type appCtx struct {
 	UserID string
+}
+
+// loginRequest is the local body shape this example accepts at POST
+// /auth/login. The kit does not own the wire format anymore — every
+// service declares its own request type.
+type loginRequest struct {
+	Login    string `json:"login"    validate:"required"`
+	Password string `json:"password" validate:"required,min=1"`
 }
 
 func main() {
@@ -80,24 +89,10 @@ func buildApp(logger *slog.Logger) (*fiber.App, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.SetCredentialsVerifier(func(ctx context.Context, req auth.LoginRequest) (auth.LoginResult[appClaims], error) {
-		u, ok := users[req.Login]
-		if !ok {
-			return auth.LoginResult[appClaims]{}, errs.Unauthorized(auth.CodeInvalidCredentials, "invalid login or password")
-		}
-		if err := auth.DefaultHasher.Verify(u.Password, req.Password); err != nil {
-			return auth.LoginResult[appClaims]{}, errs.Unauthorized(auth.CodeInvalidCredentials, "invalid login or password")
-		}
-		return auth.LoginResult[appClaims]{
-			Subject: u.ID,
-			Scopes:  u.Scopes,
-			Custom:  appClaims{TenantID: u.TenantID},
-		}, nil
-	})
-
 	app := fiber.New(fiber.Config{ErrorHandler: fibermap.ErrorHandler(logger)})
 
 	eng := fibermap.New[appCtx]()
+	eng.SetValidator(validator.New(validator.WithRequiredStructEnabled()))
 	eng.SetContextBuilder(func(c *fiber.Ctx) (appCtx, error) {
 		if p, ok := auth.From[appClaims](c); ok {
 			return appCtx{UserID: p.Subject}, nil
@@ -105,12 +100,26 @@ func buildApp(logger *slog.Logger) (*fiber.App, error) {
 		return appCtx{}, nil
 	})
 
-	// Adapt the auth handlers (fiber.Handler) into fibermap's typed
-	// HandlerFunc[appCtx]. The adapter just forwards c.Ctx — the auth
-	// handlers operate on the bare Fiber context.
-	fibermap.RegisterHandler(eng, "auth.login", wrapFiber[appCtx](a.LoginHandler))
-	fibermap.RegisterHandler(eng, "auth.refresh", wrapFiber[appCtx](a.RefreshHandler))
-	fibermap.RegisterHandler(eng, "auth.logout", wrapFiber[appCtx](a.LogoutHandler))
+	// auth.login: this example owns the body shape (loginRequest) and the
+	// credential check (argon2id). The kit only mints + persists tokens
+	// once the LoginResult is handed to IssueLogin.
+	fibermap.RegisterHandlerWithBody(eng, "auth.login",
+		func(c *fibermap.Context[appCtx], body loginRequest) error {
+			u, ok := users[body.Login]
+			if !ok {
+				return errs.Unauthorized(auth.CodeInvalidCredentials, "invalid login or password")
+			}
+			if err := auth.DefaultHasher.Verify(u.Password, body.Password); err != nil {
+				return errs.Unauthorized(auth.CodeInvalidCredentials, "invalid login or password")
+			}
+			return a.IssueLogin(c.Ctx, auth.LoginResult[appClaims]{
+				Subject: u.ID,
+				Scopes:  u.Scopes,
+				Custom:  appClaims{TenantID: u.TenantID},
+			})
+		})
+	fibermap.RegisterHandler(eng, "auth.refresh", wrapFiber[appCtx](a.IssueRefresh))
+	fibermap.RegisterHandler(eng, "auth.logout", wrapFiber[appCtx](a.Logout))
 
 	fibermap.RegisterHandler(eng, "app.me", func(c *fibermap.Context[appCtx]) error {
 		p, err := auth.MustFrom[appClaims](c.Ctx)

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/gofiber/fiber/v2"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/theizzatbek/gokit/auth"
@@ -86,7 +85,7 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		s.Close()
 		return nil, err
 	}
-	if err := s.mountAuthHandlers(); err != nil {
+	if err := s.mountAuthMiddleware(); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -285,19 +284,19 @@ func (s *Service[T, C]) buildEngine() error {
 	return nil
 }
 
-func (s *Service[T, C]) mountAuthHandlers() error {
-	if s.Auth == nil || s.opts.skipAuthHandlers {
+// mountAuthMiddleware wires Auth's bearer-style middleware factories onto the
+// engine so routes.yaml entries like `middleware: - bearer: []` resolve. The
+// service no longer mounts /auth/login, /refresh, /logout — those endpoints
+// are the caller's responsibility (typically a fibermap handler that parses
+// the chosen credential format and calls Auth.IssueLogin / IssueRefresh /
+// Logout). See examples/urlshort/internal/users for a password-login example.
+func (s *Service[T, C]) mountAuthMiddleware() error {
+	if s.Auth == nil {
 		return nil
 	}
 	if err := fibermount.MountMiddlewareFactories(s.Engine, s.Auth); err != nil {
 		return xerrs.Wrap(err, xerrs.KindInternal, CodeAuthInvalidKey, "service: fibermount.MountMiddlewareFactories failed")
 	}
-	wrap := func(h fiber.Handler) fibermap.HandlerFunc[T] {
-		return func(c *fibermap.Context[T]) error { return h(c.Ctx) }
-	}
-	s.Engine.Add("POST", "/auth/login", "auth.login", wrap(s.Auth.LoginHandler))
-	s.Engine.Add("POST", "/auth/refresh", "auth.refresh", wrap(s.Auth.RefreshHandler))
-	s.Engine.Add("POST", "/auth/logout", "auth.logout", wrap(s.Auth.LogoutHandler))
 	return nil
 }
 

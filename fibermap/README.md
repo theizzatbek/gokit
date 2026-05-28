@@ -186,9 +186,9 @@ resp, _ := app.Test(httptest.NewRequest("GET", "/v1/ping", nil), -1)
 ### Programmatic routes (raw Fiber handlers)
 
 ```go
-eng.Add("POST", "/auth/login", "auth.login",
+eng.Add("POST", "/auth/refresh", "auth.refresh",
     func(c *fibermap.Context[AppCtx]) error {
-        return authObj.LoginHandler(c.Ctx)  // wrap a raw *fiber.Ctx handler
+        return authObj.IssueRefresh(c.Ctx)  // wrap a raw *fiber.Ctx handler
     })
 ```
 
