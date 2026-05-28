@@ -41,7 +41,9 @@ type DB struct {
 // When cfg.HasReadReplica is true, a second pool is opened against the same
 // connection string with target_session_attrs=standby. If the standby pool
 // fails to connect, the primary pool is closed and an *errs.Error of
-// KindUnavailable is returned — no silent degradation.
+// KindUnavailable is returned — no silent degradation. With WithMetrics, the
+// db_pool_size_total gauge gains the pool="primary|standby" label so each
+// pool is observable independently.
 func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 	o := options{}
 	for _, fn := range opts {
@@ -57,7 +59,7 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 	if err != nil {
 		return nil, errs.Wrap(err, errs.KindInternal, "db_config_invalid", "could not build db url")
 	}
-	primary, err := connectPool(ctx, primaryURL, cfg, &o)
+	primary, err := connectPool(ctx, primaryURL, "primary", cfg, &o)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +72,7 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 			primary.Close()
 			return nil, errs.Wrap(err, errs.KindInternal, "db_config_invalid", "could not build read replica url")
 		}
-		readPool, err := connectPool(ctx, readURL, cfg, &o)
+		readPool, err := connectPool(ctx, readURL, "standby", cfg, &o)
 		if err != nil {
 			primary.Close()
 			return nil, err
@@ -78,17 +80,15 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 		d.readPool = readPool
 	}
 
-	if cfg.HasReadReplica && o.metrics != nil && o.logger != nil {
-		o.logger.Warn("db: metrics with HasReadReplica — db_pool_size_total currently reflects the standby pool only; per-pool metric labels are TODO")
-	}
-
 	return d, nil
 }
 
 // connectPool opens one pool against raw, applies cfg knobs and the tracer
-// from o, and runs the retry loop. Returns *errs.Error{Kind:KindUnavailable}
-// on exhausted budget or ctx cancellation during backoff.
-func connectPool(ctx context.Context, raw string, cfg Config, o *options) (*pgxpool.Pool, error) {
+// from o, and runs the retry loop. name ("primary" or "standby") is used as
+// the pool label when attaching to metrics. Returns
+// *errs.Error{Kind:KindUnavailable} on exhausted budget or ctx cancellation
+// during backoff.
+func connectPool(ctx context.Context, raw, name string, cfg Config, o *options) (*pgxpool.Pool, error) {
 	pgxCfg, err := pgxpool.ParseConfig(raw)
 	if err != nil {
 		return nil, errs.Wrap(err, errs.KindInternal, "db_config_invalid", "could not parse db config")
@@ -155,7 +155,7 @@ func connectPool(ctx context.Context, raw string, cfg Config, o *options) (*pgxp
 	}
 
 	if o.metrics != nil {
-		o.metrics.attach(pool)
+		o.metrics.attach(name, pool)
 	}
 	return pool, nil
 }
