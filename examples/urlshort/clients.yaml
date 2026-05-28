@@ -10,3 +10,16 @@ clients:
         method: GET
         path: /
         decode: json
+
+  # Open client: no base_url. Used by the metadata enricher to GET
+  # arbitrary user-supplied URLs for <title> extraction. The full URL
+  # is passed at request time via Call.URL.
+  - name: web
+    timeout: 5s
+    max_retries: 1
+    default_headers:
+      User-Agent: urlshort/1.0
+    endpoints:
+      - name: fetch
+        method: GET
+        decode: raw

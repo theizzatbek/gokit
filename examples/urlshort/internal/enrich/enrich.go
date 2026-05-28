@@ -1,13 +1,13 @@
 // Package enrich fetches title + description + image_url for a URL,
-// using httpc for arbitrary fetch + apimap for the MicroLink call.
-// All calls are best-effort: partial results are normal, errors are
-// swallowed and logged at Debug.
+// using apimap for both the MicroLink lookup AND the open-client
+// title fetch. All calls are best-effort: partial results are normal,
+// errors are swallowed and logged at Debug.
 package enrich
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
-	"net/http"
 	"net/url"
 
 	"github.com/theizzatbek/gokit/clients/apimap"
@@ -26,34 +26,36 @@ type MicroLinkResp struct {
 }
 
 type Fetcher struct {
-	httpClient *http.Client
-	apiClient  *apimap.Client
-	logger     *slog.Logger
+	apiClient *apimap.Client
+	logger    *slog.Logger
 }
 
-func NewFetcher(httpClient *http.Client, apiClient *apimap.Client, log *slog.Logger) *Fetcher {
+// NewFetcher takes the apimap client wired with two endpoints:
+//
+//	microlink.metadata — declared base_url, /  (JSON response)
+//	web.fetch          — open client (no base_url, full URL via Call.URL)
+//
+// See examples/urlshort/clients.yaml for the YAML side.
+func NewFetcher(apiClient *apimap.Client, log *slog.Logger) *Fetcher {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Fetcher{httpClient: httpClient, apiClient: apiClient, logger: log}
+	return &Fetcher{apiClient: apiClient, logger: log}
 }
 
 // FetchMetadata returns title, description, image_url. Never errors.
 // Partial fields are normal — if MicroLink is down we still return
-// whatever httpc could grab from <title>.
+// whatever the open-client fetch could grab from <title>.
 func (f *Fetcher) FetchMetadata(ctx context.Context, target string) (title, description, imageURL string) {
-	// 1. httpc: fetch HTML, parse <title>.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err == nil {
-		if resp, err := f.httpClient.Do(req); err == nil {
-			title = parseTitle(resp.Body)
-			_ = resp.Body.Close()
-		} else {
-			f.logger.Debug("urlshort enrich: httpc fetch failed", "url", target, "err", err.Error())
-		}
+	// 1. Open-client fetch: GET arbitrary target, parse <title> from HTML.
+	body, err := apimap.Decode[[]byte](ctx, f.apiClient, "web.fetch", apimap.Call{URL: target})
+	if err != nil {
+		f.logger.Debug("urlshort enrich: web fetch failed", "url", target, "err", err.Error())
+	} else {
+		title = parseTitle(bytes.NewReader(body))
 	}
 
-	// 2. apimap: MicroLink for description + image.
+	// 2. MicroLink for description + image.
 	out, err := apimap.Decode[MicroLinkResp](ctx, f.apiClient, "microlink.metadata",
 		apimap.Call{Query: url.Values{"url": []string{target}}})
 	if err != nil {

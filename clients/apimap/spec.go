@@ -144,9 +144,14 @@ func (c *rawConfig) validate(registrations map[string]struct{}) error {
 			}
 			seenClients[cl.Name] = struct{}{}
 		}
-		if u, err := url.Parse(cl.BaseURL); err != nil || u.Scheme == "" || u.Host == "" {
-			errsAcc = append(errsAcc, xerrs.Validationf(CodeInvalidBaseURL,
-				"apimap: client %q has invalid base_url %q", cl.Name, cl.BaseURL))
+		// base_url is optional. When omitted, the client is "open" — callers
+		// supply the full URL per request via Call.URL. When set, it must
+		// be a well-formed absolute URL.
+		if cl.BaseURL != "" {
+			if u, err := url.Parse(cl.BaseURL); err != nil || u.Scheme == "" || u.Host == "" {
+				errsAcc = append(errsAcc, xerrs.Validationf(CodeInvalidBaseURL,
+					"apimap: client %q has invalid base_url %q", cl.Name, cl.BaseURL))
+			}
 		}
 		if aerr := cl.Auth.validate(cl.Name); aerr != nil {
 			errsAcc = append(errsAcc, aerr)

@@ -30,6 +30,8 @@ const (
 	CodeUnknownEndpoint       = "apimap_unknown_endpoint"
 	CodeMissingPathVar        = "apimap_missing_path_var"
 	CodeUnknownPathVar        = "apimap_unknown_path_var"
+	CodeMissingRequestURL     = "apimap_missing_request_url"
+	CodeURLConflict           = "apimap_url_conflict"
 	CodeEncodeFailed          = "apimap_encode_failed"
 	CodeDecodeFailed          = "apimap_decode_failed"
 	CodeUnsupportedBodyType   = "apimap_unsupported_body_type"

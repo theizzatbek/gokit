@@ -65,12 +65,11 @@ func (c *Client) buildRequest(ctx context.Context, endpoint string, call Call, b
 			"apimap: unknown endpoint %q", endpoint)
 	}
 
-	pathPart, err := substitutePath(ep.pathTemplate, ep.pathVars, call.Path)
+	rawURL, err := resolveURL(ep, endpoint, call)
 	if err != nil {
 		return nil, err
 	}
-
-	full, err := url.Parse(ep.baseURL + pathPart)
+	full, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, xerrs.Wrapf(err, xerrs.KindInternal, CodeInvalidBaseURL,
 			"apimap: assemble URL for endpoint %q", endpoint)
@@ -118,6 +117,46 @@ func (c *Client) buildRequest(ctx context.Context, endpoint string, call Call, b
 		req.Header.Set("Content-Type", contentType)
 	}
 	return req, nil
+}
+
+// resolveURL picks the per-request URL source. Three modes:
+//
+//   - YAML base_url set, Call.URL empty: classic template mode. URL =
+//     base_url + path-template with {var} substitution from call.Path.
+//   - YAML base_url empty, Call.URL set: "open client" mode. URL =
+//     Call.URL verbatim. Path template is ignored; Call.Path must be
+//     empty (no template variables to substitute).
+//   - Both empty: CodeMissingRequestURL (the client was declared open
+//     but no URL was supplied at request time).
+//   - Both set: CodeURLConflict (declarative config and runtime URL
+//     disagree — prefer the operator notice the mismatch).
+func resolveURL(ep resolvedEndpoint, endpoint string, call Call) (string, error) {
+	hasBase := ep.baseURL != ""
+	hasCall := call.URL != ""
+
+	switch {
+	case hasBase && hasCall:
+		return "", xerrs.Validationf(CodeURLConflict,
+			"apimap: endpoint %q declared base_url=%q but Call.URL=%q was also supplied",
+			endpoint, ep.baseURL, call.URL)
+	case !hasBase && !hasCall:
+		return "", xerrs.Validationf(CodeMissingRequestURL,
+			"apimap: endpoint %q has no base_url (open client) and Call.URL is empty",
+			endpoint)
+	case hasCall:
+		if len(call.Path) > 0 {
+			return "", xerrs.Validationf(CodeUnknownPathVar,
+				"apimap: endpoint %q in open-client mode received Call.Path %v — path variables are only meaningful with a YAML base_url + path template",
+				endpoint, call.Path)
+		}
+		return call.URL, nil
+	default:
+		pathPart, err := substitutePath(ep.pathTemplate, ep.pathVars, call.Path)
+		if err != nil {
+			return "", err
+		}
+		return ep.baseURL + pathPart, nil
+	}
 }
 
 const maxErrorBodyBytes = 4096 // truncate body included in *errs.Error.Details

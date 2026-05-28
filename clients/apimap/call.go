@@ -13,7 +13,14 @@ import (
 
 // Call carries per-invocation parameters: path-variable values, query
 // overrides, additional headers, and (for Do) the request body.
+//
+// URL is the per-request full URL — used only when the client's base_url
+// was left empty in YAML ("open client" mode). It is mutually exclusive
+// with the YAML base_url + path-template path: setting both is an error.
+// In open mode Call.Path must also be empty (the path template has no
+// variables to substitute).
 type Call struct {
+	URL     string            // open-client full URL (mutually exclusive with YAML base_url)
 	Path    map[string]string // {var} substitution; values URL-escaped
 	Query   url.Values        // merged into the endpoint's URL
 	Headers http.Header       // merged over endpoint + default headers
