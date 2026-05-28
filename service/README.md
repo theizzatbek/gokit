@@ -309,6 +309,29 @@ svc, _ := service.New[AppCtx, Claims](ctx, cfg,
 
 The fiber-level middlewares run BEFORE the engine's contextInit, alongside the auto-installed `Bearer(BearerOptional)` layer.
 
+### Custom cleanup via `OnShutdown`
+
+`svc.Close()` only tears down what Service built. For app-specific resources (workers, third-party clients, Sentry / metrics pushers, scheduled jobs) register a callback:
+
+```go
+svc, _ := service.New[AppCtx, Claims](ctx, cfg)
+defer svc.Close()
+
+worker := startWorker(svc.DB)
+svc.OnShutdown(worker.Stop)
+
+scheduler := startScheduler()
+svc.OnShutdown(scheduler.Shutdown)
+```
+
+Callbacks run on `Close()`:
+1. **First**, registered callbacks fire in LIFO order. Kit subsystems (DB, NATS, …) are still alive so callbacks can flush in-flight state.
+2. Then `NATSMap.Drain()` (in-flight handlers finish).
+3. Then `NATS.Close()`.
+4. Finally `DB.Close()`.
+
+Errors returned by a callback are logged via `svc.Logger()` and do NOT abort subsequent callbacks or subsystem teardown. `OnShutdown` is thread-safe; calling it after `Close` is a no-op.
+
 ### Going around Service for one operation
 
 Service exposes all deps as public fields — drop down whenever you need fine control:

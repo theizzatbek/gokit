@@ -96,11 +96,36 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 
 // Close releases owned long-lived resources in reverse construction
 // order. Idempotent + safe to call from defer alongside Run.
+//
+// Order:
+//  1. User-registered cleanups from OnShutdown, LIFO. Subsystems (DB,
+//     NATS, …) are still alive so callbacks can flush in-flight state.
+//  2. NATSMap.Drain (waits for in-flight handlers to finish).
+//  3. NATS connection close.
+//  4. DB pool close.
+//
+// Errors from user callbacks are logged but do not block subsequent
+// teardown.
 func (s *Service[T, C]) Close() {
-	if s == nil || s.closed {
+	if s == nil {
+		return
+	}
+	s.shutdownMu.Lock()
+	if s.closed {
+		s.shutdownMu.Unlock()
 		return
 	}
 	s.closed = true
+	fns := s.shutdownFns
+	s.shutdownFns = nil
+	s.shutdownMu.Unlock()
+
+	for i := len(fns) - 1; i >= 0; i-- {
+		if err := fns[i](); err != nil && s.logger != nil {
+			s.logger.Error("service: OnShutdown handler failed", "index", i, "err", err)
+		}
+	}
+
 	if s.NATSMap != nil {
 		_ = s.NATSMap.Drain()
 	}
