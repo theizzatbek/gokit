@@ -3,6 +3,7 @@ package service
 import (
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -31,6 +32,9 @@ type Service[T any, C any] struct {
 	metrics prometheus.Registerer
 	opts    *options
 
+	shutdownMu  sync.Mutex
+	shutdownFns []func() error
+
 	closed bool
 }
 
@@ -53,4 +57,33 @@ func (s *Service[T, C]) SetClaimsRefresher(r auth.ClaimsRefresher[C]) {
 		panic("service: SetClaimsRefresher called but Config.Auth.PrivateKeyPEM is empty")
 	}
 	s.Auth.SetClaimsRefresher(r)
+}
+
+// OnShutdown registers a cleanup callback to run during [Service.Close],
+// BEFORE the kit-managed subsystems (NATSMap drain, NATS close, DB
+// close) are torn down — user code can still talk to the database, flush
+// outbound queues, etc. Registered callbacks run in LIFO order so the
+// teardown unwinds the construction order.
+//
+// Typical use: register cleanup for resources Service didn't build —
+// app-specific workers, third-party clients, Prometheus pushers, etc.
+//
+//	worker := startWorker(svc.DB)
+//	svc.OnShutdown(worker.Stop)
+//
+// Errors returned by the callback are logged via the service logger and
+// do not stop subsequent callbacks. Calling OnShutdown after Close is a
+// no-op (the callback is dropped without invocation).
+//
+// Thread-safe.
+func (s *Service[T, C]) OnShutdown(fn func() error) {
+	if fn == nil {
+		return
+	}
+	s.shutdownMu.Lock()
+	defer s.shutdownMu.Unlock()
+	if s.closed {
+		return
+	}
+	s.shutdownFns = append(s.shutdownFns, fn)
 }
