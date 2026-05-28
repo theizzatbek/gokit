@@ -81,7 +81,8 @@ func claimsToPrincipal[C any](c Claims[C], raw string) *Principal[C] {
 }
 
 // maybeSecurityLog emits a structured WARN event if the operator wired a
-// security logger via WithSecurityLogger. Silent otherwise.
+// security logger via WithSecurityLogger. Silent otherwise. Use this for
+// anomalies (bearer_verify_failed, refresh_reused, …).
 func (a *Auth[C]) maybeSecurityLog(c *fiber.Ctx, event string, err error) {
 	if a.securityLogger == nil {
 		return
@@ -92,6 +93,23 @@ func (a *Auth[C]) maybeSecurityLog(c *fiber.Ctx, event string, err error) {
 		"ua", c.Get(fiber.HeaderUserAgent),
 		"path", c.Path(),
 	)
+}
+
+// maybeSecurityInfo emits a structured INFO event with ip/ua/path plus
+// the caller-supplied extra attributes. Use this for non-anomaly
+// SecOps-relevant events that downstream SIEMs want (login_success,
+// logout, …). Silent when WithSecurityLogger was not wired.
+func (a *Auth[C]) maybeSecurityInfo(c *fiber.Ctx, event string, attrs ...any) {
+	if a.securityLogger == nil {
+		return
+	}
+	args := []any{
+		"ip", c.IP(),
+		"ua", c.Get(fiber.HeaderUserAgent),
+		"path", c.Path(),
+	}
+	args = append(args, attrs...)
+	a.securityLogger.InfoContext(c.UserContext(), event, args...)
 }
 
 // RequireScope returns a Fiber middleware that lets the request through only if
