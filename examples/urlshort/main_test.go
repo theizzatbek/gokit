@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/testcontainers/testcontainers-go"
@@ -63,7 +64,13 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	}
 	cfg.Service.LogLevel = "error"
 
+	v := validator.New(validator.WithRequiredStructEnabled())
+	if err := links.RegisterValidators(v); err != nil {
+		t.Fatalf("links.RegisterValidators: %v", err)
+	}
+
 	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
+		service.WithValidator(v),
 		service.WithAPIMap(),
 		service.WithNATSMap(),
 		service.WithRoutes(),

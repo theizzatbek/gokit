@@ -16,7 +16,7 @@ type Link struct {
 }
 
 type CreateRequest struct {
-	URL string `json:"url" validate:"required,url"`
+	URL string `json:"url" validate:"required,url,safe_url"`
 }
 
 // CodeParams is the path-parameter struct shared by every endpoint that
