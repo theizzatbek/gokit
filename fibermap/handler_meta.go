@@ -29,6 +29,12 @@ type HandlerMeta struct {
 	Body any
 	// Query is the query-string model — fields use the `query:` tag.
 	Query any
+	// Params is the route-parameter model — fields use the `params:`
+	// tag. When set, OpenAPI generation uses this struct's schema for
+	// path parameters instead of synthesizing plain string entries
+	// from the URL pattern (picks up validate-derived constraints,
+	// descriptions, etc).
+	Params any
 	// Headers is the request-header model — fields use the
 	// `reqHeader:` tag.
 	Headers any
@@ -48,6 +54,16 @@ func WithBody(model any) HandlerOption {
 // WithQuery attaches a query-string schema model.
 func WithQuery(model any) HandlerOption {
 	return func(m *HandlerMeta) { m.Query = model }
+}
+
+// WithParams attaches a route-parameter schema model — typically a
+// struct with `params:` and `validate:` tags. OpenAPI generation
+// reads the model's fields to enrich each path parameter with the
+// declared schema (descriptions, validate-derived constraints,
+// custom types). When omitted, path parameters fall back to plain
+// `string` entries derived from the URL pattern.
+func WithParams(model any) HandlerOption {
+	return func(m *HandlerMeta) { m.Params = model }
 }
 
 // WithHeaders attaches a request-header schema model.

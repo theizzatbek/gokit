@@ -88,6 +88,8 @@ func RegisterHandlerWithQuery[T, Req any](e *Engine[T], name string, h func(*Con
 
 // RegisterHandlerWithParams is the route-param analogue of
 // [RegisterHandlerWithBody]. Fields on Req use the `params:` tag.
+// The Req schema is auto-attached via WithParams so OpenAPI
+// generation picks up its validate-derived constraints.
 func RegisterHandlerWithParams[T, Req any](e *Engine[T], name string, h func(*Context[T], Req) error, opts ...HandlerOption) {
 	wrapped := func(c *Context[T]) error {
 		req, err := bind.Params[Req](c.Ctx, e.validator)
@@ -96,7 +98,8 @@ func RegisterHandlerWithParams[T, Req any](e *Engine[T], name string, h func(*Co
 		}
 		return h(c, req)
 	}
-	e.RegisterHandler(name, wrapped, opts...)
+	all := append([]HandlerOption{WithParams(zero[Req]())}, opts...)
+	e.RegisterHandler(name, wrapped, all...)
 }
 
 // RegisterHandlerWithHeaders is the header analogue of
