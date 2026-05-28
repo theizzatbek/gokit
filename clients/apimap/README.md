@@ -120,8 +120,8 @@ type Client struct{ /* unexported */ }
 func New() *Engine
 func (e *Engine) LoadFile(path string) error
 func (e *Engine) LoadBytes(b []byte) error
-func RegisterRequest[T any](e *Engine, endpoint string)       // optional — register typed body
-func RegisterResponse[T any](e *Engine, endpoint string)      // optional — register typed response
+func RegisterRequest[T any](e *Engine, endpoint string)       // optional — enforces Exchange[T,_]
+func RegisterResponse[T any](e *Engine, endpoint string)      // optional — enforces Decode[T] / Exchange[_,T]
 func (e *Engine) Build(opts ...Option) (*Client, error)
 
 // Options
@@ -280,6 +280,33 @@ client, err := eng.Build(...)
 **Build-time validation.** If YAML references `auth.name=foo` but `RegisterAuth(eng, "foo", ...)` was never called, `Build` returns `*errs.Error{Code: "apimap_unknown_custom_auth"}`. Duplicate `RegisterAuth` for the same name panics at registration time (programmer error).
 
 **Per-client only.** Each client picks its own signer; endpoints inside a client all share that client's signer. If you need different signing schemes for different endpoints of the same API, split them into separate clients.
+
+### Typed Register* (optional, runtime-checked)
+
+`RegisterRequest[T]` / `RegisterResponse[T]` are optional but, when set,
+they bind the endpoint to a specific Go type. `Decode[U]` / `Exchange[U,V]`
+then check that the call's generics match the registration at runtime:
+
+```go
+type IssueResp struct { Number int }
+apimap.RegisterResponse[IssueResp](eng, "gh.get_issue")
+client, _ := eng.Build(...)
+
+// OK:
+out, _ := apimap.Decode[IssueResp](ctx, client, "gh.get_issue", apimap.Call{})
+
+// PANICS at call time with *errs.Error{Code: "apimap_type_mismatch"}:
+_, _ = apimap.Decode[OtherShape](ctx, client, "gh.get_issue", apimap.Call{})
+```
+
+Same check on the Req side for `Exchange`. Endpoints without a
+registration accept any generic — registration is opt-in. Build still
+validates that every registered name exists in the YAML
+(`apimap_registered_endpoint_missing`).
+
+Why panic and not return an error? Because Decode[Wrong] is a programmer
+mistake — silent JSON-decode of the wrong shape leads to nil zeros in
+production. Panic surfaces it in the first test run.
 
 ### Body encoding modes
 

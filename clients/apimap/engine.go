@@ -88,16 +88,26 @@ func (e *Engine) envLookup() func(string) (string, bool) {
 	}
 }
 
-// RegisterRequest records the Go type used by Exchange for the given
-// endpoint. Panics with *errs.Error if called after Build (matches
-// fibermap's RegisterHandler convention — duplicate or post-Build
-// registration is a programmer error at startup).
+// RegisterRequest records the Go type Exchange must use as Req for the
+// given endpoint. At call time Exchange compares the generic Req's
+// runtime type to the registered one and panics with
+// *errs.Error{Code: CodeTypeMismatch} on disagreement — typed-call drift
+// (e.g. Exchange[UpdatedReq] after a model rename) surfaces immediately
+// instead of as a silent JSON decode shape change.
+//
+// Build validates that every registered endpoint name exists in the
+// YAML; unknown names fail Build with apimap_registered_endpoint_missing.
+//
+// Panics with *errs.Error on duplicate registration or post-Build
+// registration (programmer error at startup; same convention as
+// fibermap's RegisterHandler).
 func RegisterRequest[T any](e *Engine, endpoint string) {
 	registerType(e, endpoint, e.reqTypes, reflect.TypeOf((*T)(nil)).Elem(), "request")
 }
 
-// RegisterResponse records the Go type used by Decode/Exchange for the
-// given endpoint. Same panic semantics as RegisterRequest.
+// RegisterResponse records the Go type Decode/Exchange must use as Resp
+// for the given endpoint. Same runtime check + panic semantics as
+// RegisterRequest.
 func RegisterResponse[T any](e *Engine, endpoint string) {
 	registerType(e, endpoint, e.respTypes, reflect.TypeOf((*T)(nil)).Elem(), "response")
 }

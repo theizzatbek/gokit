@@ -164,14 +164,26 @@ const maxErrorBodyBytes = 4096 // truncate body included in *errs.Error.Details
 // Decode runs endpoint, decodes the response according to endpoint.decode,
 // and returns the typed Resp. Non-2xx status maps to *errs.Error with
 // Kind derived from the status code.
+//
+// If the endpoint declared a response type via [RegisterResponse], the
+// generic Resp must match it; otherwise Decode panics with
+// *errs.Error{Code: CodeTypeMismatch}. This catches typed-call drift
+// (e.g. Decode[OtherResp] instead of Decode[DeclaredResp]) at the first
+// invocation rather than as a silent JSON-decode surprise. Endpoints
+// without a registration accept any Resp.
 func Decode[Resp any](ctx context.Context, c *Client, endpoint string, call Call) (Resp, error) {
 	var zero Resp
+	ep, ok := c.endpoints[endpoint]
+	if !ok {
+		return zero, xerrs.NotFoundf(CodeUnknownEndpoint, "apimap: unknown endpoint %q", endpoint)
+	}
+	assertResponseType(ep, reflect.TypeOf((*Resp)(nil)).Elem())
+
 	resp, err := c.Do(ctx, endpoint, call)
 	if err != nil {
 		return zero, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	ep := c.endpoints[endpoint]
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		out, derr := decodeInto[Resp](resp, ep.decode)
 		if derr != nil {
@@ -184,15 +196,22 @@ func Decode[Resp any](ctx context.Context, c *Client, endpoint string, call Call
 
 // Exchange combines encoding the typed request body with Decode for the
 // response. The body argument supersedes call.Body.
+//
+// Same registration-vs-generic check as [Decode]: when [RegisterRequest]
+// or [RegisterResponse] declared a type for endpoint, the matching
+// generic must match; mismatches panic with CodeTypeMismatch.
 func Exchange[Req, Resp any](ctx context.Context, c *Client, endpoint string, body Req, call Call) (Resp, error) {
 	var zero Resp
-	req, err := c.buildRequest(ctx, endpoint, call, body)
-	if err != nil {
-		return zero, err
-	}
 	ep, ok := c.endpoints[endpoint]
 	if !ok {
 		return zero, xerrs.NotFoundf(CodeUnknownEndpoint, "apimap: unknown endpoint %q", endpoint)
+	}
+	assertRequestType(ep, reflect.TypeOf((*Req)(nil)).Elem())
+	assertResponseType(ep, reflect.TypeOf((*Resp)(nil)).Elem())
+
+	req, err := c.buildRequest(ctx, endpoint, call, body)
+	if err != nil {
+		return zero, err
 	}
 	resp, err := ep.httpClient.Do(req)
 	if err != nil {
@@ -207,6 +226,29 @@ func Exchange[Req, Resp any](ctx context.Context, c *Client, endpoint string, bo
 		return out, nil
 	}
 	return zero, errorForResponse(ep, resp)
+}
+
+// assertResponseType panics when the endpoint declared a response type
+// via RegisterResponse[T] and the caller invoked Decode/Exchange with a
+// different generic. Silently accepts everything when no type was
+// registered (registration is optional).
+func assertResponseType(ep resolvedEndpoint, got reflect.Type) {
+	if ep.respType == nil || ep.respType == got {
+		return
+	}
+	panic(xerrs.Validationf(CodeTypeMismatch,
+		"apimap: endpoint %q.%q declared response type %v via RegisterResponse, but the call used %v",
+		ep.clientName, ep.endpointName, ep.respType, got))
+}
+
+// assertRequestType panics on the symmetric mismatch for Exchange's Req.
+func assertRequestType(ep resolvedEndpoint, got reflect.Type) {
+	if ep.reqType == nil || ep.reqType == got {
+		return
+	}
+	panic(xerrs.Validationf(CodeTypeMismatch,
+		"apimap: endpoint %q.%q declared request type %v via RegisterRequest, but the call used %v",
+		ep.clientName, ep.endpointName, ep.reqType, got))
 }
 
 // decodeInto reads resp.Body per the decode mode and returns the typed
