@@ -68,6 +68,12 @@ groups:
         name: links.delete
         tags: [links]
         summary: Delete a link (owner only)
+      - method: PATCH
+        path: /:code
+        handler: links.update
+        name: links.update
+        tags: [links]
+        summary: Update title / description of a link (owner only)
 
   - prefix: ""
     routes:

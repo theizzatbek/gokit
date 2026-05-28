@@ -148,6 +148,51 @@ func (s *Service) ListByUser(ctx context.Context, userID string) ([]Link, error)
 	return out, rows.Err()
 }
 
+// Update applies the partial UpdateRequest to the link identified by code,
+// owner-gated by userID. Nil fields on req leave the corresponding column
+// unchanged. Returns the updated Link.
+//
+// "not found" vs "wrong owner" disambiguates via a follow-up lookup on
+// miss, same pattern as Delete.
+func (s *Service) Update(ctx context.Context, code, userID string, req UpdateRequest) (Link, error) {
+	b := sqb.Builder.Update("links").
+		Where(sq.Eq{"code": code, "user_id": userID}).
+		Suffix(linkReturning)
+	if req.Title != nil {
+		b = b.Set("title", *req.Title)
+	}
+	if req.Description != nil {
+		b = b.Set("description", *req.Description)
+	}
+	// All-nil request → nothing to set; just return current state.
+	if req.Title == nil && req.Description == nil {
+		l, err := s.GetByCode(ctx, code)
+		if err != nil {
+			return Link{}, err
+		}
+		if l.UserID != userID {
+			return Link{}, xerrs.Permission("link_not_owned", "urlshort: link belongs to a different user")
+		}
+		return l, nil
+	}
+
+	var l Link
+	if err := scanLink(sqb.QueryRow(ctx, s.db, b), &l); err != nil {
+		// UPDATE ... RETURNING produced no row → either no such code OR
+		// code exists but belongs to a different user. Distinguish for
+		// caller via a public-read lookup.
+		got, getErr := s.GetByCode(ctx, code)
+		if getErr != nil {
+			return Link{}, getErr
+		}
+		if got.UserID != userID {
+			return Link{}, xerrs.Permission("link_not_owned", "urlshort: link belongs to a different user")
+		}
+		return Link{}, xerrs.NotFound("link_not_found", "urlshort: link not found")
+	}
+	return l, nil
+}
+
 // Delete removes the link if the user owns it. Distinguishes
 // "not found" from "wrong owner" with a separate lookup on miss.
 func (s *Service) Delete(ctx context.Context, code, userID string) error {

@@ -22,6 +22,11 @@ func NewHandler(svc *Service, shortURLBase string) *Handler {
 }
 
 // RegisterHandlers wires every link endpoint by name onto eng.
+//
+// links.update is the showcase for fibermap.RegisterHandlerWithInput:
+// PATCH /links/:code combines a path param (the code) with a JSON body
+// (UpdateRequest), and a single UpdateInput struct binds + validates
+// both in one call.
 func RegisterHandlers(eng *fibermap.Engine[appctx.AppCtx], svc *Service, shortURLBase string) {
 	h := NewHandler(svc, shortURLBase)
 	fibermap.RegisterHandlerWithBody(eng, "links.create", h.Create)
@@ -29,6 +34,7 @@ func RegisterHandlers(eng *fibermap.Engine[appctx.AppCtx], svc *Service, shortUR
 	fibermap.RegisterHandler(eng, "links.redirect", h.Redirect)
 	fibermap.RegisterHandler(eng, "links.stats", h.Stats)
 	fibermap.RegisterHandler(eng, "links.delete", h.Delete)
+	fibermap.RegisterHandlerWithInput(eng, "links.update", h.Update)
 }
 
 // Create handles POST /links — shortens a URL for the current user.
@@ -88,4 +94,16 @@ func (h *Handler) Delete(c *fibermap.Context[appctx.AppCtx]) error {
 		return err
 	}
 	return c.SendStatus(204)
+}
+
+// Update handles PATCH /links/:code — owner-only partial update of
+// title and/or description. Both the path :code and the JSON body
+// arrive parsed + validated via fibermap.RegisterHandlerWithInput; the
+// handler itself only mediates the owner check via the service.
+func (h *Handler) Update(c *fibermap.Context[appctx.AppCtx], in UpdateInput) error {
+	l, err := h.svc.Update(c.UserContext(), in.Params.Code, c.Data.UserID, in.Body)
+	if err != nil {
+		return err
+	}
+	return c.JSON(l)
 }
