@@ -17,6 +17,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/go-playground/validator/v10"
+
 	"github.com/theizzatbek/gokit/clients/apimap"
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	"github.com/theizzatbek/gokit/db"
@@ -45,7 +47,17 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	// Customise the engine's validator with the links-package safe_url
+	// rule so CreateRequest.URL rejects loopback / private addresses
+	// (SSRF guard). Other built-in tags (required, url, email, min, …)
+	// keep their default semantics.
+	v := validator.New(validator.WithRequiredStructEnabled())
+	if err := links.RegisterValidators(v); err != nil {
+		return err
+	}
+
 	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
+		service.WithValidator(v),
 		service.WithAPIMap(),
 		service.WithNATSMap(),
 		service.WithRoutes(),
