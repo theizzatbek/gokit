@@ -21,6 +21,7 @@ const (
 	CodePasswordHashCorrupt = "password_hash_corrupt"
 	CodeKeyNotLoaded        = "key_not_loaded"
 	CodeStoreUnavailable    = "store_unavailable"
+	CodeRateLimited         = "rate_limited"
 )
 
 // wwwAuthenticate renders an RFC 6750 §3 challenge string suitable for the
