@@ -2,3 +2,4 @@
 docs/superpowers/
 /quickstart
 /tasks
+*/.env

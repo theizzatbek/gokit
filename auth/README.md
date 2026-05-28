@@ -35,28 +35,65 @@ authObj, err := auth.New[MyClaims](auth.Config{
     RefreshTTL: 30 * 24 * time.Hour,
 }, auth.WithRefreshStore(refreshpg.New(db)))
 
-// 3. Wire the credentials verifier (where YOU look up the user)
-authObj.SetCredentialsVerifier(func(ctx context.Context, req auth.LoginRequest) (auth.LoginResult[MyClaims], error) {
-    u, err := usersSvc.Authenticate(ctx, req.Login, req.Password)
-    if err != nil { return auth.LoginResult[MyClaims]{}, err }
-    return auth.LoginResult[MyClaims]{
+// 3. Write your own login handler. The kit does not own the body shape — you
+//    declare LoginRequest yourself, verify credentials however you like
+//    (password, mTLS, PKCS7, OIDC, magic link), and hand the verified
+//    LoginResult to IssueLogin. The kit mints + persists tokens and writes
+//    the {access_token, ...} response.
+type LoginRequest struct {
+    Login    string `json:"login"    validate:"required"`
+    Password string `json:"password" validate:"required,min=1"`
+}
+
+app.Post("/auth/login", func(c *fiber.Ctx) error {
+    var req LoginRequest
+    if err := c.BodyParser(&req); err != nil {
+        return errs.Wrap(err, errs.KindValidation, "invalid_body", "could not decode body")
+    }
+    u, err := usersSvc.Authenticate(c.UserContext(), req.Login, req.Password)
+    if err != nil {
+        return err
+    }
+    return authObj.IssueLogin(c, auth.LoginResult[MyClaims]{
         Subject: u.ID,
         Custom:  MyClaims{Email: u.Email},
-    }, nil
+    })
 })
 
-// 4. Mount handlers in your fiber app
-app.Post("/auth/login",   authObj.LoginHandler)
-app.Post("/auth/refresh", authObj.RefreshHandler)
-app.Post("/auth/logout",  authObj.LogoutHandler)
+// 4. Refresh and logout are one-liners — they have no service-side logic.
+app.Post("/auth/refresh", authObj.IssueRefresh)
+app.Post("/auth/logout",  authObj.Logout)
 
 // 5. Protect routes
 app.Use(authObj.Bearer(auth.BearerRequired))
 app.Get("/me", func(c *fiber.Ctx) error {
-    p := auth.MustFrom[MyClaims](c)
-    return c.JSON(p.Custom)
+    p, err := auth.MustFrom[MyClaims](c)
+    if err != nil { return err }
+    return c.JSON(p.Claims)
 })
 ```
+
+### Custom auth schemes
+
+`IssueLogin` only cares about the verified `LoginResult[C]` — it doesn't see
+the wire body. Custom schemes (mTLS, PKCS7-signed payloads, OIDC id_token,
+SAML, SSH-cert, magic links) all follow the same pattern:
+
+```go
+app.Post("/auth/login-cert", func(c *fiber.Ctx) error {
+    sig, err := parsePKCS7(c.Body())               // your verification
+    if err != nil { return errs.Unauthorized(...) }
+    subject := extractSubject(sig.Certificate())   // your subject mapping
+    return authObj.IssueLogin(c, auth.LoginResult[MyClaims]{
+        Subject: subject,
+        Custom:  MyClaims{...},
+    })
+})
+```
+
+For non-Fiber callers (RPC handlers, CLI tools, background jobs), use
+`IssueTokens(ctx, res, meta)` / `RotateRefresh(ctx, raw, meta)` directly —
+they return a `TokenPair` and never touch `*fiber.Ctx`.
 
 ## Configuration
 
@@ -161,7 +198,8 @@ Without `SetClaimsRefresher`, refreshed access tokens carry only the rotated rec
 
 ### Refresh-token rotation + reuse detection
 
-Refresh tokens are single-use. `auth.RefreshHandler`:
+Refresh tokens are single-use. `auth.IssueRefresh` (or `RotateRefresh` for
+non-Fiber callers):
 1. Consumes the presented token (atomic UPDATE in `refreshpg`, Lua script in `refreshredis`).
 2. If already consumed → **revokes the entire family** and returns `*errs.Error{Code: "refresh_reused"}`. This catches replay attacks.
 3. On success, issues a new (access, refresh) pair from the same family.
@@ -172,10 +210,12 @@ Set `WithSecurityLogger(...)` to receive a structured WARN every time a reuse tr
 
 | Path | Error |
 |---|---|
-| `LoginHandler` invalid creds | `*errs.Error{KindUnauthorized, Code: "invalid_credentials"}` (returned by your verifier) |
-| `LoginHandler` no body / bad body | `*errs.Error{KindValidation, Code: "invalid_body"}` |
-| `RefreshHandler` missing/expired token | `*errs.Error{KindUnauthorized, Code: "refresh_missing"}` / `"refresh_expired"` |
-| `RefreshHandler` reuse detected | `*errs.Error{KindUnauthorized, Code: "refresh_reused"}` + family revoked |
+| Custom login handler invalid creds | `*errs.Error{KindUnauthorized, Code: "invalid_credentials"}` (returned by your code before reaching `IssueLogin`) |
+| Custom login handler bad body | `*errs.Error{KindValidation, Code: "invalid_body"}` (whatever your handler returns; the kit does not parse) |
+| `IssueRefresh` missing/expired token | `*errs.Error{KindUnauthorized, Code: "missing_refresh"}` / `"refresh_expired"` |
+| `IssueRefresh` reuse detected | `*errs.Error{KindUnauthorized, Code: "refresh_reused"}` + family revoked |
+| `IssueTokens` / `IssueLogin` / `IssueRefresh` no store | `*errs.Error{KindInternal, Code: "store_unset"}` |
+| Store backend unreachable | `*errs.Error{KindUnavailable, Code: "store_unavailable"}` |
 | `Bearer` missing token (required) | `*errs.Error{KindUnauthorized, Code: "missing_token"}` |
 | `Bearer` invalid/expired token | `*errs.Error{KindUnauthorized, Code: "invalid_token"}` |
 | `NewHasher` invalid params | error from `validateParams()` |

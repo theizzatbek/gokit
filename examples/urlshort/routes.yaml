@@ -2,10 +2,6 @@
 
 # urlshort routes.
 #
-# Auth login/refresh/logout are mounted programmatically in main.go via
-# Engine.Add — they call into auth.LoginHandler / RefreshHandler /
-# LogoutHandler which expect *fiber.Ctx, not Context[AppCtx].
-#
 # `bearer` is a factory middleware registered by
 # auth/fibermount.MountMiddlewareFactories; empty args list means
 # "verify Bearer token, no extra scope/role check".
@@ -25,6 +21,24 @@ groups:
         name: auth.register
         tags: [auth]
         summary: Register a new user
+      - method: POST
+        path: /login
+        handler: users.login
+        name: auth.login
+        tags: [auth]
+        summary: Verify credentials and issue access + refresh tokens
+      - method: POST
+        path: /refresh
+        handler: users.refresh
+        name: auth.refresh
+        tags: [auth]
+        summary: Rotate the refresh cookie and issue a fresh access token
+      - method: POST
+        path: /logout
+        handler: users.logout
+        name: auth.logout
+        tags: [auth]
+        summary: Revoke the current refresh family and clear the cookie
 
   - prefix: /links
     middleware:

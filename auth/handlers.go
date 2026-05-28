@@ -5,14 +5,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
-// loginResponse is the wire shape of POST /auth/login on success.
+// loginResponse is the wire shape of the default JSON body written by
+// IssueLogin / IssueRefresh on success. Callers wanting a different shape
+// should call IssueTokens / RotateRefresh directly and write their own JSON.
 type loginResponse struct {
 	AccessToken string `json:"access_token"`
 	TokenType   string `json:"token_type"`
@@ -22,96 +22,73 @@ type loginResponse struct {
 
 const refreshCookieName = "refresh_token"
 
-// loginValidator is package-private — one instance amortises validator's
-// reflection cache across requests.
-var loginValidator = validator.New(validator.WithRequiredStructEnabled())
-
-// LoginHandler verifies credentials via the registered CredentialsVerifier,
-// issues a new access JWT + opaque refresh, sets the refresh cookie, and
-// returns the access in JSON.
-func (a *Auth[C]) LoginHandler(c *fiber.Ctx) error {
-	if a.verifier == nil {
-		return xerrs.Internal("verifier_unset", "auth: SetCredentialsVerifier was not called")
-	}
-	if a.store == nil {
-		return xerrs.Internal("store_unset", "auth: WithRefreshStore option was not provided")
-	}
-
-	var req LoginRequest
-	if err := c.BodyParser(&req); err != nil {
-		return xerrs.Wrap(err, xerrs.KindValidation, "invalid_body", "could not decode login body")
-	}
-	if err := loginValidator.Struct(&req); err != nil {
-		return xerrs.Wrap(err, xerrs.KindValidation, "invalid_body", "login body failed validation")
-	}
-
-	res, err := a.verifier(c.UserContext(), req)
-	if err != nil {
-		return err
-	}
-
-	now := a.now()
-	claims := Claims[C]{
-		Subject:   res.Subject,
-		IssuedAt:  now.Unix(),
-		ExpiresAt: now.Add(a.accessTTL).Unix(),
-		JTI:       uuid.NewString(),
-		Scopes:    res.Scopes,
-		Roles:     res.Roles,
-		Custom:    res.Custom,
-	}
-	access, err := a.eng.sign(claims)
-	if err != nil {
-		return err
-	}
-
-	raw, hash, err := newRawRefresh()
-	if err != nil {
-		return err
-	}
-	familyID := uuid.NewString()
-	if err := a.store.Issue(c.UserContext(), Record{
-		TokenHash: hash,
-		Subject:   res.Subject,
-		FamilyID:  familyID,
-		IssuedAt:  now,
-		ExpiresAt: now.Add(a.refreshTTL),
+// IssueLogin is the Fiber-aware wrapper around IssueTokens. The caller has
+// already verified credentials (whatever shape they take — password, PKCS7,
+// mTLS, SSO — kit does not care) and constructed a LoginResult; this method
+// mints the access+refresh pair, sets the HttpOnly refresh cookie, and
+// writes the default JSON body.
+//
+//	// Inside your fibermap handler:
+//	user, err := svc.Authenticate(c.UserContext(), body.Login, body.Password)
+//	if err != nil {
+//	    return err
+//	}
+//	return authObj.IssueLogin(c.Ctx, auth.LoginResult[Claims]{
+//	    Subject: user.ID,
+//	    Custom:  Claims{Email: user.Email},
+//	})
+//
+// For a custom response shape (e.g. add a session id, switch from cookie to
+// header, return refresh token in body), call IssueTokens directly.
+func (a *Auth[C]) IssueLogin(c *fiber.Ctx, res LoginResult[C]) error {
+	pair, err := a.IssueTokens(c.UserContext(), res, IssueMeta{
 		UserAgent: c.Get(fiber.HeaderUserAgent),
 		IP:        c.IP(),
-	}); err != nil {
-		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeStoreUnavailable, "refresh store unavailable")
+	})
+	if err != nil {
+		return err
 	}
 
-	// Make the principal visible to downstream middleware in the same request
-	// (audit loggers etc.).
-	c.Locals(principalKey{}, claimsToPrincipal(claims, access))
+	c.Locals(principalKey{}, &Principal[C]{
+		Subject: pair.Subject,
+		Scopes:  res.Scopes,
+		Roles:   res.Roles,
+		Claims:  res.Custom,
+		Raw:     pair.Access,
+		Expires: pair.AccessExpiresAt,
+	})
 
-	a.setRefreshCookie(c, raw, now.Add(a.refreshTTL))
+	a.setRefreshCookie(c, pair.RefreshRaw, pair.RefreshExpiresAt)
 	return c.Status(http.StatusOK).JSON(loginResponse{
-		AccessToken: access,
+		AccessToken: pair.Access,
 		TokenType:   "Bearer",
-		ExpiresIn:   int64(a.accessTTL.Seconds()),
-		Subject:     res.Subject,
+		ExpiresIn:   int64(pair.AccessExpiresIn.Seconds()),
+		Subject:     pair.Subject,
 	})
 }
 
-// RefreshHandler reads the refresh cookie, atomically rotates it through the
-// store, and returns a new access token + a fresh refresh cookie.
+// IssueRefresh is the Fiber-aware wrapper around RotateRefresh. Reads the
+// refresh cookie, rotates it through the store, and writes a new
+// access+cookie pair to the response.
 //
-// On reuse detection (already-consumed/revoked), the store has already revoked
-// the whole token family by the time it returns the error — this handler just
-// clears the bad cookie and 401s.
-func (a *Auth[C]) RefreshHandler(c *fiber.Ctx) error {
-	if a.store == nil {
-		return xerrs.Internal("store_unset", "auth: WithRefreshStore option was not provided")
-	}
+// On reuse detection the store has already revoked the entire token family
+// by the time RotateRefresh returns the error — this wrapper just clears
+// the bad cookie and propagates the 401.
+//
+// Mount as a Fiber handler:
+//
+//	app.Post("/auth/refresh", authObj.IssueRefresh)
+//
+// Or via fibermap:
+//
+//	fibermap.RegisterHandler(eng, "auth.refresh",
+//	    func(c *fibermap.Context[T]) error { return authObj.IssueRefresh(c.Ctx) })
+func (a *Auth[C]) IssueRefresh(c *fiber.Ctx) error {
 	raw := c.Cookies(refreshCookieName)
-	if raw == "" {
-		return xerrs.Unauthorized(CodeMissingRefresh, "missing refresh cookie")
-	}
-	oldHash := hashRefresh(raw)
-	now := a.now()
-	rec, err := a.store.Consume(c.UserContext(), oldHash, now)
+	pair, err := a.RotateRefresh(c.UserContext(), raw, IssueMeta{
+		UserAgent: c.Get(fiber.HeaderUserAgent),
+		IP:        c.IP(),
+	})
 	if err != nil {
 		if e, ok := errors.AsType[*xerrs.Error](err); ok && e.Code == CodeRefreshReused {
 			a.maybeSecurityLog(c, "refresh_reused", err)
@@ -119,56 +96,12 @@ func (a *Auth[C]) RefreshHandler(c *fiber.Ctx) error {
 		a.clearRefreshCookie(c)
 		return err
 	}
-
-	// Re-read fresh claims if a refresher is registered; otherwise carry only
-	// the subject from the rotated record.
-	result := LoginResult[C]{Subject: rec.Subject}
-	if a.refresher != nil {
-		fresh, err := a.refresher(c.UserContext(), rec.Subject)
-		if err != nil {
-			return err
-		}
-		result = fresh
-		if result.Subject == "" {
-			result.Subject = rec.Subject
-		}
-	}
-
-	claims := Claims[C]{
-		Subject:   result.Subject,
-		IssuedAt:  now.Unix(),
-		ExpiresAt: now.Add(a.accessTTL).Unix(),
-		JTI:       uuid.NewString(),
-		Scopes:    result.Scopes,
-		Roles:     result.Roles,
-		Custom:    result.Custom,
-	}
-	access, err := a.eng.sign(claims)
-	if err != nil {
-		return err
-	}
-	newRaw, newHash, err := newRawRefresh()
-	if err != nil {
-		return err
-	}
-	if err := a.store.Issue(c.UserContext(), Record{
-		TokenHash:  newHash,
-		Subject:    rec.Subject,
-		FamilyID:   rec.FamilyID,
-		ParentHash: oldHash,
-		IssuedAt:   now,
-		ExpiresAt:  now.Add(a.refreshTTL),
-		UserAgent:  c.Get(fiber.HeaderUserAgent),
-		IP:         c.IP(),
-	}); err != nil {
-		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeStoreUnavailable, "refresh store unavailable")
-	}
-	a.setRefreshCookie(c, newRaw, now.Add(a.refreshTTL))
+	a.setRefreshCookie(c, pair.RefreshRaw, pair.RefreshExpiresAt)
 	return c.Status(http.StatusOK).JSON(loginResponse{
-		AccessToken: access,
+		AccessToken: pair.Access,
 		TokenType:   "Bearer",
-		ExpiresIn:   int64(a.accessTTL.Seconds()),
-		Subject:     rec.Subject,
+		ExpiresIn:   int64(pair.AccessExpiresIn.Seconds()),
+		Subject:     pair.Subject,
 	})
 }
 
@@ -200,10 +133,10 @@ func (a *Auth[C]) clearRefreshCookie(c *fiber.Ctx) {
 	})
 }
 
-// LogoutHandler revokes the entire token family of the supplied refresh cookie
-// and clears the cookie. Idempotent: a missing or already-revoked cookie still
+// Logout revokes the entire token family of the supplied refresh cookie and
+// clears the cookie. Idempotent: a missing or already-revoked cookie still
 // returns 204.
-func (a *Auth[C]) LogoutHandler(c *fiber.Ctx) error {
+func (a *Auth[C]) Logout(c *fiber.Ctx) error {
 	raw := c.Cookies(refreshCookieName)
 	if raw == "" {
 		return c.SendStatus(http.StatusNoContent)
@@ -224,10 +157,9 @@ func (a *Auth[C]) LogoutHandler(c *fiber.Ctx) error {
 	return c.SendStatus(http.StatusNoContent)
 }
 
-// LogoutAllHandler revokes every refresh token belonging to the current
-// principal's Subject. Must be mounted behind Bearer middleware so principal
-// is available.
-func (a *Auth[C]) LogoutAllHandler(c *fiber.Ctx) error {
+// LogoutAll revokes every refresh token belonging to the current principal's
+// Subject. Must be mounted behind Bearer middleware so principal is available.
+func (a *Auth[C]) LogoutAll(c *fiber.Ctx) error {
 	p, err := MustFrom[C](c)
 	if err != nil {
 		return err

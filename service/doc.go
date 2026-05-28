@@ -15,7 +15,13 @@
 //
 //	// User wires handlers + services using svc.Engine / svc.Auth / svc.DB / ...
 //	svc.SetContextBuilder(...)
-//	svc.SetCredentialsVerifier(...)
+//	// service.New does NOT auto-mount /auth/login - the service owns the body
+//	// shape and credential check, then delegates to svc.Auth.IssueLogin:
+//	//   fibermap.RegisterHandlerWithBody(svc.Engine, "auth.login",
+//	//       func(c *fibermap.Context[AppCtx], body LoginRequest) error {
+//	//           ... // verify credentials
+//	//           return svc.Auth.IssueLogin(c.Ctx, auth.LoginResult[Claims]{...})
+//	//       })
 //	fibermap.RegisterHandler(svc.Engine, "ping", pingHandler)
 //
 //	return svc.Run()
