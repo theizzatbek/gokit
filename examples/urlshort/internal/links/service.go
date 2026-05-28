@@ -3,9 +3,14 @@ package links
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
+	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgx/v5"
+
 	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/db/sqb"
 	xerrs "github.com/theizzatbek/gokit/errs"
 
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/events"
@@ -26,6 +31,21 @@ func NewService(d *db.DB, enrich EnrichFn, pub *events.Publisher) *Service {
 	return &Service{db: d, enrich: enrich, pub: pub}
 }
 
+// linkColumns is the canonical column order for every SELECT/RETURNING
+// against the links table. Centralised here so the Scan helper below
+// stays in lock-step with the builders.
+var linkColumns = []string{
+	"id", "user_id", "code", "original_url", "title", "description", "image_url",
+	"visit_count", "last_visited_at", "created_at",
+}
+
+var linkReturning = "RETURNING " + strings.Join(linkColumns, ", ")
+
+func scanLink(row pgx.Row, l *Link) error {
+	return row.Scan(&l.ID, &l.UserID, &l.Code, &l.OriginalURL, &l.Title,
+		&l.Description, &l.ImageURL, &l.VisitCount, &l.LastVisitedAt, &l.CreatedAt)
+}
+
 // Create enriches metadata best-effort, generates a unique code (with
 // retries on collision), inserts, and publishes urlshort.link.created.
 func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link, error) {
@@ -38,14 +58,12 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 				"urlshort_code_rand_failed", "urlshort: random failed")
 		}
 		var l Link
-		row := s.db.QueryRow(ctx, `
-			INSERT INTO links(user_id, code, original_url, title, description, image_url)
-			VALUES($1,$2,$3,$4,$5,$6)
-			RETURNING id, user_id, code, original_url, title, description, image_url,
-			          visit_count, last_visited_at, created_at`,
-			userID, code, originalURL, title, desc, img)
-		err = row.Scan(&l.ID, &l.UserID, &l.Code, &l.OriginalURL, &l.Title,
-			&l.Description, &l.ImageURL, &l.VisitCount, &l.LastVisitedAt, &l.CreatedAt)
+		row := sqb.QueryRow(ctx, s.db, sqb.Builder.
+			Insert("links").
+			Columns("user_id", "code", "original_url", "title", "description", "image_url").
+			Values(userID, code, originalURL, title, desc, img).
+			Suffix(linkReturning))
+		err = scanLink(row, &l)
 		if err == nil {
 			s.pub.LinkCreated(ctx, events.LinkCreated{
 				LinkID:    l.ID,
@@ -68,13 +86,12 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 
 // GetByCode returns the link or NotFound.
 func (s *Service) GetByCode(ctx context.Context, code string) (Link, error) {
-	row := s.db.QueryRow(ctx, `
-		SELECT id, user_id, code, original_url, title, description, image_url,
-		       visit_count, last_visited_at, created_at
-		FROM links WHERE code = $1`, code)
+	row := sqb.QueryRow(ctx, s.db, sqb.Builder.
+		Select(linkColumns...).
+		From("links").
+		Where(sq.Eq{"code": code}))
 	var l Link
-	if err := row.Scan(&l.ID, &l.UserID, &l.Code, &l.OriginalURL, &l.Title,
-		&l.Description, &l.ImageURL, &l.VisitCount, &l.LastVisitedAt, &l.CreatedAt); err != nil {
+	if err := scanLink(row, &l); err != nil {
 		return Link{}, xerrs.NotFound("link_not_found", "urlshort: link not found")
 	}
 	return l, nil
@@ -83,15 +100,14 @@ func (s *Service) GetByCode(ctx context.Context, code string) (Link, error) {
 // IncVisit bumps visit_count and last_visited_at, then publishes
 // urlshort.link.visited.
 func (s *Service) IncVisit(ctx context.Context, code, userAgent, ip string) (Link, error) {
-	row := s.db.QueryRow(ctx, `
-		UPDATE links
-		SET visit_count = visit_count + 1, last_visited_at = now()
-		WHERE code = $1
-		RETURNING id, user_id, code, original_url, title, description, image_url,
-		          visit_count, last_visited_at, created_at`, code)
+	row := sqb.QueryRow(ctx, s.db, sqb.Builder.
+		Update("links").
+		Set("visit_count", sq.Expr("visit_count + 1")).
+		Set("last_visited_at", sq.Expr("now()")).
+		Where(sq.Eq{"code": code}).
+		Suffix(linkReturning))
 	var l Link
-	if err := row.Scan(&l.ID, &l.UserID, &l.Code, &l.OriginalURL, &l.Title,
-		&l.Description, &l.ImageURL, &l.VisitCount, &l.LastVisitedAt, &l.CreatedAt); err != nil {
+	if err := scanLink(row, &l); err != nil {
 		return Link{}, xerrs.NotFound("link_not_found", "urlshort: link not found")
 	}
 	s.pub.LinkVisited(ctx, events.LinkVisited{
@@ -104,11 +120,19 @@ func (s *Service) IncVisit(ctx context.Context, code, userAgent, ip string) (Lin
 }
 
 // ListByUser returns the user's links ordered by created_at desc.
+// Uses ReadQuery so the read can ride a replica when configured —
+// listings tolerate the ~replica-lag window of staleness.
 func (s *Service) ListByUser(ctx context.Context, userID string) ([]Link, error) {
-	rows, err := s.db.Query(ctx, `
-		SELECT id, user_id, code, original_url, title, description, image_url,
-		       visit_count, last_visited_at, created_at
-		FROM links WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+	sqlStr, args, err := sqb.Builder.
+		Select(linkColumns...).
+		From("links").
+		Where(sq.Eq{"user_id": userID}).
+		OrderBy("created_at DESC").
+		ToSql()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.ReadQuery(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +140,7 @@ func (s *Service) ListByUser(ctx context.Context, userID string) ([]Link, error)
 	out := []Link{}
 	for rows.Next() {
 		var l Link
-		if err := rows.Scan(&l.ID, &l.UserID, &l.Code, &l.OriginalURL, &l.Title,
-			&l.Description, &l.ImageURL, &l.VisitCount, &l.LastVisitedAt, &l.CreatedAt); err != nil {
+		if err := scanLink(rows, &l); err != nil {
 			return nil, err
 		}
 		out = append(out, l)
@@ -128,7 +151,9 @@ func (s *Service) ListByUser(ctx context.Context, userID string) ([]Link, error)
 // Delete removes the link if the user owns it. Distinguishes
 // "not found" from "wrong owner" with a separate lookup on miss.
 func (s *Service) Delete(ctx context.Context, code, userID string) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM links WHERE code = $1 AND user_id = $2`, code, userID)
+	tag, err := sqb.Exec(ctx, s.db, sqb.Builder.
+		Delete("links").
+		Where(sq.Eq{"code": code, "user_id": userID}))
 	if err != nil {
 		return err
 	}

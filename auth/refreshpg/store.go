@@ -6,10 +6,14 @@ package refreshpg
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
+
+	sq "github.com/Masterminds/squirrel"
 
 	"github.com/theizzatbek/gokit/auth"
 	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/db/sqb"
 	"github.com/theizzatbek/gokit/errs"
 )
 
@@ -22,17 +26,27 @@ type Store struct {
 // most common case — long-lived service — passes *db.DB.
 func New(q db.Querier) *Store { return &Store{q: q} }
 
+// recordColumns is the canonical SELECT/RETURNING column order for the
+// fully-populated auth.Record shape. host(ip) is a Postgres function call
+// rendering inet → text, with COALESCE collapsing NULL to ” so Go-side
+// Scan into a plain string works.
+var recordColumns = []string{
+	"token_hash", "family_id", "parent_hash", "subject",
+	"issued_at", "expires_at", "user_agent", "COALESCE(host(ip), '')",
+}
+
+var recordReturning = "RETURNING " + strings.Join(recordColumns, ", ")
+
 // Issue inserts a row. pgx errors are funneled through db/'s mapPgxErr (via
 // the Querier), so a unique-key collision returns *errs.Error{KindAlreadyExists}.
 func (s *Store) Issue(ctx context.Context, r auth.Record) error {
-	const q = `
-		INSERT INTO auth_refresh_tokens
-		    (token_hash, family_id, parent_hash, subject, issued_at, expires_at, user_agent, ip)
-		VALUES ($1,$2,$3,$4,$5,$6,$7, NULLIF($8,'')::inet)
-	`
-	_, err := s.q.Exec(ctx, q,
-		r.TokenHash[:], r.FamilyID, r.ParentHash[:], r.Subject,
-		r.IssuedAt, r.ExpiresAt, r.UserAgent, r.IP)
+	_, err := sqb.Exec(ctx, s.q, sqb.Builder.
+		Insert("auth_refresh_tokens").
+		Columns("token_hash", "family_id", "parent_hash", "subject",
+			"issued_at", "expires_at", "user_agent", "ip").
+		Values(r.TokenHash[:], r.FamilyID, r.ParentHash[:], r.Subject,
+			r.IssuedAt, r.ExpiresAt, r.UserAgent,
+			sq.Expr("NULLIF(?, '')::inet", r.IP)))
 	if err != nil {
 		// db.Querier funnels pgx errors through mapPgxErr, so a unique-key
 		// collision arrives as *errs.Error{KindAlreadyExists}. Pass that through
@@ -54,34 +68,38 @@ func (s *Store) Issue(ctx context.Context, r auth.Record) error {
 // succeeds for the live-and-valid case, and a follow-up SELECT only in the
 // failure case to disambiguate not_found / expired / reused.
 func (s *Store) Consume(ctx context.Context, tokenHash [32]byte, now time.Time) (auth.Record, error) {
-	const update = `
-		UPDATE auth_refresh_tokens
-		SET    consumed_at = $2
-		WHERE  token_hash = $1
-		  AND  consumed_at IS NULL
-		  AND  revoked_at  IS NULL
-		  AND  expires_at  > $2
-		RETURNING token_hash, family_id, parent_hash, subject, issued_at, expires_at,
-		          user_agent, COALESCE(host(ip), '')
-	`
-	rec, ok, err := scanOne(s.q.QueryRow(ctx, update, tokenHash[:], now))
+	row := sqb.QueryRow(ctx, s.q, sqb.Builder.
+		Update("auth_refresh_tokens").
+		Set("consumed_at", now).
+		Where(sq.Eq{
+			"token_hash":  tokenHash[:],
+			"consumed_at": nil,
+			"revoked_at":  nil,
+		}).
+		Where(sq.Gt{"expires_at": now}).
+		Suffix(recordReturning))
+
+	rec, ok, err := scanOne(row)
 	if err != nil {
 		return auth.Record{}, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "refresh consume failed")
 	}
 	if ok {
 		return rec, nil
 	}
-	// Diagnose the failure mode.
-	const diag = `
-		SELECT consumed_at IS NOT NULL OR revoked_at IS NOT NULL AS used,
-		       expires_at <= $2                                  AS expired,
-		       family_id
-		FROM   auth_refresh_tokens
-		WHERE  token_hash = $1
-	`
+
+	// Diagnose the failure mode. `expires_at <= ? AS expired` carries a
+	// placeholder, so it is added via .Column(expr, arg) — squirrel tracks
+	// the arg alongside the column and renumbers $N correctly.
 	var used, expired bool
 	var familyID string
-	if err := s.q.QueryRow(ctx, diag, tokenHash[:], now).Scan(&used, &expired, &familyID); err != nil {
+	diag := sqb.Builder.
+		Select().
+		Column("consumed_at IS NOT NULL OR revoked_at IS NOT NULL AS used").
+		Column("expires_at <= ? AS expired", now).
+		Column("family_id").
+		From("auth_refresh_tokens").
+		Where(sq.Eq{"token_hash": tokenHash[:]})
+	if err := sqb.QueryRow(ctx, s.q, diag).Scan(&used, &expired, &familyID); err != nil {
 		var e *errs.Error
 		if errors.As(err, &e) && e.Kind == errs.KindNotFound {
 			return auth.Record{}, errs.Unauthorized(auth.CodeRefreshInvalid, "refresh token unknown")
@@ -104,13 +122,11 @@ func (s *Store) Consume(ctx context.Context, tokenHash [32]byte, now time.Time) 
 // RevokeFamily marks every live token in the family as revoked. Idempotent
 // via `COALESCE(revoked_at, now())` + `WHERE revoked_at IS NULL`.
 func (s *Store) RevokeFamily(ctx context.Context, familyID string) error {
-	const q = `
-		UPDATE auth_refresh_tokens
-		SET    revoked_at = COALESCE(revoked_at, now())
-		WHERE  family_id  = $1
-		  AND  revoked_at IS NULL
-	`
-	if _, err := s.q.Exec(ctx, q, familyID); err != nil {
+	_, err := sqb.Exec(ctx, s.q, sqb.Builder.
+		Update("auth_refresh_tokens").
+		Set("revoked_at", sq.Expr("COALESCE(revoked_at, now())")).
+		Where(sq.Eq{"family_id": familyID, "revoked_at": nil}))
+	if err != nil {
 		return errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "refresh family revoke failed")
 	}
 	return nil
@@ -137,13 +153,11 @@ func scanOne(row interface{ Scan(...any) error }) (auth.Record, bool, error) {
 
 // RevokeSubject revokes every live token belonging to the subject. Idempotent.
 func (s *Store) RevokeSubject(ctx context.Context, subject string) error {
-	const q = `
-		UPDATE auth_refresh_tokens
-		SET    revoked_at = COALESCE(revoked_at, now())
-		WHERE  subject = $1
-		  AND  revoked_at IS NULL
-	`
-	if _, err := s.q.Exec(ctx, q, subject); err != nil {
+	_, err := sqb.Exec(ctx, s.q, sqb.Builder.
+		Update("auth_refresh_tokens").
+		Set("revoked_at", sq.Expr("COALESCE(revoked_at, now())")).
+		Where(sq.Eq{"subject": subject, "revoked_at": nil}))
+	if err != nil {
 		return errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "refresh subject revoke failed")
 	}
 	return nil
@@ -152,8 +166,9 @@ func (s *Store) RevokeSubject(ctx context.Context, subject string) error {
 // GarbageCollect deletes records with expires_at <= now. Returns the number of
 // rows removed.
 func (s *Store) GarbageCollect(ctx context.Context, now time.Time) (int64, error) {
-	const q = `DELETE FROM auth_refresh_tokens WHERE expires_at <= $1`
-	tag, err := s.q.Exec(ctx, q, now)
+	tag, err := sqb.Exec(ctx, s.q, sqb.Builder.
+		Delete("auth_refresh_tokens").
+		Where(sq.LtOrEq{"expires_at": now}))
 	if err != nil {
 		return 0, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "refresh GC failed")
 	}

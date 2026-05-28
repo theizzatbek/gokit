@@ -69,8 +69,9 @@ curl -H "authorization: Bearer $TOKEN" http://localhost:3000/links/<code>/stats
 | `gokit/fibermap/openapi` | `GET /openapi.json` + `GET /docs` served from `Generator.Mount()` |
 | `gokit/fibermap/bind` | Request body decoding + validation for register/shorten |
 | `gokit/errs` | All service errors are `*errs.Error`; `fibermap.ErrorHandler` maps to wire shape |
-| `gokit/db` | Postgres pool + `Query/Exec`; unique-violation surfaces as `errs.AlreadyExists` |
-| `gokit/auth` | JWT issue/verify, argon2id hashing, `auth.Auth.LoginHandler/RefreshHandler/LogoutHandler` |
+| `gokit/db` | Postgres pool + `Query/Exec`; unique-violation surfaces as `errs.AlreadyExists`. `links.ListByUser` uses `ReadQuery` so the listing rides a replica when `DB_HAS_READ_REPLICA=true` (lag-tolerant read). |
+| `gokit/db/sqb` | Squirrel builders + `sqb.Query/QueryRow/Exec`; every SQL in `users/service.go` and `links/service.go` flows through it (no heredoc strings). |
+| `gokit/auth` | JWT issue/verify, argon2id hashing, `auth.Auth.IssueLogin/IssueRefresh/Logout` (your handler parses the body and calls them) |
 | `gokit/auth/refreshpg` | Refresh tokens persisted in Postgres (`auth_refresh_tokens` table) |
 | `gokit/auth/fibermount` | Mounts `bearer`/`require_scope`/`require_role` factory middleware into the engine |
 | `gokit/clients/httpc` | `enrich.Fetcher` does arbitrary-URL fetch to parse `<title>` from HTML |
