@@ -58,6 +58,7 @@ func (a *Auth[C]) IssueLogin(c *fiber.Ctx, res LoginResult[C]) error {
 		Expires: pair.AccessExpiresAt,
 	})
 
+	a.maybeSecurityInfo(c, "login_success", "subject", pair.Subject)
 	a.setRefreshCookie(c, pair.RefreshRaw, pair.RefreshExpiresAt)
 	return c.Status(http.StatusOK).JSON(loginResponse{
 		AccessToken: pair.Access,
@@ -152,6 +153,7 @@ func (a *Auth[C]) Logout(c *fiber.Ctx) error {
 	rec, err := a.store.Consume(c.UserContext(), hash, a.now())
 	if err == nil {
 		_ = a.store.RevokeFamily(c.UserContext(), rec.FamilyID)
+		a.maybeSecurityInfo(c, "logout", "subject", rec.Subject)
 	}
 	a.clearRefreshCookie(c)
 	return c.SendStatus(http.StatusNoContent)
@@ -169,6 +171,7 @@ func (a *Auth[C]) LogoutAll(c *fiber.Ctx) error {
 			return xerrs.Wrap(err, xerrs.KindUnavailable, CodeStoreUnavailable, "refresh store unavailable")
 		}
 	}
+	a.maybeSecurityInfo(c, "logout_all", "subject", p.Subject)
 	a.clearRefreshCookie(c)
 	return c.SendStatus(http.StatusNoContent)
 }

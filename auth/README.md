@@ -114,7 +114,7 @@ they return a `TokenPair` and never touch `*fiber.Ctx`.
 |---|---|---|
 | `WithRefreshStore(RefreshStore)` | none | Required for Login/Refresh/Logout. Plug `refreshpg`/`refreshredis`/your own |
 | `WithLogger(*slog.Logger)` | silent | App-level errors |
-| `WithSecurityLogger(*slog.Logger)` | silent | Security-relevant events: refresh reuse, token revocation, login failures |
+| `WithSecurityLogger(*slog.Logger)` | silent | Security-relevant events. **WARN:** `bearer_verify_failed`, `refresh_reused`. **INFO:** `login_success`, `logout`, `logout_all`. Every event carries `ip`, `ua`, `path`; INFO ones add `subject`. See [Security events](#security-events). |
 | `WithCookieDomain(d)`, `WithCookiePath(p)` | "" / "/" | Refresh-cookie scope |
 | `WithCookieSecure(bool)` | true | Force/disable `Secure` flag on refresh cookie |
 | `WithLeeway(d)` | from Config.Leeway | Override leeway after construction |
@@ -206,6 +206,20 @@ non-Fiber callers):
 
 Set `WithSecurityLogger(...)` to receive a structured WARN every time a reuse triggers a family revoke — a useful alert signal.
 
+### Security events
+
+`WithSecurityLogger(logger)` opts every Auth method into structured event emission. The logger is independent from `WithLogger` so you can ship it to a SIEM / detection pipeline. Each event is one structured slog record with these attributes:
+
+| Event | Level | Trigger | Attributes |
+|---|---|---|---|
+| `login_success` | INFO | `IssueLogin` succeeded | `subject`, `ip`, `ua`, `path` |
+| `logout` | INFO | `Logout` revoked a refresh family | `subject`, `ip`, `ua`, `path` |
+| `logout_all` | INFO | `LogoutAll` revoked every subject token | `subject`, `ip`, `ua`, `path` |
+| `bearer_verify_failed` | WARN | `Bearer` middleware rejected a token | `err`, `ip`, `ua`, `path` |
+| `refresh_reused` | WARN | `IssueRefresh` / `RotateRefresh` saw a re-played token | `err`, `ip`, `ua`, `path` |
+
+`login_failure` is the caller's responsibility — the kit only sees the verified `LoginResult` you hand to `IssueLogin`. Emit it from your handler before calling `IssueLogin`.
+
 ## Error model
 
 | Path | Error |
@@ -252,7 +266,7 @@ Revokes the current token (or the entire family). Returns 204. Clears the `refre
 ## Observability
 
 - `WithLogger(*slog.Logger)` — INFO on issue/refresh, WARN on issuance errors, ERROR on signature failures
-- `WithSecurityLogger(*slog.Logger)` — separate stream for security-relevant events (failed logins, reuse-triggered revocations, missing tokens). Wire to your SIEM.
+- `WithSecurityLogger(*slog.Logger)` — separate stream for security-relevant events. See [Security events](#security-events) for the schema. Wire to your SIEM / detection pipeline.
 
 ## Testing
 

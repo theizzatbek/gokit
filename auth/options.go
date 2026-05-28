@@ -27,9 +27,14 @@ func WithRefreshStore(s RefreshStore) Option { return func(o *options) { o.refre
 // 5xx mapping. nil = silent.
 func WithLogger(l *slog.Logger) Option { return func(o *options) { o.logger = l } }
 
-// WithSecurityLogger wires a separate logger for security-relevant anomalies
-// (refresh_reused, invalid_token with valid signature but wrong issuer, etc).
-// These emit at WARN regardless of HTTP class. nil = no security log.
+// WithSecurityLogger wires a separate logger for security-relevant events:
+//
+//	WARN — bearer_verify_failed, refresh_reused (anomalies, errors attached)
+//	INFO — login_success, logout, logout_all   (subject, ip, ua, path attached)
+//
+// All events include ip / ua / path; INFO events also include the
+// authenticated subject. SIEM / detection-rule consumers should key off
+// the `msg` field on the JSON line. nil = no security log.
 func WithSecurityLogger(l *slog.Logger) Option { return func(o *options) { o.securityLogger = l } }
 
 // WithCookieDomain pins the refresh cookie's Domain attribute. Empty = host-only.
