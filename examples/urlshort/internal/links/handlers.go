@@ -4,19 +4,14 @@ import (
 	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/appctx"
 	"github.com/theizzatbek/gokit/fibermap"
-	"github.com/theizzatbek/gokit/fibermap/bind"
 )
 
 // RegisterHandlers wires every link endpoint. shortURLBase is the
 // public origin used to render short_url in CreateResponse — main.go
 // passes cfg.ShortURLBase.
 func RegisterHandlers(eng *fibermap.Engine[appctx.AppCtx], svc *Service, shortURLBase string) {
-	fibermap.RegisterHandler(eng, "links.create",
-		func(c *fibermap.Context[appctx.AppCtx]) error {
-			body, err := bind.Body[CreateRequest](c.Ctx, nil)
-			if err != nil {
-				return err
-			}
+	fibermap.RegisterHandlerWithBody(eng, "links.create",
+		func(c *fibermap.Context[appctx.AppCtx], body CreateRequest) error {
 			l, err := svc.Create(c.UserContext(), c.Data.UserID, body.URL)
 			if err != nil {
 				return err

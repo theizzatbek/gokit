@@ -6,7 +6,6 @@ import (
 	"github.com/theizzatbek/gokit/auth"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/appctx"
 	"github.com/theizzatbek/gokit/fibermap"
-	"github.com/theizzatbek/gokit/fibermap/bind"
 )
 
 // RegisterHandlers wires:
@@ -43,12 +42,8 @@ func RegisterHandlers(
 		}, nil
 	})
 
-	fibermap.RegisterHandler(eng, "users.register",
-		func(c *fibermap.Context[appctx.AppCtx]) error {
-			body, err := bind.Body[RegisterRequest](c.Ctx, nil)
-			if err != nil {
-				return err
-			}
+	fibermap.RegisterHandlerWithBody(eng, "users.register",
+		func(c *fibermap.Context[appctx.AppCtx], body RegisterRequest) error {
 			u, err := svc.Register(c.UserContext(), body.Email, body.Password)
 			if err != nil {
 				return err
