@@ -19,18 +19,24 @@ type poolStat struct {
 // metricsCollector implements prometheus.Collector. Gauges are refreshed
 // from the underlying pgxpool on every scrape — no goroutine, no polling.
 // The duration histogram is observed inline by the tracer.
+//
+// pools is keyed by a stable name ("primary", "standby") emitted as the
+// pool="…" label on db_pool_size_total. attach is called once per pool
+// during Connect; no locking because there are no concurrent attaches and
+// the map is sealed before the first scrape.
 type metricsCollector struct {
-	pool     *pgxpool.Pool
+	pools    map[string]*pgxpool.Pool
 	poolSize *prometheus.GaugeVec
 	duration *prometheus.HistogramVec
 }
 
 func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
 	mc := &metricsCollector{
+		pools: map[string]*pgxpool.Pool{},
 		poolSize: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "db_pool_size_total",
-			Help: "pgx pool size, labelled by state (acquired|idle|max|total).",
-		}, []string{"state"}),
+			Help: "pgx pool size, labelled by pool (primary|standby) and state (acquired|idle|max|total).",
+		}, []string{"pool", "state"}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "db_query_duration_seconds",
 			Help:    "Histogram of pgx query durations.",
@@ -55,7 +61,9 @@ func (m *metricsCollector) Collect(ch chan<- prometheus.Metric) {
 	m.duration.Collect(ch)
 }
 
-func (m *metricsCollector) attach(p *pgxpool.Pool) { m.pool = p }
+func (m *metricsCollector) attach(name string, p *pgxpool.Pool) {
+	m.pools[name] = p
+}
 
 func (m *metricsCollector) observe(elapsed time.Duration, err error) {
 	outcome := "success"
@@ -65,22 +73,21 @@ func (m *metricsCollector) observe(elapsed time.Duration, err error) {
 	m.duration.WithLabelValues(outcome).Observe(elapsed.Seconds())
 }
 
-func (m *metricsCollector) setPoolStat(s poolStat) {
-	m.poolSize.WithLabelValues("acquired").Set(float64(s.Acquired))
-	m.poolSize.WithLabelValues("idle").Set(float64(s.Idle))
-	m.poolSize.WithLabelValues("max").Set(float64(s.Max))
-	m.poolSize.WithLabelValues("total").Set(float64(s.Total))
+func (m *metricsCollector) setPoolStat(name string, s poolStat) {
+	m.poolSize.WithLabelValues(name, "acquired").Set(float64(s.Acquired))
+	m.poolSize.WithLabelValues(name, "idle").Set(float64(s.Idle))
+	m.poolSize.WithLabelValues(name, "max").Set(float64(s.Max))
+	m.poolSize.WithLabelValues(name, "total").Set(float64(s.Total))
 }
 
 func (m *metricsCollector) refreshPoolStats() {
-	if m.pool == nil {
-		return
+	for name, p := range m.pools {
+		s := p.Stat()
+		m.setPoolStat(name, poolStat{
+			Acquired: s.AcquiredConns(),
+			Idle:     s.IdleConns(),
+			Max:      s.MaxConns(),
+			Total:    s.TotalConns(),
+		})
 	}
-	s := m.pool.Stat()
-	m.setPoolStat(poolStat{
-		Acquired: s.AcquiredConns(),
-		Idle:     s.IdleConns(),
-		Max:      s.MaxConns(),
-		Total:    s.TotalConns(),
-	})
 }

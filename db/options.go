@@ -34,8 +34,12 @@ func WithSlowQueryThreshold(d time.Duration) Option {
 }
 
 // WithMetrics registers Prometheus collectors on reg:
-//   - db_pool_size_total{state="acquired|idle|max|total"} (gauge)
-//   - db_query_duration_seconds{outcome="success|error"}  (histogram)
+//   - db_pool_size_total{pool="primary|standby", state="acquired|idle|max|total"} (gauge)
+//   - db_query_duration_seconds{outcome="success|error"}                          (histogram)
+//
+// The pool label distinguishes the primary write pool from the read-replica
+// pool opened when cfg.HasReadReplica is true. With a single pool only the
+// pool="primary" series is emitted.
 //
 // Without this option, no collectors are created (zero Prometheus footprint).
 func WithMetrics(reg prometheus.Registerer) Option {
