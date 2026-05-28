@@ -753,3 +753,173 @@ func TestExchange_HappyPath(t *testing.T) {
 		t.Errorf("got %+v", got)
 	}
 }
+
+// --- Type-mismatch checks against RegisterRequest / RegisterResponse. ---
+
+type wrongType struct{ Foo int }
+
+// buildClientWithRegistrations is like buildClientWithYAML but lets the
+// caller add RegisterRequest/RegisterResponse calls before Build.
+func buildClientWithRegistrations(t *testing.T, yamlTmpl, baseURL string, register func(*Engine)) *Client {
+	t.Helper()
+	yaml := strings.ReplaceAll(yamlTmpl, "<BASE>", baseURL)
+	e := New()
+	if err := e.LoadBytes([]byte(yaml)); err != nil {
+		t.Fatal(err)
+	}
+	if register != nil {
+		register(e)
+	}
+	c, err := e.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestDecode_TypeCheck_HappyPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"number":1,"url":"u"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithRegistrations(t, `clients:
+  - name: gh
+    base_url: <BASE>
+    endpoints:
+      - {name: get_issue, method: GET, path: /i, decode: json}
+`, srv.URL, func(e *Engine) {
+		RegisterResponse[createIssueResp](e, "gh.get_issue")
+	})
+
+	out, err := Decode[createIssueResp](context.Background(), c, "gh.get_issue", Call{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Number != 1 {
+		t.Errorf("got %+v", out)
+	}
+}
+
+func TestDecode_TypeCheck_MismatchPanics(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"number":1}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithRegistrations(t, `clients:
+  - name: gh
+    base_url: <BASE>
+    endpoints:
+      - {name: get_issue, method: GET, path: /i, decode: json}
+`, srv.URL, func(e *Engine) {
+		RegisterResponse[createIssueResp](e, "gh.get_issue")
+	})
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on type mismatch, got none")
+		}
+		err, ok := r.(error)
+		if !ok {
+			t.Fatalf("recover returned non-error %T", r)
+		}
+		var xe *xerrs.Error
+		if !errors.As(err, &xe) || xe.Code != CodeTypeMismatch {
+			t.Fatalf("got %v, want CodeTypeMismatch", err)
+		}
+	}()
+	_, _ = Decode[wrongType](context.Background(), c, "gh.get_issue", Call{})
+}
+
+func TestDecode_TypeCheck_NotRegistered_NoCheck(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"foo":42}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	// No RegisterResponse call: any Resp is accepted.
+	c := buildClientWithYAML(t, `clients:
+  - name: gh
+    base_url: <BASE>
+    endpoints:
+      - {name: get_issue, method: GET, path: /i, decode: json}
+`, srv.URL)
+
+	out, err := Decode[wrongType](context.Background(), c, "gh.get_issue", Call{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Foo != 42 {
+		t.Errorf("got %+v", out)
+	}
+}
+
+func TestExchange_TypeCheck_RequestMismatchPanics(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"number":1}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithRegistrations(t, `clients:
+  - name: gh
+    base_url: <BASE>
+    endpoints:
+      - {name: create_issue, method: POST, path: /i, encode: json, decode: json}
+`, srv.URL, func(e *Engine) {
+		RegisterRequest[createIssueReq](e, "gh.create_issue")
+		RegisterResponse[createIssueResp](e, "gh.create_issue")
+	})
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on req-type mismatch, got none")
+		}
+		err, _ := r.(error)
+		var xe *xerrs.Error
+		if !errors.As(err, &xe) || xe.Code != CodeTypeMismatch {
+			t.Fatalf("got %v, want CodeTypeMismatch", err)
+		}
+	}()
+	// Calling with wrongType as Req — must panic before the body is encoded.
+	_, _ = Exchange[wrongType, createIssueResp](
+		context.Background(), c, "gh.create_issue",
+		wrongType{Foo: 1}, Call{},
+	)
+}
+
+func TestExchange_TypeCheck_ResponseMismatchPanics(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"number":1}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := buildClientWithRegistrations(t, `clients:
+  - name: gh
+    base_url: <BASE>
+    endpoints:
+      - {name: create_issue, method: POST, path: /i, encode: json, decode: json}
+`, srv.URL, func(e *Engine) {
+		RegisterRequest[createIssueReq](e, "gh.create_issue")
+		RegisterResponse[createIssueResp](e, "gh.create_issue")
+	})
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on resp-type mismatch, got none")
+		}
+		err, _ := r.(error)
+		var xe *xerrs.Error
+		if !errors.As(err, &xe) || xe.Code != CodeTypeMismatch {
+			t.Fatalf("got %v, want CodeTypeMismatch", err)
+		}
+	}()
+	_, _ = Exchange[createIssueReq, wrongType](
+		context.Background(), c, "gh.create_issue",
+		createIssueReq{Title: "x"}, Call{},
+	)
+}
