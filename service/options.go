@@ -11,6 +11,7 @@ import (
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	"github.com/theizzatbek/gokit/fibermap"
+	"github.com/theizzatbek/gokit/fibermap/bind"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
 )
 
@@ -36,10 +37,27 @@ type options struct {
 	routesEnable        bool
 	runOpts             []fibermap.RunOption
 	skipConnectRetry    bool
+	validator           bind.Validator // nil → default validator.New(validator.WithRequiredStructEnabled())
 }
 
 // WithLogger overrides the auto-built slog.Logger.
 func WithLogger(l *slog.Logger) Option { return func(o *options) { o.logger = l } }
+
+// WithValidator overrides the default request validator installed on
+// the engine. The default is
+// `validator.New(validator.WithRequiredStructEnabled())` from
+// go-playground/validator/v10 — sufficient for stock tags like
+// `validate:"required,min=3,email"`. Pass a customised instance to
+// register additional struct- or field-level validators:
+//
+//	v := validator.New(validator.WithRequiredStructEnabled())
+//	v.RegisterValidation("safe_url", isSafeURL)
+//	svc, _ := service.New[AppCtx, Claims](ctx, cfg, service.WithValidator(v))
+//
+// The argument type is bind.Validator (any type satisfying
+// `Struct(any) error`) so custom non-validator/v10 implementations work
+// too. Pass nil to keep the default.
+func WithValidator(v bind.Validator) Option { return func(o *options) { o.validator = v } }
 
 // WithMetrics overrides the default prometheus.NewRegistry().
 func WithMetrics(reg prometheus.Registerer) Option {
