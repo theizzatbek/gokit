@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 
+	sq "github.com/Masterminds/squirrel"
+
 	"github.com/theizzatbek/gokit/auth"
 	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/db/sqb"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
@@ -27,9 +30,11 @@ func (s *Service) Register(ctx context.Context, email, password string) (User, e
 			"urlshort_hash_failed", "urlshort: password hash failed")
 	}
 	var u User
-	row := s.db.QueryRow(ctx,
-		`INSERT INTO users(email, password_hash) VALUES($1,$2) RETURNING id, email, created_at`,
-		email, hash)
+	row := sqb.QueryRow(ctx, s.db, sqb.Builder.
+		Insert("users").
+		Columns("email", "password_hash").
+		Values(email, hash).
+		Suffix("RETURNING id, email, created_at"))
 	if err := row.Scan(&u.ID, &u.Email, &u.CreatedAt); err != nil {
 		if e, ok := errors.AsType[*xerrs.Error](err); ok && e.Kind == xerrs.KindAlreadyExists {
 			return User{}, xerrs.AlreadyExists("user_exists", "urlshort: email already registered")
@@ -43,9 +48,10 @@ func (s *Service) Register(ctx context.Context, email, password string) (User, e
 // Unauthorized error with the same message for both "user missing"
 // and "wrong password" (avoids user enumeration).
 func (s *Service) Authenticate(ctx context.Context, email, password string) (User, error) {
-	row := s.db.QueryRow(ctx,
-		`SELECT id, email, password_hash, created_at FROM users WHERE email = $1`,
-		email)
+	row := sqb.QueryRow(ctx, s.db, sqb.Builder.
+		Select("id", "email", "password_hash", "created_at").
+		From("users").
+		Where(sq.Eq{"email": email}))
 	var (
 		u    User
 		hash string
@@ -62,8 +68,10 @@ func (s *Service) Authenticate(ctx context.Context, email, password string) (Use
 // ByID looks up a user by ID. Used by the ClaimsRefresher to rebuild
 // custom claims on /auth/refresh.
 func (s *Service) ByID(ctx context.Context, id string) (User, error) {
-	row := s.db.QueryRow(ctx,
-		`SELECT id, email, created_at FROM users WHERE id = $1`, id)
+	row := sqb.QueryRow(ctx, s.db, sqb.Builder.
+		Select("id", "email", "created_at").
+		From("users").
+		Where(sq.Eq{"id": id}))
 	var u User
 	if err := row.Scan(&u.ID, &u.Email, &u.CreatedAt); err != nil {
 		return User{}, xerrs.NotFound("user_not_found", "urlshort: user not found")
