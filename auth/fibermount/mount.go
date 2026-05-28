@@ -12,8 +12,9 @@ import (
 )
 
 // MountMiddlewareFactories registers bearer / require_scope / require_role
-// against eng under those three fixed names. For custom names, register the
-// individual *Factory methods manually using fibermap.RegisterMiddlewareFactory.
+// / rate_limit against eng under those fixed names. For custom names,
+// register the individual *Factory functions manually using
+// fibermap.RegisterMiddlewareFactory.
 //
 // T is the engine's per-request data type; C is auth's custom-claims type.
 // They are independent.
@@ -21,6 +22,7 @@ func MountMiddlewareFactories[T, C any](eng *fibermap.Engine[T], a *auth.Auth[C]
 	fibermap.RegisterMiddlewareFactory(eng, "bearer", adapt[T](a.BearerFactory))
 	fibermap.RegisterMiddlewareFactory(eng, "require_scope", adapt[T](a.RequireScopeFactory))
 	fibermap.RegisterMiddlewareFactory(eng, "require_role", adapt[T](a.RequireRoleFactory))
+	fibermap.RegisterMiddlewareFactory(eng, "rate_limit", adapt[T](auth.RateLimitFactory))
 	return nil
 }
 

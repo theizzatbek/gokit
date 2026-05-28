@@ -196,6 +196,54 @@ authObj.SetClaimsRefresher(func(ctx context.Context, subject string) (auth.Login
 
 Without `SetClaimsRefresher`, refreshed access tokens carry only the rotated record's Subject and empty Scopes/Roles/Custom.
 
+### Rate limiting
+
+Token-bucket rate limiter, mountable as plain fiber middleware or as a
+fibermap factory under the name `rate_limit`. Two key strategies ship
+out of the box; bring your own for custom keys (tenant id, route+IP
+tuple, etc.).
+
+```go
+// Per-IP — typical for anonymous endpoints (login, register).
+app.Post("/auth/login",
+    auth.RateLimit(5, 10),    // 5 req/s sustained, burst 10
+    loginHandler)
+
+// Per-subject (falls back to IP when anonymous).
+//   Mount auth.Bearer BEFORE so the principal is populated.
+app.Use(authObj.Bearer(auth.BearerOptional))
+app.Get("/api/heavy", authObj.RateLimitBySubject(2, 5), heavyHandler)
+
+// Custom key.
+app.Post("/webhook",
+    auth.RateLimitBy(100, 200, func(c *fiber.Ctx) string {
+        return c.Get("X-Tenant-ID")  // tenant-scoped bucket
+    }),
+    webhookHandler)
+```
+
+Declarative via `routes.yaml` after `fibermount.MountMiddlewareFactories`:
+
+```yaml
+groups:
+  - prefix: /auth
+    routes:
+      - method: POST
+        path: /login
+        handler: users.login
+        middleware:
+          - rate_limit: ["5", "10"]   # rps, burst — IP-keyed
+```
+
+**On exceeded limit:** `*errs.Error{KindRateLimited, Code: "rate_limited"}`
+→ HTTP 429 with a conservative `Retry-After` header.
+
+**Memory note:** limiters are stored in an in-process `sync.Map` keyed by
+the resolved key. No eviction. For services facing effectively unbounded
+IP space (public internet, no upstream proxy / WAF), front the kit with
+a dedicated rate limiter (envoy, redis-cell, Cloudflare, …) or wrap
+`RateLimitBy` with your own LRU + cleanup.
+
 ### Refresh-token rotation + reuse detection
 
 Refresh tokens are single-use. `auth.IssueRefresh` (or `RotateRefresh` for
