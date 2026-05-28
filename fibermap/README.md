@@ -147,6 +147,46 @@ fibermap.RegisterHandlerWithBody(eng, "tasks.create",
 
 Sibling helpers: `RegisterHandlerWithQuery`, `RegisterHandlerWithParams`, `RegisterHandlerWithHeaders`. All run `eng.validator` against the decoded struct before invoking the handler. Bind failures bubble up as `*errs.Error{Kind: Validation}` mapped to 400.
 
+### Combined binders — `RegisterHandlerWithInput`
+
+When one endpoint needs more than one of `{body, params, query, headers}`
+typed together — e.g. PATCH /things/:id with body, path id, and a query
+filter — use `RegisterHandlerWithInput`. The Input struct declares any
+combination of fields named exactly `Body`, `Params`, `Query`, `Headers`:
+
+```go
+type UpdateThingInput struct {
+    Body   UpdateBody       // {"title": "...", "tags": [...]}
+    Params struct {         // /things/:id
+        ID string `params:"id" validate:"required,uuid"`
+    }
+    Query struct {          // ?notify=true
+        Notify bool `query:"notify"`
+    }
+}
+
+fibermap.RegisterHandlerWithInput(eng, "things.update",
+    func(c *fibermap.Context[AppCtx], in UpdateThingInput) error {
+        // in.Body, in.Params, in.Query already parsed + validated.
+        return c.JSON(svc.Update(in.Params.ID, in.Body, in.Notify))
+    })
+```
+
+The kit reflects on Input **once at registration**, builds the binder list,
+and re-uses it per request — no reflection cost in the hot path beyond a
+field index lookup per recognised field. Fields with names outside the
+reserved set are ignored.
+
+Each recognised field auto-attaches its matching `With*` option, so OpenAPI
+generation sees the full set of schemas without the caller threading any
+opts. Validation flows through `eng.validator` exactly as for the
+single-source variants.
+
+**Misuse panics at registration:**
+- `Input` is not a struct.
+- No recognised field (use plain `RegisterHandler` instead).
+- A recognised field whose type is not a struct.
+
 ### Factory middleware (parameterised)
 
 ```go

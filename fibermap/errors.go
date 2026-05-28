@@ -56,4 +56,5 @@ const (
 	// register stage
 	CodeDuplicateRegistration = "duplicate_registration"
 	CodeRegisterAfterMount    = "register_after_mount"
+	CodeRegisterMisuse        = "register_misuse"
 )
