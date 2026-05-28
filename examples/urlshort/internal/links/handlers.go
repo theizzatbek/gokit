@@ -23,17 +23,21 @@ func NewHandler(svc *Service, shortURLBase string) *Handler {
 
 // RegisterHandlers wires every link endpoint by name onto eng.
 //
-// links.update is the showcase for fibermap.RegisterHandlerWithInput:
-// PATCH /links/:code combines a path param (the code) with a JSON body
+// Handlers that read :code use RegisterHandlerWithParams so the value
+// is parsed + validated (len=6, alphanum) by the bind layer before the
+// handler runs — invalid codes return 400 without touching the service.
+//
+// links.update showcases fibermap.RegisterHandlerWithInput: PATCH
+// /links/:code combines the path param (CodeParams) with a JSON body
 // (UpdateRequest), and a single UpdateInput struct binds + validates
-// both in one call.
+// both at once.
 func RegisterHandlers(eng *fibermap.Engine[appctx.AppCtx], svc *Service, shortURLBase string) {
 	h := NewHandler(svc, shortURLBase)
 	fibermap.RegisterHandlerWithBody(eng, "links.create", h.Create)
 	fibermap.RegisterHandler(eng, "links.list", h.List)
-	fibermap.RegisterHandler(eng, "links.redirect", h.Redirect)
-	fibermap.RegisterHandler(eng, "links.stats", h.Stats)
-	fibermap.RegisterHandler(eng, "links.delete", h.Delete)
+	fibermap.RegisterHandlerWithParams(eng, "links.redirect", h.Redirect)
+	fibermap.RegisterHandlerWithParams(eng, "links.stats", h.Stats)
+	fibermap.RegisterHandlerWithParams(eng, "links.delete", h.Delete)
 	fibermap.RegisterHandlerWithInput(eng, "links.update", h.Update)
 }
 
@@ -63,8 +67,8 @@ func (h *Handler) List(c *fibermap.Context[appctx.AppCtx]) error {
 
 // Redirect handles GET /:code — public 302 to the original URL,
 // recording a visit asynchronously.
-func (h *Handler) Redirect(c *fibermap.Context[appctx.AppCtx]) error {
-	l, err := h.svc.IncVisit(c.UserContext(), c.Params("code"), c.Get("User-Agent"), c.IP())
+func (h *Handler) Redirect(c *fibermap.Context[appctx.AppCtx], p CodeParams) error {
+	l, err := h.svc.IncVisit(c.UserContext(), p.Code, c.Get("User-Agent"), c.IP())
 	if err != nil {
 		return err
 	}
@@ -72,8 +76,8 @@ func (h *Handler) Redirect(c *fibermap.Context[appctx.AppCtx]) error {
 }
 
 // Stats handles GET /links/:code/stats — owner-only visit metrics.
-func (h *Handler) Stats(c *fibermap.Context[appctx.AppCtx]) error {
-	l, err := h.svc.GetByCode(c.UserContext(), c.Params("code"))
+func (h *Handler) Stats(c *fibermap.Context[appctx.AppCtx], p CodeParams) error {
+	l, err := h.svc.GetByCode(c.UserContext(), p.Code)
 	if err != nil {
 		return err
 	}
@@ -89,8 +93,8 @@ func (h *Handler) Stats(c *fibermap.Context[appctx.AppCtx]) error {
 }
 
 // Delete handles DELETE /links/:code — owner-only removal.
-func (h *Handler) Delete(c *fibermap.Context[appctx.AppCtx]) error {
-	if err := h.svc.Delete(c.UserContext(), c.Params("code"), c.Data.UserID); err != nil {
+func (h *Handler) Delete(c *fibermap.Context[appctx.AppCtx], p CodeParams) error {
+	if err := h.svc.Delete(c.UserContext(), p.Code, c.Data.UserID); err != nil {
 		return err
 	}
 	return c.SendStatus(204)
