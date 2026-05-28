@@ -221,14 +221,31 @@ func (g *Generator[T]) buildOperation(r fibermap.RouteInfo, components *Componen
 		Responses:   map[string]Response{},
 	}
 
-	// Path params from the original Fiber-style route ("/users/:id").
-	for _, p := range extractPathParams(r.Path) {
-		op.Parameters = append(op.Parameters, Parameter{
-			Name:     p,
-			In:       "path",
-			Required: true,
-			Schema:   map[string]any{"type": "string"},
-		})
+	// Path params. When the handler declared WithParams(Req{}), use the
+	// struct's reflected schema so validate-derived constraints and
+	// descriptions appear in the spec. Otherwise fall back to plain
+	// string stubs synthesised from the URL pattern.
+	meta := g.eng.HandlerMeta(r.Handler)
+	if meta != nil && meta.Params != nil {
+		params, err := g.reflectParams(meta.Params, "params", "path")
+		if err != nil {
+			return nil, fmt.Errorf("params: %w", err)
+		}
+		// Mark path params as required regardless of struct presence —
+		// OpenAPI mandates required=true for `in: path`.
+		for i := range params {
+			params[i].Required = true
+		}
+		op.Parameters = append(op.Parameters, params...)
+	} else {
+		for _, p := range extractPathParams(r.Path) {
+			op.Parameters = append(op.Parameters, Parameter{
+				Name:     p,
+				In:       "path",
+				Required: true,
+				Schema:   map[string]any{"type": "string"},
+			})
+		}
 	}
 
 	// Security: any middleware in this route's chain that's mapped
@@ -260,7 +277,8 @@ func (g *Generator[T]) buildOperation(r fibermap.RouteInfo, components *Componen
 
 	// Schemas registered alongside the handler via
 	// fibermap.WithBody / WithQuery / WithHeaders / WithResponse.
-	if meta := g.eng.HandlerMeta(r.Handler); meta != nil {
+	// (meta was already resolved above for WithParams handling.)
+	if meta != nil {
 		if meta.Body != nil {
 			schema, err := g.reflectSchema(meta.Body, components)
 			if err != nil {
@@ -341,8 +359,8 @@ func (g *Generator[T]) reflectSchema(model any, components *Components) (map[str
 
 // reflectParams turns a struct's fields into a slice of OpenAPI
 // Parameters. `tagName` is the struct-tag key fibermap uses
-// (`query`, `reqHeader`); `in` is the OpenAPI parameter location
-// (`query`, `header`).
+// (`query`, `reqHeader`, `params`); `in` is the OpenAPI parameter
+// location (`query`, `header`, `path`).
 func (g *Generator[T]) reflectParams(model any, tagName, in string) ([]Parameter, error) {
 	s := g.reflector.Reflect(model)
 	raw, err := json.Marshal(s)
@@ -352,6 +370,18 @@ func (g *Generator[T]) reflectParams(model any, tagName, in string) ([]Parameter
 	var asMap map[string]any
 	if err := json.Unmarshal(raw, &asMap); err != nil {
 		return nil, err
+	}
+	// The reflector emits {$ref:"#/$defs/Name", $defs:{Name:{properties,
+	// required, …}}} for named struct types — dereference once so we can
+	// read properties at the top level. Anonymous or inline structs land
+	// directly with properties at the top.
+	if ref, ok := asMap["$ref"].(string); ok {
+		const prefix = "#/$defs/"
+		if defs, ok := asMap["$defs"].(map[string]any); ok && strings.HasPrefix(ref, prefix) {
+			if inner, ok := defs[strings.TrimPrefix(ref, prefix)].(map[string]any); ok {
+				asMap = inner
+			}
+		}
 	}
 	props, _ := asMap["properties"].(map[string]any)
 	required := map[string]bool{}

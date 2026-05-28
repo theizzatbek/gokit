@@ -152,6 +152,63 @@ type CreateTaskReq struct {
 	Priority int    `json:"priority,omitempty" validate:"min=0,max=5"`
 }
 
+type GetPostParams struct {
+	ID     string `params:"id"     json:"id"     validate:"required,uuid"`
+	PostID string `params:"postId" json:"postId" validate:"required"`
+}
+
+func TestGenerate_WithParams_EnrichesPathParams(t *testing.T) {
+	e := buildEngine(t, `
+groups:
+  - routes:
+      - method: GET
+        path: /users/:id/posts/:postId
+        handler: posts.get
+        name: posts.get
+`, func(e *fibermap.Engine[appCtx]) {
+		e.RegisterHandler("posts.get",
+			func(c *fibermap.Context[appCtx]) error { return nil },
+			fibermap.WithParams(GetPostParams{}),
+		)
+	})
+
+	b, err := openapi.NewGenerator(e).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := decode(t, b)
+	op := path(doc, "paths", "/users/{id}/posts/{postId}", "get").(map[string]any)
+	params := op["parameters"].([]any)
+	if len(params) != 2 {
+		t.Fatalf("expected 2 path params, got %d: %v", len(params), params)
+	}
+
+	byName := map[string]map[string]any{}
+	for _, p := range params {
+		pm := p.(map[string]any)
+		byName[pm["name"].(string)] = pm
+	}
+
+	for _, name := range []string{"id", "postId"} {
+		pm, ok := byName[name]
+		if !ok {
+			t.Errorf("missing path param %q", name)
+			continue
+		}
+		if pm["in"] != "path" {
+			t.Errorf("param %q in = %v, want path", name, pm["in"])
+		}
+		if pm["required"] != true {
+			t.Errorf("param %q required = %v, want true (OpenAPI mandates required=true for in:path)", name, pm["required"])
+		}
+		// The schema must come from the struct, not the plain string stub.
+		schema, _ := pm["schema"].(map[string]any)
+		if schema == nil {
+			t.Errorf("param %q has no schema", name)
+		}
+	}
+}
+
 type TaskResponse struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
