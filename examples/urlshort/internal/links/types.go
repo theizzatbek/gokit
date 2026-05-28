@@ -19,6 +19,16 @@ type CreateRequest struct {
 	URL string `json:"url" validate:"required,url"`
 }
 
+// CodeParams is the path-parameter struct shared by every endpoint that
+// addresses a link by its 6-char base62 code: /:code, /links/:code/stats,
+// DELETE /links/:code. fibermap.RegisterHandlerWithParams uses it both
+// to validate the param (rejects malformed codes before reaching the
+// service layer) and to enrich the OpenAPI spec with the validate-tag
+// constraints.
+type CodeParams struct {
+	Code string `params:"code" json:"code" validate:"required,len=6,alphanum"`
+}
+
 type CreateResponse struct {
 	Code        string `json:"code"`
 	ShortURL    string `json:"short_url"`
@@ -41,9 +51,7 @@ type UpdateRequest struct {
 // registration and binds + validates both fields per request.
 type UpdateInput struct {
 	Body   UpdateRequest
-	Params struct {
-		Code string `params:"code" json:"code" validate:"required,len=6,alphanum"`
-	}
+	Params CodeParams
 }
 
 type StatsResponse struct {
