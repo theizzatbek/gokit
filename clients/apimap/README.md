@@ -63,7 +63,7 @@ clients:
     backoff_max: <duration>                 # optional → httpc.Config.BackoffMax
     default_headers:                        # optional, applied to every endpoint
       <Header-Name>: <value>
-    auth:                                   # optional; one of basic|bearer|header|none
+    auth:                                   # optional; one of basic|bearer|header|custom|none
       type: basic
       username: <string>
       password: <string>
@@ -74,6 +74,9 @@ clients:
     #   type: header
     #   name: <Header-Name>
     #   value: <string>
+    # — or —
+    #   type: custom
+    #   name: <signer-id>   # must match a RegisterAuth registration
     # — or —
     #   type: none
     endpoints:
@@ -178,16 +181,67 @@ At Build, endpoints with overrides get their own `*http.Client` (via `httpc.New`
 
 ### Auth declared in YAML
 
-Three shapes, all read secrets from env:
+Three header-style shapes plus one extensible shape:
 
 ```yaml
-auth: {type: basic, username: ${BASIC_USER}, password: ${BASIC_PASS}}
+auth: {type: basic,  username: ${BASIC_USER}, password: ${BASIC_PASS}}
 auth: {type: bearer, token: ${API_TOKEN}}
 auth: {type: header, name: X-API-Key, value: ${API_KEY}}
-auth: {type: none}     # or omit auth entirely
+auth: {type: custom, name: payments_hmac}    # see below
+auth: {type: none}                            # or omit auth entirely
 ```
 
-The resolved header is applied automatically before sending. `Call.Headers["Authorization"]` can still override per-call.
+For `basic` / `bearer` / `header` the resolved header is applied automatically before sending. `Call.Headers["Authorization"]` can still override per-call.
+
+### Custom signing (HMAC, mTLS-signed payloads, request-bound signatures)
+
+When the upstream needs a signature that depends on the per-request method, path, body, timestamp or nonce — anything that cannot precompute into a static header — declare `auth.type=custom` and register a request-mutating function under the same `name`:
+
+```yaml
+clients:
+  - name: payments
+    base_url: ${PAYMENTS_URL}
+    auth:
+      type: custom
+      name: payments_hmac
+    endpoints:
+      - {name: charge, method: POST, path: /v1/charges, encode: json, decode: json}
+```
+
+```go
+eng := apimap.New()
+_ = eng.LoadFile("clients.yaml")
+apimap.RegisterAuth(eng, "payments_hmac", func(req *http.Request) error {
+    ts := strconv.FormatInt(time.Now().Unix(), 10)
+    // Compute HMAC over method + path + ts + body (read via GetBody so the
+    // body stream stays available for the actual send + future retries).
+    var bodyBytes []byte
+    if req.GetBody != nil {
+        b, _ := req.GetBody()
+        if b != nil {
+            defer b.Close()
+            bodyBytes, _ = io.ReadAll(b)
+        }
+    }
+    mac := hmac.New(sha256.New, []byte(os.Getenv("PAYMENTS_SECRET")))
+    fmt.Fprintf(mac, "%s\n%s\n%s\n", req.Method, req.URL.Path, ts)
+    mac.Write(bodyBytes)
+    req.Header.Set("X-Timestamp", ts)
+    req.Header.Set("X-Signature", hex.EncodeToString(mac.Sum(nil)))
+    return nil
+})
+client, err := eng.Build(...)
+```
+
+**Layering and retries.** The signer sits *below* httpc's retry layer — it runs once per network attempt. If the server returns a transient 5xx/429 and httpc retries, the signer re-fires with a fresh `*http.Request` whose body is restored from `req.GetBody`, producing a fresh signature/timestamp. Timestamp-bearing schemes with tight clock-skew windows survive retries.
+
+**Reading the body.** Use `req.GetBody()` (returns a fresh `io.ReadCloser`) — never `req.Body` directly, otherwise the stream is consumed before the upstream sees it. `httpc` populates `GetBody` for all body-carrying methods.
+
+**Errors.** If `fn` returns an error, the request never leaves; the error surfaces as the `Do` / `Decode` / `Exchange` return value. Wrap with `*errs.Error{KindInternal}` if you want a stable Code.
+
+**Build-time validation.** If YAML references `auth.name=foo` but `RegisterAuth(eng, "foo", ...)` was never called, `Build` returns `*errs.Error{Code: "apimap_unknown_custom_auth"}`. Duplicate `RegisterAuth` for the same name panics at registration time (programmer error).
+
+**Per-client only.** Each client picks its own signer; endpoints inside a client all share that client's signer. If you need different signing schemes for different endpoints of the same API, split them into separate clients.
 
 ### Body encoding modes
 
@@ -280,7 +334,7 @@ out, _ := apimap.Decode[Resp](context.Background(), client, "ml.get", apimap.Cal
 - **No codegen.** Runtime dispatch only — types are registered at startup, not generated.
 - **No hot-reload.** YAML loaded once at startup.
 - **No per-endpoint metrics out of the box** (handled by `clients/httpc` at the underlying level).
-- **OAuth2/refresh-token flows out of scope.** Use `auth:` for one static credential; wrap your own `http.RoundTripper` via `WithBaseTransport` for token rotation.
+- **OAuth2/refresh-token flows out of scope.** Use `auth:` for one static credential; for dynamic-secret refresh on each call (e.g. periodic token rotation) declare `auth.type=custom` and have your signer fetch the current token, or wrap `http.RoundTripper` via `WithBaseTransport`.
 - **Per-endpoint `auth:` blocks not supported.** Auth is a property of the upstream API as a whole; override per-call via `Call.Headers`.
 - **Streaming uploads** beyond `encode: raw` with an `io.Reader` are out of scope.
 

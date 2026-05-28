@@ -30,14 +30,14 @@ type rawClient struct {
 }
 
 // rawAuth carries the YAML auth: block. type discriminator picks one
-// of {basic, bearer, header, none}; per-type fields are checked at
-// validate() time.
+// of {basic, bearer, header, custom, none}; per-type fields are checked
+// at validate() time.
 type rawAuth struct {
 	Type     string `yaml:"type"`
 	Username string `yaml:"username,omitempty"` // basic
 	Password string `yaml:"password,omitempty"` // basic
 	Token    string `yaml:"token,omitempty"`    // bearer
-	Name     string `yaml:"name,omitempty"`     // header
+	Name     string `yaml:"name,omitempty"`     // header (header-name) OR custom (signer id)
 	Value    string `yaml:"value,omitempty"`    // header
 }
 
@@ -83,7 +83,7 @@ var validDecodings = map[string]struct{}{
 
 var validAuthTypes = map[string]struct{}{
 	"":     {},
-	"none": {}, "basic": {}, "bearer": {}, "header": {},
+	"none": {}, "basic": {}, "bearer": {}, "header": {}, "custom": {},
 }
 
 // validate checks the auth block per its type discriminator. Returns nil
@@ -95,7 +95,7 @@ func (a *rawAuth) validate(clientName string) error {
 	t := strings.ToLower(a.Type)
 	if _, ok := validAuthTypes[t]; !ok {
 		return xerrs.Validationf(CodeAuthInvalidType,
-			"apimap: client %q auth.type %q not in {basic, bearer, header, none}",
+			"apimap: client %q auth.type %q not in {basic, bearer, header, custom, none}",
 			clientName, a.Type)
 	}
 	switch t {
@@ -115,6 +115,11 @@ func (a *rawAuth) validate(clientName string) error {
 		if a.Name == "" || a.Value == "" {
 			return xerrs.Validationf(CodeAuthMissingField,
 				"apimap: client %q auth.type=header requires name and value", clientName)
+		}
+	case "custom":
+		if a.Name == "" {
+			return xerrs.Validationf(CodeAuthMissingField,
+				"apimap: client %q auth.type=custom requires name (the id of a RegisterAuth registration)", clientName)
 		}
 	}
 	return nil

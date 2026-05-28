@@ -39,10 +39,12 @@ const (
 // Auth + env-var substitution error codes (returned from LoadFile /
 // LoadBytes / Build).
 const (
-	CodeAuthInvalidType  = "apimap_auth_invalid_type"
-	CodeAuthMissingField = "apimap_auth_missing_field"
-	CodeEnvVarUnset      = "apimap_env_var_unset"
-	CodeEnvVarMalformed  = "apimap_env_var_malformed"
+	CodeAuthInvalidType     = "apimap_auth_invalid_type"
+	CodeAuthMissingField    = "apimap_auth_missing_field"
+	CodeUnknownCustomAuth   = "apimap_unknown_custom_auth"
+	CodeDuplicateCustomAuth = "apimap_duplicate_custom_auth"
+	CodeEnvVarUnset         = "apimap_env_var_unset"
+	CodeEnvVarMalformed     = "apimap_env_var_malformed"
 )
 
 // statusToKind maps an HTTP status code to the errs.Kind we surface from
