@@ -280,7 +280,11 @@ func (s *Service[T, C]) buildNATSMap(ctx context.Context) error {
 
 func (s *Service[T, C]) buildEngine() error {
 	s.Engine = fibermap.Default[T]()
-	s.Engine.SetValidator(validator.New(validator.WithRequiredStructEnabled()))
+	if s.opts.validator != nil {
+		s.Engine.SetValidator(s.opts.validator)
+	} else {
+		s.Engine.SetValidator(validator.New(validator.WithRequiredStructEnabled()))
+	}
 	return nil
 }
 
