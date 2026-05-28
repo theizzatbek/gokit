@@ -1,6 +1,10 @@
 package links
 
-import "time"
+import (
+	"time"
+
+	"github.com/theizzatbek/gokit/db/sqb"
+)
 
 type Link struct {
 	ID            string     `json:"id"`
@@ -27,6 +31,18 @@ type CreateRequest struct {
 // constraints.
 type CodeParams struct {
 	Code string `params:"code" json:"code" validate:"required,len=6,alphanum"`
+}
+
+// ListParams is the query-param struct for GET /links. It composes the
+// kit's sqb.Page (limit, offset) with an endpoint-specific search term
+// — Go struct embedding makes the kit's primitive extensible:
+// fibermap's QueryParser walks into the embedded fields, and
+// validator's `validate:` tags compose recursively.
+//
+// Wire format: ?limit=20&offset=0&q=keyword
+type ListParams struct {
+	sqb.Page
+	Q string `query:"q" json:"q,omitempty" validate:"omitempty,max=100"`
 }
 
 type CreateResponse struct {

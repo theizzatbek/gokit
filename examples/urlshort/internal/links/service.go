@@ -57,13 +57,11 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 			return Link{}, xerrs.Wrap(err, xerrs.KindInternal,
 				"urlshort_code_rand_failed", "urlshort: random failed")
 		}
-		var l Link
-		row := sqb.QueryRow(ctx, s.db, sqb.Builder.
+		l, err := sqb.QueryOne[Link](ctx, s.db, sqb.Builder.
 			Insert("links").
 			Columns("user_id", "code", "original_url", "title", "description", "image_url").
 			Values(userID, code, originalURL, title, desc, img).
-			Suffix(linkReturning))
-		err = scanLink(row, &l)
+			Suffix(linkReturning), scanLink)
 		if err == nil {
 			s.pub.LinkCreated(ctx, events.LinkCreated{
 				LinkID:    l.ID,
@@ -86,12 +84,11 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 
 // GetByCode returns the link or NotFound.
 func (s *Service) GetByCode(ctx context.Context, code string) (Link, error) {
-	row := sqb.QueryRow(ctx, s.db, sqb.Builder.
+	l, err := sqb.QueryOne[Link](ctx, s.db, sqb.Builder.
 		Select(linkColumns...).
 		From("links").
-		Where(sq.Eq{"code": code}))
-	var l Link
-	if err := scanLink(row, &l); err != nil {
+		Where(sq.Eq{"code": code}), scanLink)
+	if err != nil {
 		return Link{}, xerrs.NotFound("link_not_found", "urlshort: link not found")
 	}
 	return l, nil
@@ -100,14 +97,13 @@ func (s *Service) GetByCode(ctx context.Context, code string) (Link, error) {
 // IncVisit bumps visit_count and last_visited_at, then publishes
 // urlshort.link.visited.
 func (s *Service) IncVisit(ctx context.Context, code, userAgent, ip string) (Link, error) {
-	row := sqb.QueryRow(ctx, s.db, sqb.Builder.
+	l, err := sqb.QueryOne[Link](ctx, s.db, sqb.Builder.
 		Update("links").
 		Set("visit_count", sq.Expr("visit_count + 1")).
 		Set("last_visited_at", sq.Expr("now()")).
 		Where(sq.Eq{"code": code}).
-		Suffix(linkReturning))
-	var l Link
-	if err := scanLink(row, &l); err != nil {
+		Suffix(linkReturning), scanLink)
+	if err != nil {
 		return Link{}, xerrs.NotFound("link_not_found", "urlshort: link not found")
 	}
 	s.pub.LinkVisited(ctx, events.LinkVisited{
@@ -119,16 +115,29 @@ func (s *Service) IncVisit(ctx context.Context, code, userAgent, ip string) (Lin
 	return l, nil
 }
 
-// ListByUser returns the user's links ordered by created_at desc.
-// Uses ReadQuery so the read can ride a replica when configured —
-// listings tolerate the ~replica-lag window of staleness.
-func (s *Service) ListByUser(ctx context.Context, userID string) ([]Link, error) {
-	sqlStr, args, err := sqb.Builder.
+// ListByUser returns the user's links ordered by created_at desc with
+// pagination + optional case-insensitive search on title / original_url
+// applied via params. Uses ReadQuery so the read can ride a replica
+// when configured — listings tolerate the ~replica-lag window of
+// staleness. sqb.ScanAll dissolves the iter loop while keeping the
+// ReadQuery path explicit (the higher-level sqb.QueryAll routes to the
+// primary pool).
+func (s *Service) ListByUser(ctx context.Context, userID string, params ListParams) ([]Link, error) {
+	b := sqb.Builder.
 		Select(linkColumns...).
 		From("links").
 		Where(sq.Eq{"user_id": userID}).
-		OrderBy("created_at DESC").
-		ToSql()
+		OrderBy("created_at DESC")
+	if params.Q != "" {
+		// Postgres ILIKE for case-insensitive substring search. Both
+		// columns are user-visible so it makes sense to search both.
+		needle := "%" + params.Q + "%"
+		b = b.Where(sq.Or{
+			sq.ILike{"title": needle},
+			sq.ILike{"original_url": needle},
+		})
+	}
+	sqlStr, args, err := params.Apply(b).ToSql()
 	if err != nil {
 		return nil, err
 	}
@@ -136,16 +145,7 @@ func (s *Service) ListByUser(ctx context.Context, userID string) ([]Link, error)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Link{}
-	for rows.Next() {
-		var l Link
-		if err := scanLink(rows, &l); err != nil {
-			return nil, err
-		}
-		out = append(out, l)
-	}
-	return out, rows.Err()
+	return sqb.ScanAll[Link](rows, scanLink)
 }
 
 // Update applies the partial UpdateRequest to the link identified by code,
@@ -176,8 +176,8 @@ func (s *Service) Update(ctx context.Context, code, userID string, req UpdateReq
 		return l, nil
 	}
 
-	var l Link
-	if err := scanLink(sqb.QueryRow(ctx, s.db, b), &l); err != nil {
+	l, err := sqb.QueryOne[Link](ctx, s.db, b, scanLink)
+	if err != nil {
 		// UPDATE ... RETURNING produced no row → either no such code OR
 		// code exists but belongs to a different user. Distinguish for
 		// caller via a public-read lookup.

@@ -34,7 +34,7 @@ func NewHandler(svc *Service, shortURLBase string) *Handler {
 func RegisterHandlers(eng *fibermap.Engine[appctx.AppCtx], svc *Service, shortURLBase string) {
 	h := NewHandler(svc, shortURLBase)
 	fibermap.RegisterHandlerWithBody(eng, "links.create", h.Create)
-	fibermap.RegisterHandler(eng, "links.list", h.List)
+	fibermap.RegisterHandlerWithQuery(eng, "links.list", h.List)
 	fibermap.RegisterHandlerWithParams(eng, "links.redirect", h.Redirect)
 	fibermap.RegisterHandlerWithParams(eng, "links.stats", h.Stats)
 	fibermap.RegisterHandlerWithParams(eng, "links.delete", h.Delete)
@@ -56,9 +56,16 @@ func (h *Handler) Create(c *fibermap.Context[appctx.AppCtx], body CreateRequest)
 	})
 }
 
-// List handles GET /links — returns links owned by the current user.
-func (h *Handler) List(c *fibermap.Context[appctx.AppCtx]) error {
-	ls, err := h.svc.ListByUser(c.UserContext(), c.Data.UserID)
+// List handles GET /links?limit=&offset=&q= — returns the user's links
+// paginated, optionally filtered by case-insensitive substring search
+// on title and original_url.
+//
+// ListParams is the local composition of the kit's sqb.Page (limit,
+// offset) and an endpoint-specific Q field — Go struct embedding lets
+// the kit primitive stay tiny while the service layers on its own
+// filters per endpoint.
+func (h *Handler) List(c *fibermap.Context[appctx.AppCtx], p ListParams) error {
+	ls, err := h.svc.ListByUser(c.UserContext(), c.Data.UserID, p)
 	if err != nil {
 		return err
 	}

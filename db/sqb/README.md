@@ -32,6 +32,71 @@ err := d.Tx(ctx, func(tx *db.Tx) error {
 })
 ```
 
+## Pagination
+
+`sqb.Page` is a stock query-param shape for list endpoints. Combined with
+`sqb.QueryAll[T]` (see below), a list handler is 4–5 lines of intent:
+
+```go
+func (h *Handler) List(c *fibermap.Context[T], p sqb.Page) error {
+    b := sqb.Builder.
+        Select(itemColumns...).
+        From("items").
+        Where(sq.Eq{"user_id": c.Data.UserID}).
+        OrderBy("created_at DESC")   // sort is the caller's call — allowlist columns
+    items, err := sqb.QueryAll[Item](c.UserContext(), h.db, p.Apply(b), scanItem)
+    if err != nil { return err }
+    return c.JSON(items)
+}
+fibermap.RegisterHandlerWithQuery(eng, "items.list", h.List)
+// → GET /items?limit=50&offset=100
+```
+
+(If you ALSO need a body / path params alongside pagination, use
+`RegisterHandlerWithInput` and embed `Query sqb.Page` in the Input struct.)
+
+| Field | Tag | Validation | Default |
+|---|---|---|---|
+| `Limit` | `query:"limit"` | `omitempty,min=1,max=100` | `sqb.PageDefaultLimit` (20) |
+| `Offset` | `query:"offset"` | `omitempty,min=0` | 0 |
+
+`Apply` is belt-and-suspenders: even if the engine validator is disabled, it
+clamps `Limit` to `sqb.PageMaxLimit` (100) and `Offset` to ≥0.
+
+**ORDER BY is intentionally NOT part of `Page`** — sort columns are an
+SQL-injection surface. Each list endpoint should decide its own allowlist and
+append `OrderBy("column DIR")` to the builder itself.
+
+## Typed scan helpers — `QueryAll[T]` / `QueryOne[T]`
+
+Generic helpers that fold the standard pgx scan boilerplate (`Query` →
+`defer Close` → `for rows.Next()` → `rows.Scan` → `rows.Err`) into one call:
+
+```go
+// SELECT many rows.
+items, err := sqb.QueryAll[Item](ctx, db,
+    sqb.Builder.Select(...).From("items").Where(sq.Eq{"user_id": uid}),
+    scanItem)
+
+// SELECT / INSERT … RETURNING / UPDATE … RETURNING one row.
+user, err := sqb.QueryOne[User](ctx, db,
+    sqb.Builder.Insert("users").Columns("email").Values(email).
+        Suffix("RETURNING id, email, created_at"),
+    scanUser)
+```
+
+The scan function takes `pgx.Row` so the SAME helper works for both — and
+matches the signature pgx.Rows already provides:
+
+```go
+func scanItem(r pgx.Row, dst *Item) error {
+    return r.Scan(&dst.ID, &dst.Name, &dst.CreatedAt)
+}
+```
+
+`QueryOne` surfaces pgx.ErrNoRows as `*errs.Error{KindNotFound}` through the
+underlying `db.Querier`.
+
 ## Notes
 
 - **`sqb.Builder` (not `sq.StatementBuilder`).** It's already wired to `sq.Dollar` placeholders. Using bare squirrel produces `?`-placeholder SQL which Postgres rejects.
