@@ -115,6 +115,7 @@ they return a `TokenPair` and never touch `*fiber.Ctx`.
 | `WithRefreshStore(RefreshStore)` | none | Required for Login/Refresh/Logout. Plug `refreshpg`/`refreshredis`/your own |
 | `WithLogger(*slog.Logger)` | silent | App-level errors |
 | `WithSecurityLogger(*slog.Logger)` | silent | Security-relevant events. **WARN:** `bearer_verify_failed`, `refresh_reused`. **INFO:** `login_success`, `logout`, `logout_all`. Every event carries `ip`, `ua`, `path`; INFO ones add `subject`. See [Security events](#security-events). |
+| `WithMetrics(prometheus.Registerer)` | off | Register Prometheus counters: `auth_tokens_issued_total{op}`, `auth_token_issue_failed_total{op,reason}`, `auth_bearer_verify_total{outcome}`, `auth_refresh_total{outcome}`, `auth_logout_total{scope}`, `auth_ratelimit_denied_total`, `auth_idempotency_total{outcome}`. Pass the shared service registry so a single scrape covers the whole kit. RateLimit/Idempotency counters require the *Auth[C]-bound variants (`a.RateLimit`, `a.Idempotency`); the package-level free functions stay metric-less by design. |
 | `WithCookieDomain(d)`, `WithCookiePath(p)` | "" / "/" | Refresh-cookie scope |
 | `WithCookieSecure(bool)` | true | Force/disable `Secure` flag on refresh cookie |
 | `WithLeeway(d)` | from Config.Leeway | Override leeway after construction |

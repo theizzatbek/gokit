@@ -48,18 +48,22 @@ func RateLimit(rps float64, burst int) fiber.Handler {
 }
 
 // RateLimit (method form) is the *Auth[C]-bound convenience for the
-// package-level RateLimit. Doesn't read any auth state itself — exists
-// so callers can write authObj.RateLimit(...) consistently alongside
-// authObj.Bearer(...), authObj.IssueLogin etc.
+// package-level RateLimit. Unlike the free function, this variant
+// increments `auth_ratelimit_denied_total` on each rejection when
+// [WithMetrics] was wired — prefer it over the package-level form
+// in services that scrape metrics.
 func (a *Auth[C]) RateLimit(rps float64, burst int) fiber.Handler {
-	return RateLimit(rps, burst)
+	return rateLimitBy(rps, burst, KeyByIP, a.metrics)
 }
 
 // RateLimitBySubject keys the limiter on the authenticated principal.
 // Anonymous requests fall back to client IP. Mount auth.Bearer
 // upstream so the principal is populated when present.
+//
+// Counts denials in `auth_ratelimit_denied_total` when [WithMetrics]
+// is wired.
 func (a *Auth[C]) RateLimitBySubject(rps float64, burst int) fiber.Handler {
-	return RateLimitBy(rps, burst, KeyBySubject[C])
+	return rateLimitBy(rps, burst, KeyBySubject[C], a.metrics)
 }
 
 // RateLimitBy is the explicit-key variant of [RateLimit]. keyFn picks
@@ -74,6 +78,13 @@ func (a *Auth[C]) RateLimitBySubject(rps float64, burst int) fiber.Handler {
 // limiter (envoy, redis-cell, …) or wrap RateLimitBy with your own
 // LRU + cleanup goroutine.
 func RateLimitBy(rps float64, burst int, keyFn KeyFunc) fiber.Handler {
+	return rateLimitBy(rps, burst, keyFn, nil)
+}
+
+// rateLimitBy is the shared implementation; m is the optional
+// authMetrics instance for denial counting (nil-safe via authMetrics
+// receiver methods).
+func rateLimitBy(rps float64, burst int, keyFn KeyFunc, m *authMetrics) fiber.Handler {
 	if keyFn == nil {
 		keyFn = KeyByIP
 	}
@@ -88,6 +99,7 @@ func RateLimitBy(rps float64, burst int, keyFn KeyFunc) fiber.Handler {
 		actual, _ := limiters.LoadOrStore(key, rate.NewLimiter(limit, burst))
 		lim := actual.(*rate.Limiter)
 		if !lim.Allow() {
+			m.incRateLimitDenied()
 			c.Set(fiber.HeaderRetryAfter, retryAfterFor(lim))
 			return xerrs.RateLimited(CodeRateLimited, "too many requests")
 		}
@@ -123,19 +135,40 @@ func retryAfterFor(lim *rate.Limiter) string {
 // fibermap surfaces it at Mount time. To key by subject instead, build
 // a custom factory that calls RateLimitBy with KeyBySubject[YourClaims].
 func RateLimitFactory(args []any) (fiber.Handler, error) {
-	if len(args) != 2 {
-		return nil, xerrs.Internalf(CodeInvalidFactoryArgs,
-			"rate_limit: expected [rps, burst], got %d args", len(args))
-	}
-	rps, err := factoryFloat(args[0], "rate_limit", "rps")
-	if err != nil {
-		return nil, err
-	}
-	burst, err := factoryInt(args[1], "rate_limit", "burst")
+	rps, burst, err := parseRateLimitArgs(args)
 	if err != nil {
 		return nil, err
 	}
 	return RateLimit(rps, burst), nil
+}
+
+// RateLimitFactory (method form) is the *Auth[C]-bound variant of
+// the package-level [RateLimitFactory]. Use this when wiring rate
+// limiting through YAML and you want the resulting limiter to feed
+// `auth_ratelimit_denied_total`. fibermount registers this variant
+// for you when you call MountMiddlewareFactories.
+func (a *Auth[C]) RateLimitFactory(args []any) (fiber.Handler, error) {
+	rps, burst, err := parseRateLimitArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	return a.RateLimit(rps, burst), nil
+}
+
+func parseRateLimitArgs(args []any) (float64, int, error) {
+	if len(args) != 2 {
+		return 0, 0, xerrs.Internalf(CodeInvalidFactoryArgs,
+			"rate_limit: expected [rps, burst], got %d args", len(args))
+	}
+	rps, err := factoryFloat(args[0], "rate_limit", "rps")
+	if err != nil {
+		return 0, 0, err
+	}
+	burst, err := factoryInt(args[1], "rate_limit", "burst")
+	if err != nil {
+		return 0, 0, err
+	}
+	return rps, burst, nil
 }
 
 func factoryFloat(v any, name, field string) (float64, error) {

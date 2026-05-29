@@ -3,6 +3,8 @@ package auth
 import (
 	"log/slog"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Option configures New beyond what Config covers.
@@ -12,6 +14,7 @@ type options struct {
 	refreshStore   RefreshStore
 	logger         *slog.Logger
 	securityLogger *slog.Logger
+	metrics        prometheus.Registerer
 	cookieDomain   string
 	cookiePath     string
 	cookieSecure   *bool // tri-state: nil = default (true)
@@ -36,6 +39,29 @@ func WithLogger(l *slog.Logger) Option { return func(o *options) { o.logger = l 
 // authenticated subject. SIEM / detection-rule consumers should key off
 // the `msg` field on the JSON line. nil = no security log.
 func WithSecurityLogger(l *slog.Logger) Option { return func(o *options) { o.securityLogger = l } }
+
+// WithMetrics enables Prometheus instrumentation. Auth registers the
+// following series on reg:
+//
+//   - auth_tokens_issued_total{op}              login | refresh
+//   - auth_token_issue_failed_total{op,reason}  store | sign
+//   - auth_bearer_verify_total{outcome}         ok | invalid
+//   - auth_refresh_total{outcome}               ok | reused | expired | invalid | missing
+//   - auth_logout_total{scope}                  single | all
+//   - auth_ratelimit_denied_total
+//   - auth_idempotency_total{outcome}           hit | miss | skip
+//
+// Pass the same Registerer you give to db/httpc/nats so a single
+// /metrics scrape covers the whole kit. Without this option auth runs
+// without metrics — the instrumentation hooks no-op in O(1) (nil
+// guard, no labels resolved).
+//
+// To get rate-limit / idempotency counters on YAML-mounted middleware
+// you must additionally register Auth-bound factories — see
+// auth/fibermount.
+func WithMetrics(reg prometheus.Registerer) Option {
+	return func(o *options) { o.metrics = reg }
+}
 
 // WithCookieDomain pins the refresh cookie's Domain attribute. Empty = host-only.
 func WithCookieDomain(d string) Option { return func(o *options) { o.cookieDomain = d } }

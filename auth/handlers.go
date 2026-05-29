@@ -155,6 +155,7 @@ func (a *Auth[C]) Logout(c *fiber.Ctx) error {
 		_ = a.store.RevokeFamily(c.UserContext(), rec.FamilyID)
 		a.maybeSecurityInfo(c, "logout", "subject", rec.Subject)
 	}
+	a.metrics.incLogout("single")
 	a.clearRefreshCookie(c)
 	return c.SendStatus(http.StatusNoContent)
 }
@@ -171,6 +172,7 @@ func (a *Auth[C]) LogoutAll(c *fiber.Ctx) error {
 			return xerrs.Wrap(err, xerrs.KindUnavailable, CodeStoreUnavailable, "refresh store unavailable")
 		}
 	}
+	a.metrics.incLogout("all")
 	a.maybeSecurityInfo(c, "logout_all", "subject", p.Subject)
 	a.clearRefreshCookie(c)
 	return c.SendStatus(http.StatusNoContent)

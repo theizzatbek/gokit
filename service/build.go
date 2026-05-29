@@ -136,7 +136,7 @@ func (s *Service[T, C]) buildAuth() error {
 		Keys:       keySet,
 		AccessTTL:  s.cfg.Auth.AccessTTL,
 		RefreshTTL: s.cfg.Auth.RefreshTTL,
-	}, auth.WithRefreshStore(store), auth.WithLogger(s.logger))
+	}, auth.WithRefreshStore(store), auth.WithLogger(s.logger), auth.WithMetrics(s.metrics))
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindInternal, CodeAuthInvalidKey, "service: auth.New failed")
 	}
