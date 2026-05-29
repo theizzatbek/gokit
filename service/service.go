@@ -50,6 +50,10 @@ type Service[T any, C any] struct {
 	// does). Flushes the OTLP metric pipeline during Close.
 	otelMetricsShutdown func(context.Context) error
 
+	// sentryShutdown is non-nil iff WithSentry was passed. Flushes
+	// pending Sentry events during Close.
+	sentryShutdown func(context.Context) error
+
 	closed bool
 }
 

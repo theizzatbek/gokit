@@ -17,6 +17,7 @@ import (
 	"github.com/theizzatbek/gokit/fibermap/bind"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
 	"github.com/theizzatbek/gokit/otelkit"
+	"github.com/theizzatbek/gokit/sentrykit"
 )
 
 // Option configures service.New beyond what Config covers.
@@ -48,6 +49,8 @@ type options struct {
 	otelMetricsOpts     []otelkit.MetricsOption
 	skipOtelMetrics     bool // suppress the Prometheus→OTel metrics bridge even when WithOtel is set
 	skipRuntimeMetrics  bool // suppress Go runtime + process collector auto-registration
+	sentryDSN           string
+	sentryOpts          []sentrykit.Option
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -197,6 +200,40 @@ func WithOtel(serviceName string, opts ...otelkit.Option) Option {
 	return func(o *options) {
 		o.otelServiceName = serviceName
 		o.otelOpts = opts
+	}
+}
+
+// WithSentry enables Sentry error tracking. dsn is required — an
+// empty DSN trips a sentrykit.Setup error at service.New (refusing
+// to silently disable misconfiguration). Service auto-installs:
+//
+//   - sentrykit.FiberMiddleware as a user-chain middleware. The
+//     middleware clones a per-request sentry.Hub, populates HTTP
+//     scope (method/route/headers/IP/request_id), and captures
+//     panics before re-panicking so fibermap.Recover still owns the
+//     500 response.
+//   - sentrykit.Flush via OnShutdown so a clean Close ships pending
+//     events.
+//
+// 5xx auto-capture requires explicit error-handler wiring — wrap the
+// service's fiber.Config.ErrorHandler with sentrykit.WrapErrorHandler.
+// Service does NOT auto-wrap because not every caller sets a custom
+// error handler.
+//
+//	svc, _ := service.New[AppCtx, Claims](ctx, cfg,
+//	    service.WithSentry(cfg.SentryDSN,
+//	        sentrykit.WithEnvironment(cfg.Env),
+//	        sentrykit.WithRelease(buildSHA),
+//	        sentrykit.WithTag("region", cfg.Region)))
+//
+// When both WithOtel and WithSentry are set, otelfiber is the
+// outermost user-chain layer (prepended by setupOtel) and sentry
+// sits inside it — so every captured event implicitly shares the
+// trace_id of the surrounding OTel span.
+func WithSentry(dsn string, opts ...sentrykit.Option) Option {
+	return func(o *options) {
+		o.sentryDSN = dsn
+		o.sentryOpts = opts
 	}
 }
 
