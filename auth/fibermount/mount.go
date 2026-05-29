@@ -23,6 +23,7 @@ func MountMiddlewareFactories[T, C any](eng *fibermap.Engine[T], a *auth.Auth[C]
 	fibermap.RegisterMiddlewareFactory(eng, "require_scope", adapt[T](a.RequireScopeFactory))
 	fibermap.RegisterMiddlewareFactory(eng, "require_role", adapt[T](a.RequireRoleFactory))
 	fibermap.RegisterMiddlewareFactory(eng, "rate_limit", adapt[T](auth.RateLimitFactory))
+	fibermap.RegisterMiddlewareFactory(eng, "idempotency", adapt[T](auth.IdempotencyFactory))
 	return nil
 }
 

@@ -244,6 +244,44 @@ IP space (public internet, no upstream proxy / WAF), front the kit with
 a dedicated rate limiter (envoy, redis-cell, Cloudflare, …) or wrap
 `RateLimitBy` with your own LRU + cleanup.
 
+### Idempotency keys
+
+`auth.Idempotency(ttl)` is a Fiber middleware that dedupes write-method
+requests by an `Idempotency-Key` header. Stripe-style — the first call
+runs the handler, the response is cached for `ttl`, and any retry with
+the same `(method, path, Idempotency-Key)` tuple replays the stored
+response without re-invoking the handler. Critical for payment-style
+APIs where network retries must not double-charge.
+
+```go
+// Go middleware:
+app.Post("/orders",
+    auth.Idempotency(24 * time.Hour),
+    placeOrder)
+
+// Or via routes.yaml after fibermount.MountMiddlewareFactories:
+middleware:
+  - idempotency: ["24h"]
+```
+
+**Behaviour:**
+- Requests **without** the `Idempotency-Key` header pass through untouched (opt-in per request).
+- Safe methods (`GET`/`HEAD`/`OPTIONS`) bypass the middleware entirely — they're already idempotent.
+- Handler **errors** are not cached. A transient failure (`*errs.Error{KindUnavailable}` from a flaky upstream) lets the next retry try again.
+- **5xx responses are not cached.** A server bug can heal; only `2xx`/`3xx`/`4xx` are stable enough to replay.
+- Replays carry `X-Idempotency-Replay: true` so clients can tell.
+- Replays restore status, Content-Type, body, and a small allowlist of safe headers (`Location`, `X-Request-ID`, `ETag`, `Last-Modified`, `Retry-After`). `Set-Cookie` and Authorization-bound headers are intentionally NOT replayed.
+
+**Storage:** default is in-memory (`sync.Map`, lazy expiry on Get). For multi-replica deployments where two retries can land on different pods, wire a Redis-backed store:
+
+```go
+type redisIdemStore struct{ /* … */ }
+func (s *redisIdemStore) Get(ctx, key) (*auth.CachedResponse, bool) { /* HGETALL */ }
+func (s *redisIdemStore) Set(ctx, key, resp, ttl) { /* HSET + EXPIRE */ }
+
+app.Use(auth.IdempotencyWithStore(24*time.Hour, &redisIdemStore{...}))
+```
+
 ### Refresh-token rotation + reuse detection
 
 Refresh tokens are single-use. `auth.IssueRefresh` (or `RotateRefresh` for
