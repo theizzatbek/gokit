@@ -251,6 +251,7 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithOpenAPI(opts ...openapi.Option)` | Enable OpenAPI mounting. With no args, Info/Servers/SecuritySchemes/MiddlewareSecurity come from `routes.yaml`'s top-level `openapi:` block. Pass `openapi.WithInfo(...)` / `WithServer(...)` / `WithSecurity(...)` / `WithDefaultResponse(...)` to override or augment. Auto-mounts even without this call when the YAML block is present. |
 | `WithLogger(*slog.Logger)` | Override the auto-built logger |
 | `WithMetrics(prometheus.Registerer)` | Override the default `prometheus.NewRegistry()` |
+| `WithoutRuntimeMetrics()` | Skip auto-registration of `go_*` runtime + `process_*` collectors on the service registry. Use when the caller already registered them, or to keep the scrape output kit-only. |
 | `WithValidator(bind.Validator)` | Override the default `validator.New(validator.WithRequiredStructEnabled())`. Use to register custom validators (`v.RegisterValidation("safe_url", …)`) or swap implementations entirely. |
 | `WithFiberMiddleware(handlers...)` | Insert fiber-level middleware before engine (helmet, otelfiber, …) |
 | `WithCORS(origins...)` | Shortcut for `fiber/v2/middleware/cors` with kit defaults: REST methods, common headers, `X-Request-ID` exposed, MaxAge 24h. Credentials on for explicit origins; auto-off when `"*"` is listed (CORS spec). |
@@ -375,6 +376,7 @@ Subsystem-specific errors propagate as `Cause` — use `errors.As` to extract.
 - `svc.Logger()` returns the `*slog.Logger` every subsystem was given.
 - `svc.Metrics()` returns the `prometheus.Registerer` every subsystem registers into.
 - All subsystems' `WithLogger`/`WithMetrics` options are auto-applied; you don't pass them per call.
+- **Unified `/metrics` scrape.** `svc.Run()` routes the `/metrics` endpoint through the same registry, so a single scrape exposes `fibermap_http_*` (router), `db_*`, `httpc_*`, `nats_*`, `natsmap_*` together. The `go_*` (heap, GC, goroutines) and `process_*` (FDs, RSS, CPU seconds) runtime collectors are auto-registered on the same registry — disable with `service.WithoutRuntimeMetrics()`.
 - **Note:** `apimap` does NOT receive `WithMetrics` automatically — apimap internally constructs its own `httpc` clients which would re-register the same `httpc_*` collectors and panic the shared registry. If you want per-upstream apimap metrics, pass `apimap.WithMetrics(separateReg)` via `WithAPIMapOptions`.
 
 ## Shutdown order

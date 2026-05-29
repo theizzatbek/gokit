@@ -57,6 +57,7 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		metrics: metrics,
 		opts:    o,
 	}
+	s.registerRuntimeCollectors()
 
 	// OTel must run BEFORE the build phase — it mutates
 	// opts.fiberMiddleware (prepending otelfiber) and opts.httpcOpts

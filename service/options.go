@@ -45,6 +45,7 @@ type options struct {
 	refreshGCInterval   time.Duration  // 0 = disabled (default); > 0 = period between refresh-store GarbageCollect runs
 	otelServiceName     string         // non-empty triggers OpenTelemetry setup at service.New time
 	otelOpts            []otelkit.Option
+	skipRuntimeMetrics  bool // suppress Go runtime + process collector auto-registration
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -306,6 +307,20 @@ func WithRunOptions(opts ...fibermap.RunOption) Option {
 // Missing file at Run time produces CodeRoutesYAMLNotFound.
 func WithRoutes() Option {
 	return func(o *options) { o.routesEnable = true }
+}
+
+// WithoutRuntimeMetrics suppresses auto-registration of the Go
+// runtime and process collectors on the service registry. By default
+// service.New registers `collectors.NewGoCollector()` and
+// `collectors.NewProcessCollector(ProcessCollectorOpts{})` so a
+// scrape returns goroutine count, heap stats, GC pause histograms,
+// FD count, RSS, and CPU seconds out of the box.
+//
+// Useful when the caller already registered these collectors on the
+// shared registry (avoids prometheus.AlreadyRegisteredError) or when
+// the user wants the registry to contain only kit/app series.
+func WithoutRuntimeMetrics() Option {
+	return func(o *options) { o.skipRuntimeMetrics = true }
 }
 
 // WithoutConnectRetry disables the auto-injected K8s-friendly retry
