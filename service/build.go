@@ -89,6 +89,7 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		s.Close()
 		return nil, err
 	}
+	s.startRefreshGC()
 	return s, nil
 }
 
@@ -119,16 +120,18 @@ func (s *Service[T, C]) buildAuth() error {
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation, CodeAuthInvalidKey, "service: auth key invalid")
 	}
+	store := refreshpg.New(s.DB)
 	a, err := auth.New[C](auth.Config{
 		Issuer:     s.cfg.Auth.Issuer,
 		Keys:       keySet,
 		AccessTTL:  s.cfg.Auth.AccessTTL,
 		RefreshTTL: s.cfg.Auth.RefreshTTL,
-	}, auth.WithRefreshStore(refreshpg.New(s.DB)), auth.WithLogger(s.logger))
+	}, auth.WithRefreshStore(store), auth.WithLogger(s.logger))
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindInternal, CodeAuthInvalidKey, "service: auth.New failed")
 	}
 	s.Auth = a
+	s.refreshStore = store
 	s.Hasher = auth.NewHasher(auth.DefaultParams())
 	return nil
 }
