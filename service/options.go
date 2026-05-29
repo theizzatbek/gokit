@@ -2,6 +2,7 @@ package service
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/prometheus/client_golang/prometheus"
@@ -38,6 +39,7 @@ type options struct {
 	runOpts             []fibermap.RunOption
 	skipConnectRetry    bool
 	validator           bind.Validator // nil → default validator.New(validator.WithRequiredStructEnabled())
+	refreshGCInterval   time.Duration  // 0 = disabled (default); > 0 = period between refresh-store GarbageCollect runs
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -96,6 +98,26 @@ func WithFiberMiddleware(handlers ...fiber.Handler) Option {
 // orchestrate the layer yourself.
 func WithoutBearerOptionalLayer() Option {
 	return func(o *options) { o.skipBearerLayer = true }
+}
+
+// WithRefreshGC schedules periodic garbage collection of expired
+// refresh tokens against the refresh store wired through Auth. Without
+// it, the underlying table (auth_refresh_tokens for refreshpg) grows
+// forever — even though expired entries no longer authenticate
+// anything, they cost storage and slow Consume's diagnostic SELECT.
+//
+//	service.WithRefreshGC(15 * time.Minute)
+//
+// Calls Store.GarbageCollect(ctx, time.Now()) on each tick. Counts go
+// to the service logger at INFO; errors at WARN. The goroutine is
+// registered with [Service.OnShutdown] so a clean [Service.Close]
+// stops it before the DB connection closes.
+//
+// interval <= 0 disables the feature (same as not calling the option).
+// Service.Auth must be configured for the GC to start; otherwise the
+// option is a no-op.
+func WithRefreshGC(interval time.Duration) Option {
+	return func(o *options) { o.refreshGCInterval = interval }
 }
 
 // WithHTTPCOptions appends to the httpc options applied by service.New

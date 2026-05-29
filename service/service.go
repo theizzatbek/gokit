@@ -35,6 +35,11 @@ type Service[T any, C any] struct {
 	shutdownMu  sync.Mutex
 	shutdownFns []func() error
 
+	// refreshStore is non-nil iff Auth was built. Held so WithRefreshGC
+	// can call GarbageCollect on it without going through Auth (Auth's
+	// internal store field is unexported and intentionally so).
+	refreshStore auth.RefreshStore
+
 	closed bool
 }
 

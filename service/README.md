@@ -254,6 +254,7 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithValidator(bind.Validator)` | Override the default `validator.New(validator.WithRequiredStructEnabled())`. Use to register custom validators (`v.RegisterValidation("safe_url", …)`) or swap implementations entirely. |
 | `WithFiberMiddleware(handlers...)` | Insert fiber-level middleware before engine (helmet, cors, otelfiber, …) |
 | `WithoutBearerOptionalLayer()` | Skip the auto `Bearer(BearerOptional)` install |
+| `WithRefreshGC(interval)` | Schedule periodic `RefreshStore.GarbageCollect` against the auth refresh store so expired tokens get pruned. INFO log per non-zero sweep; WARN on failure. Bound to `OnShutdown` for clean stop. Interval ≤ 0 = disabled. No-op when Auth isn't configured. |
 | `WithoutConnectRetry()` | Disables the auto-injected K8s-friendly retry defaults for DB and NATS Connect. Without this, service defaults to 5 retries with 1s→16s exponential backoff (~31s budget). See db/README and clients/nats/README. |
 | `WithHTTPCOptions(opts...)` | Extra httpc options (logger + metrics already auto-applied) |
 | `WithAPIMapOptions(opts...)` | Extra apimap options |
