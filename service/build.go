@@ -58,6 +58,14 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		opts:    o,
 	}
 
+	// OTel must run BEFORE the build phase — it mutates
+	// opts.fiberMiddleware (prepending otelfiber) and opts.httpcOpts
+	// (adding the otelhttp transport wrap) which are consumed by
+	// buildHTTPC and run.go.
+	if err := s.setupOtel(ctx); err != nil {
+		return nil, err
+	}
+
 	if err := s.buildDB(ctx); err != nil {
 		return nil, err
 	}
@@ -89,6 +97,7 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		s.Close()
 		return nil, err
 	}
+	s.registerOtelShutdown()
 	s.startRefreshGC()
 	return s, nil
 }
