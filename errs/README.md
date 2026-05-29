@@ -142,6 +142,25 @@ var pgErr *pgconn.PgError
 if errors.As(err, &pgErr) { /* … */ }
 ```
 
+### Flattening `errors.Join` aggregates
+
+Kit build/validate steps return `errors.Join(...)` when multiple
+`*xerrs.Error` failures co-occur. `errs.All` walks the join tree
+(plus standard `Unwrap` chains) and hands back every `*Error` it can
+reach, in depth-first order:
+
+```go
+if err := eng.Mount(app); err != nil {
+    for _, e := range xerrs.All(err) {
+        log.Warn("mount issue", "code", e.Code, "kind", e.Kind, "msg", e.Message)
+    }
+    return err
+}
+```
+
+Wrapped chains (`Wrap(rootErr, ...)`) surface both layers. Non-`*Error`
+members of a Join are skipped silently; `errs.All(nil)` returns `nil`.
+
 ### Structured logging
 
 `*Error` implements `slog.LogValuer`, so passing it to `slog` emits structured fields automatically:
