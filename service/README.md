@@ -252,7 +252,9 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithLogger(*slog.Logger)` | Override the auto-built logger |
 | `WithMetrics(prometheus.Registerer)` | Override the default `prometheus.NewRegistry()` |
 | `WithValidator(bind.Validator)` | Override the default `validator.New(validator.WithRequiredStructEnabled())`. Use to register custom validators (`v.RegisterValidation("safe_url", …)`) or swap implementations entirely. |
-| `WithFiberMiddleware(handlers...)` | Insert fiber-level middleware before engine (helmet, cors, otelfiber, …) |
+| `WithFiberMiddleware(handlers...)` | Insert fiber-level middleware before engine (helmet, otelfiber, …) |
+| `WithCORS(origins...)` | Shortcut for `fiber/v2/middleware/cors` with kit defaults: REST methods, common headers, `X-Request-ID` exposed, MaxAge 24h. Credentials on for explicit origins; auto-off when `"*"` is listed (CORS spec). |
+| `WithCORSConfig(cors.Config)` | Full-control CORS — `cfg` is passed straight to `cors.New`. |
 | `WithoutBearerOptionalLayer()` | Skip the auto `Bearer(BearerOptional)` install |
 | `WithRefreshGC(interval)` | Schedule periodic `RefreshStore.GarbageCollect` against the auth refresh store so expired tokens get pruned. INFO log per non-zero sweep; WARN on failure. Bound to `OnShutdown` for clean stop. Interval ≤ 0 = disabled. No-op when Auth isn't configured. |
 | `WithoutConnectRetry()` | Disables the auto-injected K8s-friendly retry defaults for DB and NATS Connect. Without this, service defaults to 5 retries with 1s→16s exponential backoff (~31s budget). See db/README and clients/nats/README. |
