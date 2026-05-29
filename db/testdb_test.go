@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 
 // startTestDB spins (lazily, once per test binary) a Postgres container and
 // returns a *db.DB bound to a fresh, randomly-named schema for isolation.
-func startTestDB(t *testing.T) *db.DB {
+func startTestDB(t *testing.T, opts ...db.Option) *db.DB {
 	t.Helper()
 	pgOnce.Do(initPostgresContainer)
 	if pgErr != nil {
@@ -37,7 +37,7 @@ func startTestDB(t *testing.T) *db.DB {
 	}
 
 	cfg := pgCfg
-	d, err := db.Connect(context.Background(), cfg)
+	d, err := db.Connect(context.Background(), cfg, opts...)
 	if err != nil {
 		t.Fatalf("db.Connect: %v", err)
 	}

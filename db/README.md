@@ -120,7 +120,7 @@ To override per-environment, set `DB_APP_NAME=custom-name`.
 |---|---|---|
 | `WithLogger(*slog.Logger)` | silent | Logs errors + slow queries (when threshold set). nil = silent. |
 | `WithSlowQueryThreshold(d)` | 0 (off) | Queries exceeding `d` are logged at WARN with full SQL + duration |
-| `WithMetrics(prometheus.Registerer)` | no metrics | Registers `db_query_duration_seconds{outcome}` (histogram) and `db_pool_size_total{pool,state}` (gauge). `pool` is `primary` or `standby` (only emitted when `HasReadReplica=true`). |
+| `WithMetrics(prometheus.Registerer)` | no metrics | Registers `db_query_duration_seconds{outcome}` (histogram), `db_pool_size_total{pool,state}` (gauge), `db_tx_total{kind,outcome}` (counter), `db_tx_duration_seconds{kind,outcome}` (histogram), `db_slow_query_total` (counter; populated only when `WithSlowQueryThreshold > 0`). `pool=primary\|standby` distinguishes the read-replica gauges; `kind=tx\|savepoint` and `outcome=commit\|rollback\|panic` cover top-level vs nested. |
 
 ## Common patterns
 

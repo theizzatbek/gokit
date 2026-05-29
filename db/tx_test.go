@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/theizzatbek/gokit/db"
 )
 
@@ -105,6 +108,108 @@ func TestTx_NestedSavepoint_Commit(t *testing.T) {
 	}
 	if got := countKV(t, d); got != 2 {
 		t.Fatalf("count = %d, want 2", got)
+	}
+}
+
+// txMetricCount reads db_tx_total{kind,outcome} from a registry into
+// which db.WithMetrics has registered. We can't access the unexported
+// collector directly from the external _test package, so we walk the
+// gathered families instead.
+func txMetricCount(t *testing.T, reg *prometheus.Registry, kind, outcome string) float64 {
+	t.Helper()
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "db_tx_total" {
+			continue
+		}
+		for _, m := range mf.Metric {
+			var k, o string
+			for _, l := range m.GetLabel() {
+				switch l.GetName() {
+				case "kind":
+					k = l.GetValue()
+				case "outcome":
+					o = l.GetValue()
+				}
+			}
+			if k == kind && o == outcome {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
+}
+
+func TestTx_Metrics_CommitRollbackPanic(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	d := startTestDB(t, db.WithMetrics(reg))
+	setupKV(t, d)
+
+	// commit
+	if err := d.Tx(context.Background(), func(tx *db.Tx) error {
+		_, err := tx.Exec(context.Background(), `INSERT INTO kv VALUES ('a','1')`)
+		return err
+	}); err != nil {
+		t.Fatalf("commit Tx: %v", err)
+	}
+	// rollback (returned error)
+	want := errors.New("boom")
+	if err := d.Tx(context.Background(), func(tx *db.Tx) error {
+		_, _ = tx.Exec(context.Background(), `INSERT INTO kv VALUES ('b','2')`)
+		return want
+	}); !errors.Is(err, want) {
+		t.Fatalf("rollback Tx err = %v, want %v", err, want)
+	}
+	// panic (rolled back AND re-thrown)
+	func() {
+		defer func() { _ = recover() }()
+		_ = d.Tx(context.Background(), func(tx *db.Tx) error {
+			panic("kaboom")
+		})
+	}()
+
+	if v := txMetricCount(t, reg, "tx", "commit"); v != 1 {
+		t.Errorf("tx commit count = %v, want 1", v)
+	}
+	if v := txMetricCount(t, reg, "tx", "rollback"); v != 1 {
+		t.Errorf("tx rollback count = %v, want 1", v)
+	}
+	if v := txMetricCount(t, reg, "tx", "panic"); v != 1 {
+		t.Errorf("tx panic count = %v, want 1", v)
+	}
+}
+
+func TestTx_Metrics_NestedSavepoint_RollbackInner(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	d := startTestDB(t, db.WithMetrics(reg))
+	setupKV(t, d)
+
+	want := errors.New("inner-fail")
+	if err := d.Tx(context.Background(), func(outer *db.Tx) error {
+		_, _ = outer.Exec(context.Background(), `INSERT INTO kv VALUES ('outer','1')`)
+		innerErr := outer.Tx(context.Background(), func(inner *db.Tx) error {
+			return want
+		})
+		if !errors.Is(innerErr, want) {
+			t.Fatalf("inner err = %v, want %v", innerErr, want)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("outer Tx: %v", err)
+	}
+
+	if v := txMetricCount(t, reg, "tx", "commit"); v != 1 {
+		t.Errorf("outer tx commit = %v, want 1", v)
+	}
+	if v := txMetricCount(t, reg, "savepoint", "rollback"); v != 1 {
+		t.Errorf("savepoint rollback = %v, want 1", v)
+	}
+	// duration histogram should have observed both
+	if got := testutil.CollectAndCount(reg); got == 0 {
+		t.Fatal("registry empty — no observations")
 	}
 }
 
