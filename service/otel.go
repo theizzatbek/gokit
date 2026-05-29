@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/contrib/otelfiber/v2"
 	"github.com/gofiber/fiber/v2"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/theizzatbek/gokit/clients/httpc"
@@ -49,6 +50,23 @@ func (s *Service[T, C]) setupOtel(ctx context.Context) error {
 	// is the convention most APMs (Tempo, Jaeger, Honeycomb) expect.
 	s.opts.httpcOpts = append(s.opts.httpcOpts,
 		httpc.WithBaseTransport(otelhttp.NewTransport(http.DefaultTransport)))
+
+	// Metrics pipeline: bridge the service-wide Prometheus registry
+	// onto OTLP/HTTP so the same /metrics scrape data also lands at
+	// the OTel collector. Skipped when the configured Registerer is
+	// not also a Gatherer (e.g. caller passed a wrapped registry) —
+	// in that case the trace pipeline still runs.
+	if g, ok := s.metrics.(prometheus.Gatherer); ok && !s.opts.skipOtelMetrics {
+		metricShutdown, err := otelkit.SetupMetrics(ctx, s.opts.otelServiceName, g, s.opts.otelMetricsOpts...)
+		if err != nil {
+			// Tear down the trace pipeline we already installed so we
+			// don't leak a TracerProvider on partial failure.
+			_ = shutdown(ctx)
+			s.otelShutdown = nil
+			return err
+		}
+		s.otelMetricsShutdown = metricShutdown
+	}
 	return nil
 }
 
@@ -56,13 +74,24 @@ func (s *Service[T, C]) setupOtel(ctx context.Context) error {
 // OnShutdown so Close runs it before tearing down DB / NATS. Called
 // once after the Service is fully built.
 func (s *Service[T, C]) registerOtelShutdown() {
-	if s.otelShutdown == nil {
-		return
+	// Metrics shutdown registers FIRST so it runs LAST (OnShutdown is
+	// LIFO). Order matters: we want to flush spans before the metric
+	// pipeline tears down — the metrics provider's last push includes
+	// any counters the span flush mutated.
+	if s.otelMetricsShutdown != nil {
+		shutdown := s.otelMetricsShutdown
+		s.OnShutdown(func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return shutdown(ctx)
+		})
 	}
-	shutdown := s.otelShutdown
-	s.OnShutdown(func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return shutdown(ctx)
-	})
+	if s.otelShutdown != nil {
+		shutdown := s.otelShutdown
+		s.OnShutdown(func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return shutdown(ctx)
+		})
+	}
 }

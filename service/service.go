@@ -45,6 +45,11 @@ type Service[T any, C any] struct {
 	// pending spans during Close.
 	otelShutdown func(context.Context) error
 
+	// otelMetricsShutdown is non-nil iff WithOtel was passed AND the
+	// service registry implements prometheus.Gatherer (the default
+	// does). Flushes the OTLP metric pipeline during Close.
+	otelMetricsShutdown func(context.Context) error
+
 	closed bool
 }
 
