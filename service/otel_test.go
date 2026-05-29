@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/theizzatbek/gokit/otelkit"
 )
 
@@ -63,6 +65,43 @@ func TestRegisterOtelShutdown_NoopWhenNil(t *testing.T) {
 	if len(s.shutdownFns) != 0 {
 		t.Errorf("shutdownFns = %d, want 0", len(s.shutdownFns))
 	}
+}
+
+func TestSetupOtel_WiresMetricsBridge_WhenRegistryIsGatherer(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	s := &Service[struct{}, struct{}]{
+		opts:    &options{otelServiceName: "test-svc"},
+		metrics: reg,
+	}
+	if err := s.setupOtel(context.Background()); err != nil {
+		t.Fatalf("setupOtel: %v", err)
+	}
+	if s.otelMetricsShutdown == nil {
+		t.Error("otelMetricsShutdown should be non-nil when metrics is a Gatherer")
+	}
+	_ = s.otelShutdown(context.Background())
+	_ = s.otelMetricsShutdown(context.Background())
+}
+
+func TestSetupOtel_WithoutOtelMetrics_SkipsBridge(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	s := &Service[struct{}, struct{}]{
+		opts: &options{
+			otelServiceName: "test-svc",
+			skipOtelMetrics: true,
+		},
+		metrics: reg,
+	}
+	if err := s.setupOtel(context.Background()); err != nil {
+		t.Fatalf("setupOtel: %v", err)
+	}
+	if s.otelMetricsShutdown != nil {
+		t.Error("otelMetricsShutdown should be nil when WithoutOtelMetrics is set")
+	}
+	if s.otelShutdown == nil {
+		t.Error("trace pipeline should still be installed")
+	}
+	_ = s.otelShutdown(context.Background())
 }
 
 func TestRegisterOtelShutdown_AddsCallback(t *testing.T) {

@@ -45,6 +45,8 @@ type options struct {
 	refreshGCInterval   time.Duration  // 0 = disabled (default); > 0 = period between refresh-store GarbageCollect runs
 	otelServiceName     string         // non-empty triggers OpenTelemetry setup at service.New time
 	otelOpts            []otelkit.Option
+	otelMetricsOpts     []otelkit.MetricsOption
+	skipOtelMetrics     bool // suppress the Prometheus→OTel metrics bridge even when WithOtel is set
 	skipRuntimeMetrics  bool // suppress Go runtime + process collector auto-registration
 }
 
@@ -196,6 +198,31 @@ func WithOtel(serviceName string, opts ...otelkit.Option) Option {
 		o.otelServiceName = serviceName
 		o.otelOpts = opts
 	}
+}
+
+// WithOtelMetricsOptions configures the OTel metrics pipeline that
+// service.WithOtel auto-enables. Forwarded to [otelkit.SetupMetrics]
+// (interval, exporter options, resource attributes).
+//
+//	service.WithOtel("orders-api"),
+//	service.WithOtelMetricsOptions(
+//	    otelkit.WithMetricsInterval(15*time.Second),
+//	),
+//
+// No-op unless WithOtel is also passed.
+func WithOtelMetricsOptions(opts ...otelkit.MetricsOption) Option {
+	return func(o *options) { o.otelMetricsOpts = append(o.otelMetricsOpts, opts...) }
+}
+
+// WithoutOtelMetrics suppresses the Prometheus→OTel metrics bridge
+// that WithOtel otherwise auto-enables. Use when the deployment
+// scrapes the kit's /metrics endpoint directly and doesn't want a
+// second push pipeline, or when the chosen OTel backend already
+// scrapes Prometheus and would receive duplicates.
+//
+// Tracing stays on; only the metrics bridge is skipped.
+func WithoutOtelMetrics() Option {
+	return func(o *options) { o.skipOtelMetrics = true }
 }
 
 // WithRefreshGC schedules periodic garbage collection of expired

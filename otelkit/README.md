@@ -58,11 +58,40 @@ For values the kit reads directly:
 - **Batcher:** 5s flush window. Pending spans flush during `shutdown(ctx)` — bound a finite deadline before calling, otherwise an unresponsive collector blocks indefinitely.
 - **Idempotent shutdown:** the returned function is `sync.Once`-guarded.
 
-## Limitations (v1)
+## Metrics
 
-- **Traces only.** No metrics pipeline (kit still uses Prometheus). No logs pipeline.
-- **OTLP/HTTP only.** No gRPC exporter (would add `google.golang.org/grpc` to direct deps). Wire it manually via `WithExporterOption` if you really need it.
-- **No SDK-level customisation.** SpanProcessor stack is fixed at one Batcher. For multi-pipeline setups (e.g. tee to stdout + collector), construct your own `TracerProvider` and set it with `otel.SetTracerProvider`.
+`otelkit.SetupMetrics(ctx, serviceName, promRegistry, opts...)` opens a
+second OTLP/HTTP pipeline that **bridges** the kit's Prometheus
+collectors onto OTel periodic push. This way the existing
+`db_*`/`httpc_*`/`nats_*`/`apimap_*`/`auth_*`/`fibermap_http_*`
+instrumentation lands at the same OTel collector as the traces — no
+need to rewrite the kit's metric instrumentation in OTel APIs.
+
+```go
+shutdown, err := otelkit.SetupMetrics(ctx, "urlshort", svc.Metrics().(prometheus.Gatherer),
+    otelkit.WithMetricsInterval(30 * time.Second),
+    otelkit.WithMetricsServiceVersion("1.0.0"),
+)
+```
+
+| Option | Default | Notes |
+|---|---|---|
+| `WithMetricsServiceVersion(v)` | "" | `service.version` on the metric resource |
+| `WithMetricsResourceAttribute(k, v)` | — | Append a constant attribute (region, az, cluster) |
+| `WithMetricsExporterOption(opt)` | — | Forward an `otlpmetrichttp.Option` for endpoint/headers in code |
+| `WithMetricsInterval(d)` | 60s | PeriodicReader push interval |
+
+`service.WithOtel` auto-wires `SetupMetrics` whenever the service
+registry is a `prometheus.Gatherer` (the default
+`prometheus.NewRegistry()` is). Disable via
+`service.WithoutOtelMetrics()` when the deployment already scrapes
+`/metrics` and doesn't want a parallel push pipeline.
+
+## Limitations
+
+- **Logs pipeline out of scope.** Add manually if needed.
+- **OTLP/HTTP only.** No gRPC exporter (would add `google.golang.org/grpc` to direct deps). Wire it manually via `WithExporterOption` / `WithMetricsExporterOption` if you really need it.
+- **No SDK-level customisation.** SpanProcessor stack is fixed at one Batcher; metric pipeline is fixed at one PeriodicReader. For multi-pipeline setups, construct your own `TracerProvider` / `MeterProvider` and call `otel.SetTracerProvider` / `otel.SetMeterProvider` directly.
 - **No db tracer.** pgx supports a custom tracer, but the kit's `db` package doesn't yet expose it as an option. Add it manually via `pgxpool.Config` if you need DB spans.
 
 ## See also
