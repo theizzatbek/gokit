@@ -242,8 +242,12 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 	if err := errors.Join(buildErrs...); err != nil {
 		return nil, err
 	}
+	var m *apimapMetrics
+	if o.metrics != nil {
+		m = newApimapMetrics(o.metrics)
+	}
 	e.built = true
-	return &Client{endpoints: endpoints}, nil
+	return &Client{endpoints: endpoints, metrics: m}, nil
 }
 
 // resolveAuthHeader returns the header name+value to apply for the given
@@ -332,9 +336,13 @@ func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*ht
 	if o.logger != nil {
 		httpcOpts = append(httpcOpts, httpc.WithLogger(o.logger))
 	}
-	if o.metrics != nil {
-		httpcOpts = append(httpcOpts, httpc.WithMetrics(o.metrics))
-	}
+	// Intentionally NO httpc.WithMetrics here. apimap owns its own
+	// collectors (apimap_*) registered at Build; pushing the same
+	// service-wide registry through httpc would re-register httpc_*
+	// collectors and panic, since service.New already gave httpc its
+	// own WithMetrics. Callers wanting per-upstream httpc_* on a
+	// distinct registry can still pass o.metrics → httpc themselves by
+	// constructing the *http.Client outside apimap.
 	// Layering when signFn is set:
 	//   httpc retry → signingRoundTripper → (o.baseTransport | http.DefaultTransport)
 	// httpc's WithBaseTransport receives the signing wrapper as its base.
