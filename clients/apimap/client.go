@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"reflect"
 	"strconv"
+	"time"
 
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
@@ -15,6 +16,7 @@ import (
 // Client is the immutable post-Build dispatcher. Goroutine-safe.
 type Client struct {
 	endpoints map[string]resolvedEndpoint // key = "<client>.<endpoint>"
+	metrics   *apimapMetrics              // nil when WithMetrics was not passed
 }
 
 // resolvedEndpoint is the runtime data for one endpoint after Build:
@@ -51,7 +53,19 @@ func (c *Client) Do(ctx context.Context, endpoint string, call Call) (*http.Resp
 		return nil, err
 	}
 	ep := c.endpoints[endpoint]
-	return ep.httpClient.Do(req)
+	return c.send(ep, req)
+}
+
+// send wraps ep.httpClient.Do so the apimap_requests_total /
+// apimap_request_duration_seconds collectors observe every outbound
+// call regardless of whether the caller used Do, Decode, or Exchange.
+// Returns the response + error unchanged — the metrics layer is pure
+// observation, no behaviour change.
+func (c *Client) send(ep resolvedEndpoint, req *http.Request) (*http.Response, error) {
+	start := time.Now()
+	resp, err := ep.httpClient.Do(req)
+	c.metrics.observe(ep.clientName, ep.endpointName, resp, err, time.Since(start))
+	return resp, err
 }
 
 // buildRequest constructs the *http.Request for endpoint applying path
@@ -213,7 +227,7 @@ func Exchange[Req, Resp any](ctx context.Context, c *Client, endpoint string, bo
 	if err != nil {
 		return zero, err
 	}
-	resp, err := ep.httpClient.Do(req)
+	resp, err := c.send(ep, req)
 	if err != nil {
 		return zero, err
 	}

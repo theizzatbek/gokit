@@ -180,7 +180,10 @@ func (s *Service[T, C]) buildAPIMap() error {
 	if s.opts.apimapRegistration != nil {
 		s.opts.apimapRegistration(eng)
 	}
-	apimapOpts := append([]apimap.Option{apimap.WithLogger(s.logger)}, s.opts.apimapOpts...)
+	apimapOpts := append([]apimap.Option{
+		apimap.WithLogger(s.logger),
+		apimap.WithMetrics(s.metrics),
+	}, s.opts.apimapOpts...)
 	c, err := eng.Build(apimapOpts...)
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation, CodeAPIMapLoadFailed, "service: apimap build failed")

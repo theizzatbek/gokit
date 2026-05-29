@@ -377,7 +377,7 @@ Subsystem-specific errors propagate as `Cause` — use `errors.As` to extract.
 - `svc.Metrics()` returns the `prometheus.Registerer` every subsystem registers into.
 - All subsystems' `WithLogger`/`WithMetrics` options are auto-applied; you don't pass them per call.
 - **Unified `/metrics` scrape.** `svc.Run()` routes the `/metrics` endpoint through the same registry, so a single scrape exposes `fibermap_http_*` (router), `db_*`, `httpc_*`, `nats_*`, `natsmap_*` together. The `go_*` (heap, GC, goroutines) and `process_*` (FDs, RSS, CPU seconds) runtime collectors are auto-registered on the same registry — disable with `service.WithoutRuntimeMetrics()`.
-- **Note:** `apimap` does NOT receive `WithMetrics` automatically — apimap internally constructs its own `httpc` clients which would re-register the same `httpc_*` collectors and panic the shared registry. If you want per-upstream apimap metrics, pass `apimap.WithMetrics(separateReg)` via `WithAPIMapOptions`.
+- **apimap metrics** ship under their own `apimap_*` namespace (`apimap_requests_total`, `apimap_request_duration_seconds`) with `client`+`endpoint`+`status` labels, so per-upstream visibility lands on the shared registry without colliding with the kit's `httpc_*` collectors. apimap no longer forwards the registry to its internal httpc clients; if you need both apimap-level and per-attempt httpc views, build a dedicated httpc with a separate registry outside apimap.
 
 ## Shutdown order
 

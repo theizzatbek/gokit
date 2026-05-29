@@ -126,7 +126,7 @@ func (e *Engine) Build(opts ...Option) (*Client, error)
 
 // Options
 func WithLogger(*slog.Logger) Option        // → httpc.WithLogger
-func WithMetrics(prometheus.Registerer) Option  // → httpc.WithMetrics
+func WithMetrics(prometheus.Registerer) Option  // → apimap_* collectors (NOT forwarded to httpc)
 func WithBaseTransport(http.RoundTripper) Option // → httpc.WithBaseTransport
 
 // Runtime calls
@@ -368,7 +368,18 @@ Runtime codes from `Do`/`Decode`/`Exchange`: `apimap_unknown_endpoint`, `apimap_
 
 ## Observability
 
-Pass-through to the underlying `clients/httpc`. apimap itself does not log or expose Prometheus collectors — duplication across layers is noise. If you want per-endpoint metrics, wrap your own middleware around `Decode`/`Exchange`.
+`WithLogger(*slog.Logger)` flows through to `clients/httpc` (per-attempt request/retry/exhausted logs).
+
+`WithMetrics(prometheus.Registerer)` registers apimap-owned collectors keyed by `<client>.<endpoint>`:
+
+| Series | Labels | Type |
+|---|---|---|
+| `apimap_requests_total` | `client`, `endpoint`, `status` | Counter |
+| `apimap_request_duration_seconds` | `client`, `endpoint`, `status` | Histogram (default buckets) |
+
+`status` is bucketed (`2xx` / `3xx` / `4xx` / `5xx` / `error`) so label cardinality stays bounded — transport failures (timeout, refused, retry-exhausted) land on `error`. Precise status codes still live in the per-endpoint `*errs.Error.Code` (e.g. `apimap_github_get_user_not_found`).
+
+The registry is NOT forwarded to the underlying `clients/httpc`. Earlier versions did, which made `apimap.WithMetrics(sharedReg)` panic in `service.New` — the shared registry already held `httpc_*` from the explicit `httpc.New` call. With the apimap-owned set, `service.New` auto-applies `apimap.WithMetrics(svc.Metrics())` and a single `/metrics` scrape returns the full picture: `apimap_*`, `httpc_*`, `db_*`, `nats_*`, `fibermap_http_*`.
 
 ## Testing
 
@@ -398,7 +409,7 @@ out, _ := apimap.Decode[Resp](context.Background(), client, "ml.get", apimap.Cal
 - **No OpenAPI ingest.** Manual YAML; future tool could derive from a remote API spec.
 - **No codegen.** Runtime dispatch only — types are registered at startup, not generated.
 - **No hot-reload.** YAML loaded once at startup.
-- **No per-endpoint metrics out of the box** (handled by `clients/httpc` at the underlying level).
+- **Status label is bucketed.** `apimap_requests_total{status=4xx}` is one series for every 4xx; per-status detail belongs in the per-endpoint `*errs.Error.Code` set rather than as labels (cardinality control).
 - **OAuth2/refresh-token flows out of scope.** Use `auth:` for one static credential; for dynamic-secret refresh on each call (e.g. periodic token rotation) declare `auth.type=custom` and have your signer fetch the current token, or wrap `http.RoundTripper` via `WithBaseTransport`.
 - **Per-endpoint `auth:` blocks not supported.** Auth is a property of the upstream API as a whole; override per-call via `Call.Headers`.
 - **Streaming uploads** beyond `encode: raw` with an `io.Reader` are out of scope.
