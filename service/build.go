@@ -66,6 +66,13 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 	if err := s.setupOtel(ctx); err != nil {
 		return nil, err
 	}
+	// Sentry runs after OTel so its FiberMiddleware lands INSIDE
+	// otelfiber — any event captured during the request shares the
+	// trace_id of the surrounding OTel span via the global
+	// propagator wired by otelkit.Setup.
+	if err := s.setupSentry(ctx); err != nil {
+		return nil, err
+	}
 
 	if err := s.buildDB(ctx); err != nil {
 		return nil, err
@@ -99,6 +106,11 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		return nil, err
 	}
 	s.registerOtelShutdown()
+	// Sentry shutdown registers AFTER otel so it runs FIRST during
+	// Close (OnShutdown is LIFO). Order matters: events that
+	// reference an otel trace_id must flush before the trace
+	// pipeline shuts down.
+	s.registerSentryShutdown()
 	s.startRefreshGC()
 	return s, nil
 }

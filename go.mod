@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/caarlos0/env/v11 v11.4.1
+	github.com/getsentry/sentry-go v0.46.2
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/gofiber/contrib/otelfiber/v2 v2.2.3
 	github.com/gofiber/fiber/v2 v2.52.13
