@@ -2,9 +2,11 @@ package service
 
 import (
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/theizzatbek/gokit/clients/apimap"
@@ -91,6 +93,64 @@ func WithOpenAPI(opts ...openapi.Option) Option {
 // stays unless WithoutBearerOptionalLayer is also passed.
 func WithFiberMiddleware(handlers ...fiber.Handler) Option {
 	return func(o *options) { o.fiberMiddleware = append(o.fiberMiddleware, handlers...) }
+}
+
+// WithCORS installs Fiber's CORS middleware at the App level with
+// kit-sensible defaults: allowed methods cover the standard REST set;
+// allowed headers include Authorization, Content-Type, X-Request-ID,
+// and X-Idempotency-Key; X-Request-ID is exposed back to browsers;
+// MaxAge is 24h.
+//
+// AllowCredentials is enabled when every origin is explicit (e.g.
+// "https://app.example.com"), and DISABLED automatically when "*" is
+// listed — per the CORS spec, browsers reject `Access-Control-Allow-
+// Origin: *` together with credentials.
+//
+//	svc, _ := service.New[AppCtx, Claims](ctx, cfg,
+//	    service.WithCORS("https://app.example.com", "https://admin.example.com"))
+//
+// For full control over Headers / ExposeHeaders / MaxAge / Next /
+// AllowOriginsFunc — use [WithCORSConfig].
+func WithCORS(origins ...string) Option {
+	cfg := cors.Config{
+		AllowOrigins:  strings.Join(origins, ","),
+		AllowMethods:  "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+		AllowHeaders:  "Origin,Content-Type,Accept,Authorization,X-Request-ID,X-Idempotency-Key",
+		ExposeHeaders: "X-Request-ID",
+		MaxAge:        86400,
+	}
+	if !containsWildcardOrigin(origins) {
+		cfg.AllowCredentials = true
+	}
+	return WithCORSConfig(cfg)
+}
+
+// WithCORSConfig is the explicit-config variant of [WithCORS]. The
+// supplied cors.Config is handed straight to cors.New — no defaults
+// are layered on top, so configure every field you care about
+// (especially AllowOrigins / AllowMethods / AllowHeaders).
+//
+//	svc, _ := service.New[AppCtx, Claims](ctx, cfg,
+//	    service.WithCORSConfig(cors.Config{
+//	        AllowOriginsFunc: func(origin string) bool { return strings.HasSuffix(origin, ".example.com") },
+//	        AllowCredentials: true,
+//	        AllowHeaders:     "Authorization,Content-Type",
+//	    }))
+func WithCORSConfig(cfg cors.Config) Option {
+	return func(o *options) {
+		o.fiberMiddleware = append(o.fiberMiddleware, cors.New(cfg))
+	}
+}
+
+// containsWildcardOrigin returns true when "*" appears anywhere in
+// origins — used to suppress AllowCredentials.
+func containsWildcardOrigin(origins []string) bool {
+	for _, o := range origins {
+		if strings.TrimSpace(o) == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 // WithoutBearerOptionalLayer skips installing auth.Bearer(BearerOptional)
