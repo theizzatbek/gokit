@@ -29,8 +29,31 @@ import (
 //	mw, reg := fibermap.Metrics()
 //	app.Use(mw)
 //	app.Get("/metrics", fibermap.MetricsHandler(reg))
+//
+// The returned registry is private — only fibermap HTTP metrics are
+// registered on it. To unify the kit's per-subsystem metrics (db,
+// httpc, nats, …) under one scrape endpoint, use [MetricsOn] with
+// your own *prometheus.Registry instead, or pass that registry to
+// Run via [WithMetricsRegistry].
 func Metrics() (fiber.Handler, *prometheus.Registry) {
 	reg := prometheus.NewRegistry()
+	return MetricsOn(reg), reg
+}
+
+// MetricsOn is like [Metrics] but registers the request counter,
+// duration histogram, and in-flight gauge on a caller-provided
+// Registerer. This lets a single Prometheus registry collect both
+// fibermap HTTP metrics and other subsystem metrics (db, httpc, nats,
+// …) so a single `/metrics` scrape endpoint exposes all of them.
+//
+//	reg := prometheus.NewRegistry()
+//	app.Use(fibermap.MetricsOn(reg))
+//	app.Get("/metrics", fibermap.MetricsHandlerFor(reg))
+//
+// Panics with prometheus.AlreadyRegisteredError if MetricsOn is
+// called twice on the same Registerer (collectors are unique per
+// registry).
+func MetricsOn(reg prometheus.Registerer) fiber.Handler {
 	reqCounter := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "fibermap",
 		Subsystem: "http",
@@ -52,7 +75,7 @@ func Metrics() (fiber.Handler, *prometheus.Registry) {
 	})
 	reg.MustRegister(reqCounter, reqDuration, inFlight)
 
-	mw := func(c *fiber.Ctx) error {
+	return func(c *fiber.Ctx) error {
 		inFlight.Inc()
 		defer inFlight.Dec()
 
@@ -69,7 +92,6 @@ func Metrics() (fiber.Handler, *prometheus.Registry) {
 		reqDuration.WithLabelValues(method, route, status).Observe(time.Since(start).Seconds())
 		return err
 	}
-	return mw, reg
 }
 
 // MetricsHandler returns a fiber.Handler that exposes `reg`'s metrics
@@ -81,4 +103,12 @@ func MetricsHandler(reg *prometheus.Registry) fiber.Handler {
 	return adaptor.HTTPHandler(promhttp.HandlerFor(reg, promhttp.HandlerOpts{
 		Registry: reg,
 	}))
+}
+
+// MetricsHandlerFor is the Gatherer-typed variant of [MetricsHandler].
+// Use when the unified registry is held as a [prometheus.Gatherer]
+// rather than the concrete *prometheus.Registry — e.g. the registry
+// constructed by [service.Service].
+func MetricsHandlerFor(g prometheus.Gatherer) fiber.Handler {
+	return adaptor.HTTPHandler(promhttp.HandlerFor(g, promhttp.HandlerOpts{}))
 }

@@ -93,6 +93,7 @@ That's it. The `Run` bundle gives you `/healthz`, `/metrics`, request-id, struct
 | `WithoutRequestID()` | request-id on | Inject `X-Request-ID` |
 | `WithRequestLogger(logger, skipPaths...)` / `WithoutRequestLogger()` | on (skip `/healthz`,`/metrics`) | Structured access log |
 | `WithMetrics(path)` / `WithoutMetrics()` | `/metrics` (only via `Default[T]`) | Prometheus endpoint |
+| `WithMetricsRegistry(reg)` | private registry | Route middleware + scrape through caller-provided registry — unifies `fibermap_http_*` with the app's own collectors. |
 | `WithHealthCheck(path)` / `WithoutHealthCheck()` | `/healthz` | Always-200 health endpoint, bypasses ContextBuilder |
 
 ## Common patterns

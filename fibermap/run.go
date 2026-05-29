@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // RunOption configures Engine.Run. Default behaviour with zero options:
@@ -50,9 +51,11 @@ type runConfig struct {
 
 	noRequestID bool
 
-	metricsPath string
-	metricsSet  bool
-	noMetrics   bool
+	metricsPath     string
+	metricsSet      bool
+	noMetrics       bool
+	metricsReg      prometheus.Registerer
+	metricsGatherer prometheus.Gatherer
 }
 
 // WithAddr overrides the listen address. When unset, Run picks up the
@@ -217,6 +220,46 @@ func WithoutMetrics() RunOption {
 	}
 }
 
+// MetricsRegistry is the registry shape WithMetricsRegistry accepts —
+// both [prometheus.Registerer] (so fibermap can register its three
+// HTTP collectors) and [prometheus.Gatherer] (so the scrape handler
+// can serialise the current values). *prometheus.Registry satisfies
+// both.
+type MetricsRegistry interface {
+	prometheus.Registerer
+	prometheus.Gatherer
+}
+
+// WithMetricsRegistry routes the fibermap HTTP middleware metrics
+// AND the /metrics scrape endpoint through the caller-provided
+// registry instead of a private one created by [Metrics]. Use this to
+// unify the kit's per-subsystem collectors (db, httpc, nats, …) so a
+// single scrape returns the full picture:
+//
+//	reg := prometheus.NewRegistry()
+//	db.WithMetrics(reg) // applied during db.Connect
+//	httpc.WithMetrics(reg)
+//	eng.Run(fibermap.WithMetricsRegistry(reg))
+//
+// Pairs with the [service] subpackage, which auto-applies its own
+// registry to every subsystem and passes it to Run via this option.
+//
+// Has no effect on its own — [WithMetrics] (or [Default]) must also
+// be in play to install the middleware + endpoint at all. Implicitly
+// enables WithMetrics with path "/metrics" if neither WithMetrics nor
+// WithoutMetrics was set.
+func WithMetricsRegistry(reg MetricsRegistry) RunOption {
+	return func(c *runConfig) {
+		c.metricsReg = reg
+		c.metricsGatherer = reg
+		if !c.metricsSet {
+			c.metricsPath = "/metrics"
+			c.metricsSet = true
+			c.noMetrics = false
+		}
+	}
+}
+
 // WithHealthCheck registers a `GET` handler at `path` returning
 // 200 OK with body "ok". The route is installed BEFORE any other
 // middleware (WithRecover, WithUse, ContextBuilder) so it is not
@@ -329,9 +372,14 @@ func (e *Engine[T]) Run(opts ...RunOption) error {
 		app.Use(RequestLogger(cfg.reqLog, cfg.reqLogSkipPaths...))
 	}
 	if cfg.metricsPath != "" {
-		mw, reg := Metrics()
-		app.Use(mw)
-		app.Get(cfg.metricsPath, MetricsHandler(reg))
+		if cfg.metricsReg != nil && cfg.metricsGatherer != nil {
+			app.Use(MetricsOn(cfg.metricsReg))
+			app.Get(cfg.metricsPath, MetricsHandlerFor(cfg.metricsGatherer))
+		} else {
+			mw, reg := Metrics()
+			app.Use(mw)
+			app.Get(cfg.metricsPath, MetricsHandler(reg))
+		}
 	}
 	for _, h := range cfg.uses {
 		app.Use(h)

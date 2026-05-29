@@ -82,6 +82,15 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 		fibermap.WithHealthCheck("/healthz"),
 		fibermap.WithRecover(s.logger),
 	}
+	// Route /metrics through the unified service registry when the
+	// configured Registerer is also a Gatherer (the default
+	// prometheus.NewRegistry() satisfies both). Otherwise leave the
+	// fibermap-private registry in place and only fibermap_http_*
+	// series get exposed — the caller is expected to mount their own
+	// scrape endpoint over their custom Registerer in that case.
+	if reg := s.metricsRegistry(); reg != nil {
+		out = append(out, fibermap.WithMetricsRegistry(reg))
+	}
 	var fiberMW []fiber.Handler
 	if s.Auth != nil && !s.opts.skipBearerLayer {
 		fiberMW = append(fiberMW, s.Auth.Bearer(auth.BearerOptional))
