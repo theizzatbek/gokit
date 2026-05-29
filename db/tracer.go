@@ -38,6 +38,11 @@ func (t *tracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQ
 		t.metrics.observe(elapsed, data.Err)
 	}
 
+	slow := data.Err == nil && t.slowThreshold > 0 && elapsed > t.slowThreshold
+	if slow && t.metrics != nil {
+		t.metrics.incSlowQuery()
+	}
+
 	if t.logger == nil {
 		return
 	}
@@ -45,7 +50,7 @@ func (t *tracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQ
 	switch {
 	case data.Err != nil:
 		level = slog.LevelError
-	case t.slowThreshold > 0 && elapsed > t.slowThreshold:
+	case slow:
 		level = slog.LevelWarn
 	}
 	sql := span.sql

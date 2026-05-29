@@ -25,9 +25,12 @@ type poolStat struct {
 // during Connect; no locking because there are no concurrent attaches and
 // the map is sealed before the first scrape.
 type metricsCollector struct {
-	pools    map[string]*pgxpool.Pool
-	poolSize *prometheus.GaugeVec
-	duration *prometheus.HistogramVec
+	pools     map[string]*pgxpool.Pool
+	poolSize  *prometheus.GaugeVec
+	duration  *prometheus.HistogramVec
+	txTotal   *prometheus.CounterVec   // kind=tx|savepoint, outcome=commit|rollback|panic
+	txLatency *prometheus.HistogramVec // kind, outcome
+	slowQuery prometheus.Counter
 }
 
 func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
@@ -42,6 +45,19 @@ func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
 			Help:    "Histogram of pgx query durations.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"outcome"}),
+		txTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "db_tx_total",
+			Help: "Number of completed transactions/savepoints by kind (tx=top-level BEGIN, savepoint=nested) and outcome (commit, rollback from returned error, panic recovered + re-thrown).",
+		}, []string{"kind", "outcome"}),
+		txLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "db_tx_duration_seconds",
+			Help:    "Wall time spent inside DB.Tx / Tx.Tx callbacks, measured from BeginTx to Commit/Rollback completion.",
+			Buckets: prometheus.DefBuckets,
+		}, []string{"kind", "outcome"}),
+		slowQuery: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "db_slow_query_total",
+			Help: "Number of queries whose execution exceeded the configured slow-query threshold (WithSlowQueryThreshold). Errored queries do NOT count here — they show up in db_query_duration_seconds{outcome=error} instead.",
+		}),
 	}
 	reg.MustRegister(mc)
 	return mc
@@ -51,6 +67,9 @@ func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
 func (m *metricsCollector) Describe(ch chan<- *prometheus.Desc) {
 	m.poolSize.Describe(ch)
 	m.duration.Describe(ch)
+	m.txTotal.Describe(ch)
+	m.txLatency.Describe(ch)
+	m.slowQuery.Describe(ch)
 }
 
 // Collect implements prometheus.Collector. Refreshes pool gauges from the
@@ -59,6 +78,9 @@ func (m *metricsCollector) Collect(ch chan<- prometheus.Metric) {
 	m.refreshPoolStats()
 	m.poolSize.Collect(ch)
 	m.duration.Collect(ch)
+	m.txTotal.Collect(ch)
+	m.txLatency.Collect(ch)
+	m.slowQuery.Collect(ch)
 }
 
 func (m *metricsCollector) attach(name string, p *pgxpool.Pool) {
@@ -71,6 +93,28 @@ func (m *metricsCollector) observe(elapsed time.Duration, err error) {
 		outcome = "error"
 	}
 	m.duration.WithLabelValues(outcome).Observe(elapsed.Seconds())
+}
+
+// observeTx records the outcome of a top-level transaction or
+// savepoint. kind is "tx" or "savepoint"; outcome is one of "commit",
+// "rollback", "panic". elapsed is the wall time from BeginTx through
+// Commit/Rollback completion.
+func (m *metricsCollector) observeTx(kind, outcome string, elapsed time.Duration) {
+	if m == nil {
+		return
+	}
+	m.txTotal.WithLabelValues(kind, outcome).Inc()
+	m.txLatency.WithLabelValues(kind, outcome).Observe(elapsed.Seconds())
+}
+
+// incSlowQuery records one slow-query event. Called by the tracer
+// when elapsed > slowThreshold AND the query itself succeeded
+// (errored queries already feed db_query_duration_seconds{outcome=error}).
+func (m *metricsCollector) incSlowQuery() {
+	if m == nil {
+		return
+	}
+	m.slowQuery.Inc()
 }
 
 func (m *metricsCollector) setPoolStat(name string, s poolStat) {
