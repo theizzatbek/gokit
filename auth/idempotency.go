@@ -73,6 +73,12 @@ func Idempotency(ttl time.Duration) fiber.Handler {
 // service runs multiple replicas behind a load balancer and two
 // retries can hit different pods.
 func IdempotencyWithStore(ttl time.Duration, store IdempotencyStore) fiber.Handler {
+	return idempotencyHandler(ttl, store, nil)
+}
+
+// idempotencyHandler is the shared implementation. m is the optional
+// authMetrics instance for outcome counting (nil-safe).
+func idempotencyHandler(ttl time.Duration, store IdempotencyStore, m *authMetrics) fiber.Handler {
 	if ttl <= 0 {
 		ttl = 24 * time.Hour
 	}
@@ -82,11 +88,13 @@ func IdempotencyWithStore(ttl time.Duration, store IdempotencyStore) fiber.Handl
 	return func(c *fiber.Ctx) error {
 		key := c.Get(IdempotencyHeader)
 		if key == "" || !methodApplies(c.Method()) {
+			m.incIdempotency("skip")
 			return c.Next()
 		}
 		cacheKey := c.Method() + ":" + c.Path() + ":" + key
 
 		if cached, ok := store.Get(c.UserContext(), cacheKey); ok {
+			m.incIdempotency("hit")
 			if cached.ContentType != "" {
 				c.Set(fiber.HeaderContentType, cached.ContentType)
 			}
@@ -111,8 +119,25 @@ func IdempotencyWithStore(ttl time.Duration, store IdempotencyStore) fiber.Handl
 			Headers:     captureReplayHeaders(c),
 		}
 		store.Set(c.UserContext(), cacheKey, stored, ttl)
+		m.incIdempotency("miss")
 		return nil
 	}
+}
+
+// Idempotency (method form) is the *Auth[C]-bound variant of the
+// package-level [Idempotency]. Identical behaviour plus
+// `auth_idempotency_total{outcome}` counters when [WithMetrics] is
+// wired. Prefer this over the package-level form when scraping.
+func (a *Auth[C]) Idempotency(ttl time.Duration) fiber.Handler {
+	return idempotencyHandler(ttl, NewMemIdempotencyStore(), a.metrics)
+}
+
+// IdempotencyWithStore (method form) is the explicit-store variant of
+// the *Auth[C]-bound Idempotency. Use with a Redis-backed store for
+// multi-replica deployments; outcomes still feed
+// `auth_idempotency_total` when WithMetrics is wired.
+func (a *Auth[C]) IdempotencyWithStore(ttl time.Duration, store IdempotencyStore) fiber.Handler {
+	return idempotencyHandler(ttl, store, a.metrics)
 }
 
 // methodApplies returns true for the write methods the middleware
@@ -162,21 +187,41 @@ func captureReplayHeaders(c *fiber.Ctx) map[string]string {
 // state across routes, register a custom factory that closes over one
 // IdempotencyStore.
 func IdempotencyFactory(args []any) (fiber.Handler, error) {
+	ttl, err := parseIdempotencyArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	return Idempotency(ttl), nil
+}
+
+// IdempotencyFactory (method form) is the *Auth[C]-bound variant of
+// the package-level [IdempotencyFactory]. fibermount registers this
+// variant for you so YAML-mounted `idempotency` chains feed
+// `auth_idempotency_total` when WithMetrics is wired.
+func (a *Auth[C]) IdempotencyFactory(args []any) (fiber.Handler, error) {
+	ttl, err := parseIdempotencyArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	return a.Idempotency(ttl), nil
+}
+
+func parseIdempotencyArgs(args []any) (time.Duration, error) {
 	if len(args) != 1 {
-		return nil, xerrs.Internalf(CodeInvalidFactoryArgs,
+		return 0, xerrs.Internalf(CodeInvalidFactoryArgs,
 			"idempotency: expected [ttl], got %d args", len(args))
 	}
 	ttlStr, ok := args[0].(string)
 	if !ok {
-		return nil, xerrs.Internalf(CodeInvalidFactoryArgs,
+		return 0, xerrs.Internalf(CodeInvalidFactoryArgs,
 			"idempotency: ttl must be a duration string, got %T", args[0])
 	}
 	ttl, err := time.ParseDuration(ttlStr)
 	if err != nil {
-		return nil, xerrs.Internalf(CodeInvalidFactoryArgs,
+		return 0, xerrs.Internalf(CodeInvalidFactoryArgs,
 			"idempotency: ttl %q is not a valid duration: %v", ttlStr, err)
 	}
-	return Idempotency(ttl), nil
+	return ttl, nil
 }
 
 // memIdempotencyStore is the default in-process IdempotencyStore.

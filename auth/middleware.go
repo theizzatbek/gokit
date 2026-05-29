@@ -44,9 +44,11 @@ func (a *Auth[C]) Bearer(mode BearerMode) fiber.Handler {
 		}
 		claims, err := a.eng.verify(tok)
 		if err != nil {
+			a.metrics.incBearerVerify("invalid")
 			a.maybeSecurityLog(c, "bearer_verify_failed", err)
 			return bearerReject(c, err)
 		}
+		a.metrics.incBearerVerify("ok")
 		c.Locals(principalKey{}, claimsToPrincipal(claims, tok))
 		return c.Next()
 	}

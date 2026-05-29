@@ -21,6 +21,7 @@ type Auth[C any] struct {
 	store          RefreshStore
 	logger         *slog.Logger
 	securityLogger *slog.Logger
+	metrics        *authMetrics
 	cookieDomain   string
 	cookiePath     string
 	cookieSecure   bool
@@ -77,6 +78,10 @@ func New[C any](cfg Config, opts ...Option) (*Auth[C], error) {
 	if o.cookieSecure != nil {
 		secure = *o.cookieSecure
 	}
+	var m *authMetrics
+	if o.metrics != nil {
+		m = newAuthMetrics(o.metrics)
+	}
 	a := &Auth[C]{
 		eng: newEngine[C](engineConfig{
 			Keys: cfg.Keys, Issuer: cfg.Issuer, Audience: cfg.Audience,
@@ -85,6 +90,7 @@ func New[C any](cfg Config, opts ...Option) (*Auth[C], error) {
 		store:          o.refreshStore,
 		logger:         o.logger,
 		securityLogger: o.securityLogger,
+		metrics:        m,
 		cookieDomain:   o.cookieDomain,
 		cookiePath:     o.cookiePath,
 		cookieSecure:   secure,

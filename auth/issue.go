@@ -69,11 +69,13 @@ func (a *Auth[C]) IssueTokens(ctx context.Context, res LoginResult[C], meta Issu
 	}
 	access, err := a.eng.sign(claims)
 	if err != nil {
+		a.metrics.incTokenIssueFailed("login", "sign")
 		return TokenPair{}, err
 	}
 
 	raw, hash, err := newRawRefresh()
 	if err != nil {
+		a.metrics.incTokenIssueFailed("login", "sign")
 		return TokenPair{}, err
 	}
 	if err := a.store.Issue(ctx, Record{
@@ -85,9 +87,11 @@ func (a *Auth[C]) IssueTokens(ctx context.Context, res LoginResult[C], meta Issu
 		UserAgent: meta.UserAgent,
 		IP:        meta.IP,
 	}); err != nil {
+		a.metrics.incTokenIssueFailed("login", "store")
 		return TokenPair{}, xerrs.Wrap(err, xerrs.KindUnavailable, CodeStoreUnavailable, "refresh store unavailable")
 	}
 
+	a.metrics.incTokensIssued("login")
 	return TokenPair{
 		Access:           access,
 		AccessExpiresAt:  accessExpiresAt,
@@ -117,6 +121,7 @@ func (a *Auth[C]) RotateRefresh(ctx context.Context, rawCookie string, meta Issu
 		return TokenPair{}, xerrs.Internal("store_unset", "auth: WithRefreshStore option was not provided")
 	}
 	if rawCookie == "" {
+		a.metrics.incRefresh("missing")
 		return TokenPair{}, xerrs.Unauthorized(CodeMissingRefresh, "missing refresh cookie")
 	}
 
@@ -124,6 +129,7 @@ func (a *Auth[C]) RotateRefresh(ctx context.Context, rawCookie string, meta Issu
 	now := a.now()
 	rec, err := a.store.Consume(ctx, oldHash, now)
 	if err != nil {
+		a.metrics.incRefresh(refreshOutcomeFromErr(err))
 		return TokenPair{}, err
 	}
 
@@ -131,6 +137,7 @@ func (a *Auth[C]) RotateRefresh(ctx context.Context, rawCookie string, meta Issu
 	if a.refresher != nil {
 		fresh, err := a.refresher(ctx, rec.Subject)
 		if err != nil {
+			a.metrics.incTokenIssueFailed("refresh", "store")
 			return TokenPair{}, err
 		}
 		result = fresh
@@ -153,11 +160,13 @@ func (a *Auth[C]) RotateRefresh(ctx context.Context, rawCookie string, meta Issu
 	}
 	access, err := a.eng.sign(claims)
 	if err != nil {
+		a.metrics.incTokenIssueFailed("refresh", "sign")
 		return TokenPair{}, err
 	}
 
 	newRaw, newHash, err := newRawRefresh()
 	if err != nil {
+		a.metrics.incTokenIssueFailed("refresh", "sign")
 		return TokenPair{}, err
 	}
 	if err := a.store.Issue(ctx, Record{
@@ -170,9 +179,12 @@ func (a *Auth[C]) RotateRefresh(ctx context.Context, rawCookie string, meta Issu
 		UserAgent:  meta.UserAgent,
 		IP:         meta.IP,
 	}); err != nil {
+		a.metrics.incTokenIssueFailed("refresh", "store")
 		return TokenPair{}, xerrs.Wrap(err, xerrs.KindUnavailable, CodeStoreUnavailable, "refresh store unavailable")
 	}
 
+	a.metrics.incTokensIssued("refresh")
+	a.metrics.incRefresh("ok")
 	return TokenPair{
 		Access:           access,
 		AccessExpiresAt:  accessExpiresAt,
@@ -181,4 +193,22 @@ func (a *Auth[C]) RotateRefresh(ctx context.Context, rawCookie string, meta Issu
 		RefreshExpiresAt: refreshExpiresAt,
 		Subject:          result.Subject,
 	}, nil
+}
+
+// refreshOutcomeFromErr maps a store.Consume error to the
+// auth_refresh_total{outcome=...} label. Unknown error → "invalid"
+// (rather than panicking) so a future store error code never breaks
+// metric collection.
+func refreshOutcomeFromErr(err error) string {
+	if e, ok := err.(*xerrs.Error); ok {
+		switch e.Code {
+		case CodeRefreshReused:
+			return "reused"
+		case CodeRefreshExpired:
+			return "expired"
+		case CodeRefreshInvalid:
+			return "invalid"
+		}
+	}
+	return "invalid"
 }
