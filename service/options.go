@@ -16,6 +16,7 @@ import (
 	"github.com/theizzatbek/gokit/fibermap"
 	"github.com/theizzatbek/gokit/fibermap/bind"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
+	"github.com/theizzatbek/gokit/otelkit"
 )
 
 // Option configures service.New beyond what Config covers.
@@ -42,6 +43,8 @@ type options struct {
 	skipConnectRetry    bool
 	validator           bind.Validator // nil → default validator.New(validator.WithRequiredStructEnabled())
 	refreshGCInterval   time.Duration  // 0 = disabled (default); > 0 = period between refresh-store GarbageCollect runs
+	otelServiceName     string         // non-empty triggers OpenTelemetry setup at service.New time
+	otelOpts            []otelkit.Option
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -158,6 +161,40 @@ func containsWildcardOrigin(origins []string) bool {
 // orchestrate the layer yourself.
 func WithoutBearerOptionalLayer() Option {
 	return func(o *options) { o.skipBearerLayer = true }
+}
+
+// WithOtel enables OpenTelemetry tracing across the service.
+//
+//   - Initializes a TracerProvider via OTLP/HTTP using [otelkit.Setup].
+//     Configure the exporter endpoint and headers through the OTel-standard
+//     OTEL_EXPORTER_OTLP_* environment variables.
+//
+//   - Installs otelfiber middleware at the App level — every incoming
+//     request becomes the root span of its trace, with route name +
+//     status as attributes.
+//
+//   - Wraps httpc's base transport in otelhttp — every outbound call
+//     emits a CLIENT span and propagates W3C TraceContext headers.
+//     Each retry attempt is its own span.
+//
+//   - Registers the TracerProvider shutdown via [Service.OnShutdown]
+//     so a clean Close flushes pending spans before tearing down.
+//
+//     svc, _ := service.New[AppCtx, Claims](ctx, cfg,
+//     service.WithOtel("orders-api",
+//     otelkit.WithServiceVersion("1.0.0"),
+//     otelkit.WithSampleRatio(0.1)))
+//
+// serviceName populates service.name on every span. Pass empty / omit
+// the option to leave tracing disabled (the default).
+//
+// Database query tracing (pgx) is out of scope here — add a pgx tracer
+// manually via the db package's options if you need DB spans.
+func WithOtel(serviceName string, opts ...otelkit.Option) Option {
+	return func(o *options) {
+		o.otelServiceName = serviceName
+		o.otelOpts = opts
+	}
 }
 
 // WithRefreshGC schedules periodic garbage collection of expired

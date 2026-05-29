@@ -257,6 +257,7 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithCORSConfig(cors.Config)` | Full-control CORS — `cfg` is passed straight to `cors.New`. |
 | `WithoutBearerOptionalLayer()` | Skip the auto `Bearer(BearerOptional)` install |
 | `WithRefreshGC(interval)` | Schedule periodic `RefreshStore.GarbageCollect` against the auth refresh store so expired tokens get pruned. INFO log per non-zero sweep; WARN on failure. Bound to `OnShutdown` for clean stop. Interval ≤ 0 = disabled. No-op when Auth isn't configured. |
+| `WithOtel(serviceName, otelkit.Option...)` | Enables OpenTelemetry tracing. Initializes a TracerProvider via OTLP/HTTP (`otelkit.Setup`), prepends `otelfiber` middleware (inbound spans), wraps httpc's base transport in `otelhttp` (outbound spans + W3C propagation), registers shutdown via `OnShutdown`. Configure exporter via standard `OTEL_EXPORTER_OTLP_*` env vars. See [otelkit](../otelkit/README.md). |
 | `WithoutConnectRetry()` | Disables the auto-injected K8s-friendly retry defaults for DB and NATS Connect. Without this, service defaults to 5 retries with 1s→16s exponential backoff (~31s budget). See db/README and clients/nats/README. |
 | `WithHTTPCOptions(opts...)` | Extra httpc options (logger + metrics already auto-applied) |
 | `WithAPIMapOptions(opts...)` | Extra apimap options |

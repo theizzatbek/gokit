@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -39,6 +40,10 @@ type Service[T any, C any] struct {
 	// can call GarbageCollect on it without going through Auth (Auth's
 	// internal store field is unexported and intentionally so).
 	refreshStore auth.RefreshStore
+
+	// otelShutdown is non-nil iff WithOtel was passed. Flushes
+	// pending spans during Close.
+	otelShutdown func(context.Context) error
 
 	closed bool
 }
