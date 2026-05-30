@@ -36,7 +36,7 @@ Setup + FiberMiddleware + shutdown wiring in one option — see
 |---|---|---|
 | `Setup(ctx, dsn)` | — | dsn required; empty value returns an error |
 | `WithEnvironment(env)` | "" | `environment` tag on every event (production/staging/dev) |
-| `WithRelease(release)` | "" | `release` tag — git SHA, image tag, semver |
+| `WithRelease(release)` | "" or [AutoRelease](#release-detection) when service.WithSentry is used | `release` tag — git SHA, image tag, semver. Overrides any value AutoRelease picked up. |
 | `WithSampleRate(r)` | 1.0 | Fraction of error events shipped (0..1) |
 | `WithTracesSampleRate(r)` | 0 | Sentry-native transactions. Keep at 0 when using otelkit for tracing. |
 | `WithBeforeSend(fn)` | nil | Hook to scrub PII, drop noisy events, attach extras |
@@ -47,6 +47,32 @@ Setup + FiberMiddleware + shutdown wiring in one option — see
 
 The SDK reads `SENTRY_DSN` and friends from the environment when those
 are unset in code — same convention as the rest of the kit.
+
+## Release detection
+
+`sentrykit.AutoRelease()` resolves the release tag with no
+configuration on the caller's part. Priority chain:
+
+1. `SENTRY_RELEASE` environment variable.
+2. `OTEL_RESOURCE_ATTRIBUTES` `service.version=X` (so a single
+   `service.WithOtel(svc, otelkit.WithServiceVersion(v))` declaration
+   feeds both pipelines).
+3. `runtime/debug.ReadBuildInfo().Main.Version` when it isn't
+   `(devel)` — typically a semver from `go install <module>@vX.Y.Z`.
+4. `vcs.revision` build setting truncated to 12 chars (matches the
+   short-SHA convention Sentry uses for unversioned commits).
+5. Empty string — sentry-go accepts that and ships events without a
+   release attribution.
+
+`service.setupSentry` prepends `WithRelease(AutoRelease())` to the
+caller's `sentrykit.Option` list, so an explicit
+`sentrykit.WithRelease(...)` from the caller still wins via
+last-write-wins.
+
+For untrimmed local `go run` builds (no vcs metadata), set
+`SENTRY_RELEASE=local-dev` in your shell to avoid sending events
+without an attribution; production builds with `go build -trimpath`
+auto-pick up the vcs revision.
 
 ## FiberMiddleware
 

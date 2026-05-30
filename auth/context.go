@@ -62,6 +62,21 @@ func Subject[C any](c *fiber.Ctx) string {
 	return ""
 }
 
+// SetPrincipalForTest stores p under the Locals slot Bearer
+// middleware normally populates, so downstream code that calls
+// From[C](c) / Subject[C](c) sees it as if a real bearer token had
+// been verified.
+//
+// Intended for integration tests of cross-cutting layers (Sentry
+// user scope, request-scoped logging, metrics labels) that depend on
+// principal presence but don't want to mint a real JWT. Production
+// code MUST NOT call this — it bypasses every verification path. The
+// name is prefixed `ForTest` to make accidental use obvious in code
+// review and surface in greps.
+func SetPrincipalForTest[C any](c *fiber.Ctx, p *Principal[C]) {
+	c.Locals(principalKey{}, p)
+}
+
 // HasScope returns true iff a Principal exists AND has scope s. Convenience
 // for ad-hoc checks (require_scope middleware does the same for declarative
 // route gating).
