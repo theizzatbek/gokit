@@ -3,11 +3,14 @@ package service
 import (
 	"context"
 	"log/slog"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/gofiber/fiber/v2"
 
+	"github.com/theizzatbek/gokit/auth"
 	"github.com/theizzatbek/gokit/sentrykit"
 )
 
@@ -158,6 +161,146 @@ func TestNew_WithSentryErrorCapture_CapturesErrorLog(t *testing.T) {
 	svc.Logger().Warn("not severe enough")
 	if len(captured) != 1 {
 		t.Errorf("Warn should not capture; total events = %d", len(captured))
+	}
+}
+
+func TestSetupSentry_AutoReleaseInjected(t *testing.T) {
+	t.Setenv("SENTRY_RELEASE", "auto-release-v1")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+
+	var captured []*sentry.Event
+	svc, err := New[testCtx, testClaims](context.Background(), Config{},
+		WithSentry(sentryTestDSN,
+			sentrykit.WithBeforeSend(func(e *sentry.Event, _ *sentry.EventHint) *sentry.Event {
+				captured = append(captured, e)
+				return nil
+			})),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	sentry.CaptureMessage("ping")
+	if len(captured) != 1 {
+		t.Fatalf("captured = %d, want 1", len(captured))
+	}
+	if captured[0].Release != "auto-release-v1" {
+		t.Errorf("Release = %q, want auto-release-v1", captured[0].Release)
+	}
+}
+
+func TestSetupSentry_ExplicitReleaseOverridesAuto(t *testing.T) {
+	t.Setenv("SENTRY_RELEASE", "auto-release-v1")
+
+	var captured []*sentry.Event
+	svc, err := New[testCtx, testClaims](context.Background(), Config{},
+		WithSentry(sentryTestDSN,
+			sentrykit.WithRelease("explicit-v2"),
+			sentrykit.WithBeforeSend(func(e *sentry.Event, _ *sentry.EventHint) *sentry.Event {
+				captured = append(captured, e)
+				return nil
+			})),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	sentry.CaptureMessage("ping")
+	if captured[0].Release != "explicit-v2" {
+		t.Errorf("Release = %q, want explicit-v2 (explicit wins over auto)", captured[0].Release)
+	}
+}
+
+func TestSetupSentry_UserScopeMiddlewareSkippedWithoutAuth(t *testing.T) {
+	s := &Service[struct{}, struct{}]{
+		opts: &options{
+			sentryDSN:  sentryTestDSN,
+			sentryOpts: []sentrykit.Option{dropSentry()},
+		},
+	}
+	if err := s.setupSentry(context.Background()); err != nil {
+		t.Fatalf("setupSentry: %v", err)
+	}
+	t.Cleanup(func() { _ = s.sentryShutdown(context.Background()) })
+	// Only sentrykit.FiberMiddleware should be installed; no user scope.
+	if got := len(s.opts.fiberMiddleware); got != 1 {
+		t.Errorf("fiberMiddleware = %d, want 1 (no Auth → no user scope)", got)
+	}
+}
+
+func TestSetupSentry_WithoutSentryUserScope_SkipsMiddleware(t *testing.T) {
+	s := &Service[struct{}, struct{}]{
+		Auth: &auth.Auth[struct{}]{}, // placeholder non-nil — middleware never invokes it here
+		opts: &options{
+			sentryDSN:           sentryTestDSN,
+			sentryOpts:          []sentrykit.Option{dropSentry()},
+			skipSentryUserScope: true,
+		},
+	}
+	if err := s.setupSentry(context.Background()); err != nil {
+		t.Fatalf("setupSentry: %v", err)
+	}
+	t.Cleanup(func() { _ = s.sentryShutdown(context.Background()) })
+	if got := len(s.opts.fiberMiddleware); got != 1 {
+		t.Errorf("fiberMiddleware = %d, want 1 (opt-out applied)", got)
+	}
+}
+
+func TestSetupSentry_UserScopeMiddlewareInstalledWhenAuthOn(t *testing.T) {
+	s := &Service[struct{}, struct{}]{
+		Auth: &auth.Auth[struct{}]{},
+		opts: &options{
+			sentryDSN:  sentryTestDSN,
+			sentryOpts: []sentrykit.Option{dropSentry()},
+		},
+	}
+	if err := s.setupSentry(context.Background()); err != nil {
+		t.Fatalf("setupSentry: %v", err)
+	}
+	t.Cleanup(func() { _ = s.sentryShutdown(context.Background()) })
+	// Expect sentrykit.FiberMiddleware + sentryUserScopeMiddleware.
+	if got := len(s.opts.fiberMiddleware); got != 2 {
+		t.Errorf("fiberMiddleware = %d, want 2 (sentry + user scope)", got)
+	}
+}
+
+func TestSentryUserScopeMiddleware_TagsHubWithPrincipalSubject(t *testing.T) {
+	var captured []*sentry.Event
+	shutdown, err := sentrykit.Setup(context.Background(), sentryTestDSN,
+		sentrykit.WithBeforeSend(func(e *sentry.Event, _ *sentry.EventHint) *sentry.Event {
+			captured = append(captured, e)
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("sentrykit.Setup: %v", err)
+	}
+	t.Cleanup(func() { _ = shutdown(context.Background()) })
+
+	s := &Service[struct{}, struct{}]{Auth: &auth.Auth[struct{}]{}}
+	app := fiber.New()
+	app.Use(sentrykit.FiberMiddleware())
+	// Inject a principal as if auth.Bearer had run upstream.
+	app.Use(func(c *fiber.Ctx) error {
+		auth.SetPrincipalForTest[struct{}](c, &auth.Principal[struct{}]{Subject: "user-42"})
+		return c.Next()
+	})
+	app.Use(s.sentryUserScopeMiddleware())
+	app.Get("/", func(c *fiber.Ctx) error {
+		sentrykit.HubFromContext(c).CaptureMessage("hello")
+		return c.SendString("ok")
+	})
+
+	if _, err := app.Test(httptest.NewRequest("GET", "/", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 1 {
+		t.Fatalf("captured = %d, want 1", len(captured))
+	}
+	if captured[0].User.ID != "user-42" {
+		t.Errorf("User.ID = %q, want user-42", captured[0].User.ID)
 	}
 }
 

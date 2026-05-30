@@ -52,6 +52,7 @@ type options struct {
 	sentryDSN           string
 	sentryOpts          []sentrykit.Option
 	sentrySlogOpts      []sentrykit.HandlerOption
+	skipSentryUserScope bool
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -236,6 +237,24 @@ func WithSentry(dsn string, opts ...sentrykit.Option) Option {
 		o.sentryDSN = dsn
 		o.sentryOpts = opts
 	}
+}
+
+// WithoutSentryUserScope disables the per-request user scope that
+// service.WithSentry otherwise installs (when Auth is also wired).
+//
+// Default behaviour: when a request is authenticated, every Sentry
+// event captured during that request carries
+// `sentry.User{ID: principal.Subject}` — visible in the Sentry UI as
+// the "Affected User" facet. Disable when:
+//
+//   - Subject is considered PII in your deployment (e.g. it's the
+//     user's email).
+//   - You want to set User scope manually from handlers (e.g. with a
+//     hashed/redacted Subject).
+//
+// No effect unless WithSentry is also set or Auth is unconfigured.
+func WithoutSentryUserScope() Option {
+	return func(o *options) { o.skipSentryUserScope = true }
 }
 
 // WithSentryErrorCapture enables Sentry event auto-capture for log
