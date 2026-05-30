@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/theizzatbek/gokit/db"
 	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/fibermap"
+	"github.com/theizzatbek/gokit/sentrykit"
 )
 
 // New constructs the bundled Service. Subsystems are built in dependency
@@ -42,7 +44,8 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 	}
 
 	logger := o.logger
-	if logger == nil {
+	ownedLogger := logger == nil
+	if ownedLogger {
 		logger = newLogger(cfg.Service.LogFormat, cfg.Service.LogLevel,
 			cfg.Service.NodeName, cfg.Service.ServerGroup)
 	}
@@ -72,6 +75,16 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 	// propagator wired by otelkit.Setup.
 	if err := s.setupSentry(ctx); err != nil {
 		return nil, err
+	}
+	// Auto-wrap the kit-built logger with the breadcrumb bridge so
+	// every subsystem-bound logger emits Sentry breadcrumbs into the
+	// request hub. We skip when the user supplied their own logger
+	// (we don't second-guess a pre-tuned log pipeline) or when
+	// Sentry isn't actually wired (setupSentry returns nil shutdown
+	// when DSN is empty).
+	if s.sentryShutdown != nil && ownedLogger {
+		s.logger = slog.New(sentrykit.SlogHandler(s.logger.Handler(),
+			s.opts.sentrySlogOpts...))
 	}
 
 	if err := s.buildDB(ctx); err != nil {

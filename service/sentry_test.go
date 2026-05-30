@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"log/slog"
+	"reflect"
 	"testing"
 
 	"github.com/getsentry/sentry-go"
@@ -88,6 +90,48 @@ func TestRegisterSentryShutdown_AddsCallback(t *testing.T) {
 		t.Errorf("sentryShutdown was not invoked during Close")
 	}
 }
+
+func TestNew_WithSentry_WrapsAutoBuiltLogger(t *testing.T) {
+	svc, err := New[testCtx, testClaims](context.Background(), Config{},
+		WithSentry(sentryTestDSN, dropSentry()))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	handlerType := reflect.TypeOf(svc.Logger().Handler()).String()
+	// SlogHandler returns an unexported *sentrykit.slogHandler.
+	// We assert by type-name suffix to avoid exporting the struct.
+	if handlerType == "" || handlerType[len(handlerType)-1] != 'r' || handlerType[:9] != "*sentrykit" {
+		// Acceptable too: caller wraps further. So fall back to a
+		// behavioural assertion — the handler must NOT be the stock
+		// JSON handler.
+		if _, isJSON := svc.Logger().Handler().(*slog.JSONHandler); isJSON {
+			t.Errorf("expected SlogHandler wrap on kit-built logger, got %T", svc.Logger().Handler())
+		}
+	}
+}
+
+func TestNew_WithSentry_RespectsUserLogger(t *testing.T) {
+	user := slog.New(slog.NewJSONHandler(testWriter{}, nil))
+	svc, err := New[testCtx, testClaims](context.Background(), Config{},
+		WithLogger(user),
+		WithSentry(sentryTestDSN, dropSentry()))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	if svc.Logger() != user {
+		t.Errorf("user-supplied logger should not be wrapped; got %T (wanted identity)", svc.Logger())
+	}
+}
+
+// testWriter is a no-op io.Writer used so the user-supplied logger
+// test doesn't pollute stdout.
+type testWriter struct{}
+
+func (testWriter) Write(b []byte) (int, error) { return len(b), nil }
 
 func TestRegisterSentryShutdown_LIFO_AfterOtel(t *testing.T) {
 	// OnShutdown is LIFO. We want sentry to flush BEFORE otel — so

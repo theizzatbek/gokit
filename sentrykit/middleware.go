@@ -35,6 +35,12 @@ func FiberMiddleware() fiber.Handler {
 		hub := sentry.CurrentHub().Clone()
 		populateScope(c, hub.Scope())
 		c.Locals(hubKey{}, hub)
+		// Propagate the hub via c.UserContext() so subsystems whose
+		// loggers go through SlogHandler (db tracer, auth security
+		// log, patched httpc) can resolve it via the standard
+		// sentry.GetHubFromContext helper. The Locals path stays for
+		// handler-side HubFromContext callers.
+		c.SetUserContext(sentry.SetHubOnContext(c.UserContext(), hub))
 
 		defer func() {
 			// Fiber resolves the route only after the chain advances

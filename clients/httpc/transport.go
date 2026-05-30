@@ -187,7 +187,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			cancel()
 			if attempt >= maxAttempts {
 				if t.logger != nil {
-					t.logger.Warn("httpc retries exhausted",
+					t.logger.WarnContext(req.Context(), "httpc retries exhausted",
 						"method", req.Method, "url", req.URL.String(),
 						"attempts", attempt+1, "err", err.Error())
 				}
@@ -202,7 +202,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 			delay := computeBackoff(attempt, t.backoffBase, t.backoffMax)
 			if t.logger != nil {
-				t.logger.Debug("httpc retry",
+				t.logger.DebugContext(req.Context(), "httpc retry",
 					"method", req.Method, "url", req.URL.String(),
 					"attempt", attempt, "delay_ms", delay.Milliseconds(),
 					"err", err.Error())
@@ -228,7 +228,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			// Exhausted: return drained response so callers can still inspect
 			// StatusCode/Headers.
 			if t.logger != nil {
-				t.logger.Warn("httpc retries exhausted",
+				t.logger.WarnContext(req.Context(), "httpc retries exhausted",
 					"method", req.Method, "url", req.URL.String(),
 					"attempts", attempt+1, "status", resp.StatusCode)
 			}
@@ -256,7 +256,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		class := classify(resp, nil, ra)
 		if t.logger != nil {
-			t.logger.Debug("httpc retry",
+			t.logger.DebugContext(req.Context(), "httpc retry",
 				"method", req.Method, "url", req.URL.String(),
 				"attempt", attempt, "delay_ms", delay.Milliseconds(),
 				"status", resp.StatusCode, "reason", class)

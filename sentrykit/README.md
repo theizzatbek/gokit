@@ -101,6 +101,60 @@ auth rejections are not Sentry-worthy by default.
 sets a custom error handler. Wire it explicitly via
 `service.WithRunOptions(fibermap.WithFiberConfig(...))`.
 
+## Subsystem breadcrumbs (slog bridge)
+
+`sentrykit.SlogHandler(inner, opts...)` wraps any `slog.Handler` so
+every log record passing through it also becomes a Sentry breadcrumb
+on the request hub. The inner handler still receives every record —
+console / JSON logging keeps working.
+
+```go
+inner := slog.NewJSONHandler(os.Stdout, nil)
+logger := slog.New(sentrykit.SlogHandler(inner,
+    sentrykit.WithAttrFilter(func(k string) bool { return k != "sql" }),
+    sentrykit.WithMaxBreadcrumbValueLen(256),
+))
+```
+
+Hub resolution: `sentry.GetHubFromContext(ctx)` first, then
+`sentry.CurrentHub()`. `FiberMiddleware` puts the request hub on
+`c.UserContext()` (via `sentry.SetHubOnContext`) so any subsystem
+logger that uses `*Context` variants picks up the correct per-request
+hub automatically — db's pgx tracer (`LogAttrs(ctx, ...)`), auth's
+security logger (`InfoContext(c.UserContext(), ...)`), httpc's retry
+log (`WarnContext(req.Context(), ...)`) all qualify out of the box.
+
+Level mapping:
+
+| slog | Sentry breadcrumb level | Default |
+|---|---|---|
+| Debug | "debug" | **skipped** (use `WithDebugBreadcrumbs`) |
+| Info | "info" | on |
+| Warn | "warning" | on |
+| Error | "error" | on (breadcrumb only — `CaptureException` is opt-in) |
+
+Debug is skipped by default because pgx's query tracer logs every
+successful query at Debug level — letting them in would flood the
+100-item breadcrumb buffer inside one transactional handler.
+
+Category resolution: explicit attr (default key `category`) → first
+word/`:`-prefix of the message lowercased → literal `"log"`. So
+`logger.Info("httpc retry", ...)` lands as `category="httpc"`
+without code changes.
+
+| Option | Default | Notes |
+|---|---|---|
+| `WithDebugBreadcrumbs()` | off | Include Debug logs |
+| `WithCategoryAttr(key)` | "category" | Slog attr to promote to breadcrumb.Category |
+| `WithMaxBreadcrumbValueLen(n)` | 512 | Cap stringified attr values; n ≤ 0 disables |
+| `WithAttrFilter(fn)` | nil | Drop attr keys for which fn returns false |
+
+`service.WithSentry` auto-wraps the kit-built logger with this
+handler. User-supplied loggers (via `service.WithLogger`) are
+respected unchanged — opt in manually if you want breadcrumb
+coverage there. Use `service.WithSentryBreadcrumbs(...)` to forward
+handler options into the auto-wrap path.
+
 ## Capture truth table
 
 | Trigger | FiberMiddleware? | WrapErrorHandler? | Captured? |
@@ -118,10 +172,10 @@ sets a custom error handler. Wire it explicitly via
 - **Traces+metrics out of scope.** Performance belongs to
   [`otelkit`](../otelkit/README.md); Sentry can ingest those via OTLP
   if you point the OTel exporter at Sentry's endpoint.
-- **No slog bridge.** Logs at Error level do NOT auto-capture — that
-  lands in a follow-up PR.
-- **No subsystem breadcrumbs.** DB / httpc / nats events don't feed
-  the request hub's breadcrumb log automatically — follow-up.
+- **No Error → event auto-capture.** Error-level slog records add a
+  breadcrumb but do NOT `CaptureException` — that's the next
+  follow-up. Today, explicit capture is via `HubFromContext(c).
+  CaptureException(err)` from handlers.
 - **No release auto-detection.** `WithRelease` must be passed
   explicitly (or `SENTRY_RELEASE` env). Follow-up wires the value
   from `service.Service.NodeName` / `service.version` resource attr.
