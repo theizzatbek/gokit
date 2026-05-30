@@ -415,10 +415,10 @@ func (h *slogHandler) capValue(v any) any {
 }
 
 // resolveCategory picks the breadcrumb category in priority order:
-//   1. explicit attr named by cfg.categoryAttr (case-sensitive, as
-//      slog records keys verbatim).
-//   2. first word of record.Message lowercased.
-//   3. literal "log".
+//  1. explicit attr named by cfg.categoryAttr (case-sensitive, as
+//     slog records keys verbatim).
+//  2. first word of record.Message lowercased.
+//  3. literal "log".
 func (h *slogHandler) resolveCategory(r slog.Record, data map[string]interface{}) string {
 	if v, ok := data[h.cfg.categoryAttr]; ok {
 		if s, ok := v.(string); ok && s != "" {
