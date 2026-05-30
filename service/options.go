@@ -51,6 +51,7 @@ type options struct {
 	skipRuntimeMetrics  bool // suppress Go runtime + process collector auto-registration
 	sentryDSN           string
 	sentryOpts          []sentrykit.Option
+	sentrySlogOpts      []sentrykit.HandlerOption
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -235,6 +236,25 @@ func WithSentry(dsn string, opts ...sentrykit.Option) Option {
 		o.sentryDSN = dsn
 		o.sentryOpts = opts
 	}
+}
+
+// WithSentryBreadcrumbs configures the slog→breadcrumb bridge that
+// service auto-installs on the kit-built logger when [WithSentry] is
+// passed. Forwarded to [sentrykit.SlogHandler]: WithDebugBreadcrumbs,
+// WithAttrFilter, WithCategoryAttr, WithMaxBreadcrumbValueLen.
+//
+//	service.New(... ,
+//	    service.WithSentry(dsn),
+//	    service.WithSentryBreadcrumbs(
+//	        sentrykit.WithAttrFilter(func(k string) bool { return k != "sql" }),
+//	        sentrykit.WithMaxBreadcrumbValueLen(256),
+//	    ))
+//
+// No-op when WithSentry was not passed or when the caller supplied
+// their own logger via WithLogger (user loggers are kept as-is to
+// avoid surprising side effects on a pre-tuned log pipeline).
+func WithSentryBreadcrumbs(opts ...sentrykit.HandlerOption) Option {
+	return func(o *options) { o.sentrySlogOpts = append(o.sentrySlogOpts, opts...) }
 }
 
 // WithOtelMetricsOptions configures the OTel metrics pipeline that
