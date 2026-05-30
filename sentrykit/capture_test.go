@@ -243,7 +243,7 @@ func TestSlogHandler_CaptureLevel_BreadcrumbStillAddsOnDedupe(t *testing.T) {
 
 	logger.ErrorContext(ctx, "first", "category", "db") // captures + breadcrumb
 	logger.ErrorContext(ctx, "first", "category", "db") // dedupe-suppressed; still breadcrumb
-	captureNow(ctx, "later trigger")                     // forces a fresh event so we can inspect breadcrumbs
+	captureNow(ctx, "later trigger")                    // forces a fresh event so we can inspect breadcrumbs
 
 	events := sink.snapshot()
 	trigger := eventsForMessage(events, "later trigger")

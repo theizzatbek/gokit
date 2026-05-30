@@ -24,34 +24,34 @@ import (
 type Option func(*options)
 
 type options struct {
-	logger              *slog.Logger
-	metrics             prometheus.Registerer
-	openapiEnable       bool // WithOpenAPI() flips this
-	openapiOpts         []openapi.Option
-	fiberMiddleware     []fiber.Handler
-	skipBearerLayer     bool
-	httpcOpts           []httpc.Option
-	apimapOpts          []apimap.Option
-	apimapRegistration  func(*apimap.Engine)
-	apimapEnv           map[string]string
-	apimapEnable        bool
-	natsmapRegistration func(*natsmap.Engine)
-	natsmapEnv          map[string]string
-	natsmapEnable       bool
-	natsOpts            []natsclient.Option
-	routesEnable        bool
-	runOpts             []fibermap.RunOption
-	skipConnectRetry    bool
-	validator           bind.Validator // nil → default validator.New(validator.WithRequiredStructEnabled())
-	refreshGCInterval   time.Duration  // 0 = disabled (default); > 0 = period between refresh-store GarbageCollect runs
-	otelServiceName     string         // non-empty triggers OpenTelemetry setup at service.New time
-	otelOpts            []otelkit.Option
-	otelMetricsOpts     []otelkit.MetricsOption
-	skipOtelMetrics     bool // suppress the Prometheus→OTel metrics bridge even when WithOtel is set
-	skipRuntimeMetrics  bool // suppress Go runtime + process collector auto-registration
-	sentryDSN           string
-	sentryOpts          []sentrykit.Option
-	sentrySlogOpts      []sentrykit.HandlerOption
+	logger                     *slog.Logger
+	metrics                    prometheus.Registerer
+	openapiEnable              bool // WithOpenAPI() flips this
+	openapiOpts                []openapi.Option
+	fiberMiddleware            []fiber.Handler
+	skipBearerLayer            bool
+	httpcOpts                  []httpc.Option
+	apimapOpts                 []apimap.Option
+	apimapRegistration         func(*apimap.Engine)
+	apimapEnv                  map[string]string
+	apimapEnable               bool
+	natsmapRegistration        func(*natsmap.Engine)
+	natsmapEnv                 map[string]string
+	natsmapEnable              bool
+	natsOpts                   []natsclient.Option
+	routesEnable               bool
+	runOpts                    []fibermap.RunOption
+	skipConnectRetry           bool
+	validator                  bind.Validator // nil → default validator.New(validator.WithRequiredStructEnabled())
+	refreshGCInterval          time.Duration  // 0 = disabled (default); > 0 = period between refresh-store GarbageCollect runs
+	otelServiceName            string         // non-empty triggers OpenTelemetry setup at service.New time
+	otelOpts                   []otelkit.Option
+	otelMetricsOpts            []otelkit.MetricsOption
+	skipOtelMetrics            bool // suppress the Prometheus→OTel metrics bridge even when WithOtel is set
+	skipRuntimeMetrics         bool // suppress Go runtime + process collector auto-registration
+	sentryDSN                  string
+	sentryOpts                 []sentrykit.Option
+	sentrySlogOpts             []sentrykit.HandlerOption
 	skipSentryUserScope        bool
 	sentryRefreshGCSlug        string
 	skipSentryRefreshGCMonitor bool
