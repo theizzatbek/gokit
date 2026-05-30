@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -18,6 +19,10 @@ type handlerConfig struct {
 	categoryAttr   string
 	maxValueLen    int
 	attrFilter     func(string) bool
+	captureLevel   slog.Level // records >= this level capture as events (in addition to breadcrumb)
+	captureEnabled bool       // tri-state: false = capture off entirely
+	errorAttrKeys  []string   // attrs whose error-typed value drives CaptureException
+	dedupeWindow   time.Duration
 }
 
 // WithDebugBreadcrumbs enables Debug-level records as breadcrumbs.
@@ -51,6 +56,46 @@ func WithAttrFilter(fn func(key string) bool) HandlerOption {
 	return func(c *handlerConfig) { c.attrFilter = fn }
 }
 
+// WithCaptureLevel enables Sentry event auto-capture for records at
+// >= level. The record still becomes a breadcrumb on the hub —
+// capture is additive, not a replacement. When an attr named by
+// WithCaptureErrorAttrKeys carries an `error` value, the event is
+// CaptureException (stack frames from the running goroutine);
+// otherwise it's CaptureMessage with the record's text.
+//
+// Off by default (PR #1 contract: only panic + WrapErrorHandler
+// auto-capture). Typical wiring:
+//
+//	sentrykit.SlogHandler(inner, sentrykit.WithCaptureLevel(slog.LevelError))
+//
+// Dedupe (WithCaptureDedupeWindow) protects high-volume Error logs
+// from generating one event per call.
+func WithCaptureLevel(level slog.Level) HandlerOption {
+	return func(c *handlerConfig) {
+		c.captureLevel = level
+		c.captureEnabled = true
+	}
+}
+
+// WithCaptureErrorAttrKeys overrides the list of attr keys consulted
+// for an `error` value when promoting a captured record to a Sentry
+// Exception. Default: ["err", "error", "cause"]. Order matters — the
+// first match wins. Pass an empty slice to always use CaptureMessage.
+func WithCaptureErrorAttrKeys(keys ...string) HandlerOption {
+	return func(c *handlerConfig) {
+		c.errorAttrKeys = append([]string(nil), keys...)
+	}
+}
+
+// WithCaptureDedupeWindow caps event volume: a fingerprint of
+// (level, category, message) seen within d of a previous occurrence
+// is suppressed (the breadcrumb still adds, but no new event ships).
+// Default 60s. Set d <= 0 to disable dedupe entirely — every
+// captured record ships an event.
+func WithCaptureDedupeWindow(d time.Duration) HandlerOption {
+	return func(c *handlerConfig) { c.dedupeWindow = d }
+}
+
 // SlogHandler wraps inner so every record passed through it also
 // becomes a Sentry breadcrumb on the hub resolved from the record's
 // ctx (falls back to sentry.CurrentHub when ctx carries no hub).
@@ -71,13 +116,45 @@ func WithAttrFilter(fn func(key string) bool) HandlerOption {
 // the first word of record.Message lowercased; otherwise "log".
 func SlogHandler(inner slog.Handler, opts ...HandlerOption) slog.Handler {
 	cfg := &handlerConfig{
-		categoryAttr: "category",
-		maxValueLen:  512,
+		categoryAttr:  "category",
+		maxValueLen:   512,
+		errorAttrKeys: []string{"err", "error", "cause"},
+		dedupeWindow:  60 * time.Second,
 	}
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	return &slogHandler{inner: inner, cfg: cfg}
+	h := &slogHandler{inner: inner, cfg: cfg}
+	if cfg.captureEnabled && cfg.dedupeWindow > 0 {
+		h.dedupe = &dedupeCache{}
+	}
+	return h
+}
+
+// dedupeCache fingerprints captured records and suppresses
+// duplicates seen within cfg.dedupeWindow. sync.Map keeps lookups
+// lock-free in the hot path; lastSeen is a unix-nano stored as
+// time.Time on insert.
+//
+// Entries never expire on their own — they're overwritten when a
+// fingerprint repeats, and "old" entries just sit around. A single
+// process running for weeks may accumulate up to one entry per
+// distinct (level, category, message) tuple ever seen; that's bound
+// by the actual code emitting Error logs, not by traffic volume, so
+// the memory ceiling is small (hundreds of entries).
+type dedupeCache struct {
+	m sync.Map // fingerprint string → time.Time
+}
+
+func (d *dedupeCache) shouldEmit(fp string, now time.Time, window time.Duration) bool {
+	if v, ok := d.m.Load(fp); ok {
+		last := v.(time.Time)
+		if now.Sub(last) < window {
+			return false
+		}
+	}
+	d.m.Store(fp, now)
+	return true
 }
 
 type slogHandler struct {
@@ -92,6 +169,10 @@ type slogHandler struct {
 	// so far (e.g. "event." or "event.payload."). Empty by default.
 	// Record-time attrs and any future WithAttrs use this prefix.
 	groupPrefix string
+	// dedupe is non-nil iff WithCaptureLevel was set AND
+	// dedupeWindow > 0. Shared across all WithAttrs/WithGroup clones
+	// so dedupe state isn't per-logger-instance.
+	dedupe *dedupeCache
 }
 
 func (h *slogHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -143,12 +224,121 @@ func (h *slogHandler) Handle(ctx context.Context, r slog.Record) error {
 		bc.Timestamp = time.Now()
 	}
 	hub.AddBreadcrumb(bc, nil)
+
+	// Capture as a Sentry event when the record is at or above the
+	// configured threshold AND the dedupe cache lets it through.
+	// Breadcrumb is always added first so even dedupe-suppressed
+	// records still show up in any subsequent event's timeline.
+	if h.cfg.captureEnabled && r.Level >= h.cfg.captureLevel {
+		now := time.Now()
+		fp := h.fingerprint(r.Level, category, r.Message)
+		if h.dedupe == nil || h.dedupe.shouldEmit(fp, now, h.cfg.dedupeWindow) {
+			h.captureEvent(hub, r, category, data)
+		}
+	}
 	return innerErr
+}
+
+// captureEvent ships the record as a Sentry event. When an attr in
+// h.cfg.errorAttrKeys carries an error value, the event is a typed
+// Exception (Sentry renders stack frames from the running
+// goroutine); otherwise it's a Message event with the record text.
+func (h *slogHandler) captureEvent(hub *sentry.Hub, r slog.Record, category string, data map[string]interface{}) {
+	hub.WithScope(func(scope *sentry.Scope) {
+		// Tag the event with the resolved category so Sentry's
+		// facets stay consistent between breadcrumb and event for
+		// the same record.
+		scope.SetTag("category", category)
+		scope.SetLevel(mapLevel(r.Level))
+		// Pack attrs into a single "log" context block so they
+		// surface in the Sentry UI's contexts section without
+		// inflating the tags facet (which is global cardinality).
+		// Skip the err/error/cause keys we promoted to Exception —
+		// duplicating the same error string is noise.
+		ctx := sentry.Context{}
+		for k, v := range data {
+			if h.isErrorAttrKey(k) {
+				continue
+			}
+			ctx[k] = v
+		}
+		if len(ctx) > 0 {
+			scope.SetContext("log", ctx)
+		}
+		if err := h.extractError(r); err != nil {
+			hub.CaptureException(err)
+			return
+		}
+		hub.CaptureMessage(r.Message)
+	})
+}
+
+// fingerprint produces a stable string for dedupe lookups. We
+// deliberately avoid including attr values: a typical
+// `logger.ErrorContext(ctx, "db query failed", "err", err)` should
+// dedupe by (Error, "db", "db query failed"), not by the specific
+// error string which often varies (timestamps, IDs).
+func (h *slogHandler) fingerprint(level slog.Level, category, msg string) string {
+	return level.String() + "|" + category + "|" + msg
+}
+
+// extractError returns the first error-typed value among
+// h.cfg.errorAttrKeys present in the record's attrs (including
+// preAttrs). Returns nil when none of the keys hold an error.
+func (h *slogHandler) extractError(r slog.Record) error {
+	if len(h.cfg.errorAttrKeys) == 0 {
+		return nil
+	}
+	keys := h.cfg.errorAttrKeys
+	// Walk preAttrs first, then record attrs. Last write wins —
+	// preserves slog's per-call attr precedence.
+	var found error
+	for _, a := range h.preAttrs {
+		if e, ok := matchErrorAttr(a, keys); ok {
+			found = e
+		}
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		if e, ok := matchErrorAttr(a, keys); ok {
+			found = e
+		}
+		return true
+	})
+	return found
+}
+
+func matchErrorAttr(a slog.Attr, keys []string) (error, bool) {
+	for _, k := range keys {
+		if a.Key != k {
+			continue
+		}
+		// Strip the group prefix slogHandler may have attached.
+		// preAttrs keys arrive prefixed (e.g. "event.err"); skip
+		// those — capture only matches top-level keys to avoid
+		// ambiguous semantics inside nested groups.
+		if i := strings.LastIndex(a.Key, "."); i >= 0 && a.Key != k {
+			continue
+		}
+		if e, ok := a.Value.Resolve().Any().(error); ok {
+			return e, true
+		}
+	}
+	return nil, false
+}
+
+func (h *slogHandler) isErrorAttrKey(k string) bool {
+	for _, want := range h.cfg.errorAttrKeys {
+		if k == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *slogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	clone := *h
 	clone.inner = h.inner.WithAttrs(attrs)
+	clone.dedupe = h.dedupe // shared cache across clones
 	// Snapshot the attrs with the CURRENT group prefix applied so
 	// later WithGroup calls don't retroactively re-prefix them.
 	prefixed := make([]slog.Attr, len(attrs))
@@ -162,6 +352,7 @@ func (h *slogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 func (h *slogHandler) WithGroup(name string) slog.Handler {
 	clone := *h
 	clone.inner = h.inner.WithGroup(name)
+	clone.dedupe = h.dedupe // shared cache across clones
 	if name != "" {
 		clone.groupPrefix = h.groupPrefix + name + "."
 	}

@@ -148,6 +148,36 @@ without code changes.
 | `WithCategoryAttr(key)` | "category" | Slog attr to promote to breadcrumb.Category |
 | `WithMaxBreadcrumbValueLen(n)` | 512 | Cap stringified attr values; n ≤ 0 disables |
 | `WithAttrFilter(fn)` | nil | Drop attr keys for which fn returns false |
+| `WithCaptureLevel(level)` | off | Records ≥ level capture as Sentry events (in addition to breadcrumb) |
+| `WithCaptureErrorAttrKeys(keys...)` | err / error / cause | Attr keys consulted for an `error` value → CaptureException; otherwise CaptureMessage |
+| `WithCaptureDedupeWindow(d)` | 60s | Suppress duplicate events for same `(level, category, message)` within d; 0 disables |
+
+### Error → event auto-capture
+
+`WithCaptureLevel(slog.LevelError)` turns the handler into a Sentry
+sink for high-severity log records:
+
+```go
+sentrykit.SlogHandler(inner,
+    sentrykit.WithCaptureLevel(slog.LevelError),
+)
+```
+
+- Records ≥ threshold ship as events. The breadcrumb is added FIRST
+  (so the event timeline includes it).
+- If an attr in `err` / `error` / `cause` (configurable via
+  `WithCaptureErrorAttrKeys`) carries an `error` value, the event is
+  a Sentry **Exception** (stack frames + `error.Error()` as
+  `Exception.Value`). Otherwise it's a **Message** event with
+  `record.Message`.
+- Attrs are packed into a single `log` Sentry context block, keeping
+  the global tag facet clean.
+- Dedupe by fingerprint `(level, category, message)`. The fingerprint
+  intentionally ignores attr values — the same `db query failed` shouldn't
+  produce a fresh event per concrete query.
+
+`service.WithSentryErrorCapture(slog.LevelError)` is the service-level
+shortcut.
 
 `service.WithSentry` auto-wraps the kit-built logger with this
 handler. User-supplied loggers (via `service.WithLogger`) are
@@ -172,10 +202,11 @@ handler options into the auto-wrap path.
 - **Traces+metrics out of scope.** Performance belongs to
   [`otelkit`](../otelkit/README.md); Sentry can ingest those via OTLP
   if you point the OTel exporter at Sentry's endpoint.
-- **No Error → event auto-capture.** Error-level slog records add a
-  breadcrumb but do NOT `CaptureException` — that's the next
-  follow-up. Today, explicit capture is via `HubFromContext(c).
-  CaptureException(err)` from handlers.
+- **No stack frames from wrapped errors.** When the `err` attr
+  carries an `errs.Error` with a `Cause`, the captured Exception
+  uses the running goroutine's stack — not the stack the cause was
+  produced on. Wiring a `runtime.Frame` extractor onto `errs.Cause`
+  is a future follow-up if needed.
 - **No release auto-detection.** `WithRelease` must be passed
   explicitly (or `SENTRY_RELEASE` env). Follow-up wires the value
   from `service.Service.NodeName` / `service.version` resource attr.

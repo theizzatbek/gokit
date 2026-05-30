@@ -238,10 +238,34 @@ func WithSentry(dsn string, opts ...sentrykit.Option) Option {
 	}
 }
 
+// WithSentryErrorCapture enables Sentry event auto-capture for log
+// records at >= level. Forwards to
+// [sentrykit.WithCaptureLevel]: when the kit-built logger emits a
+// record at or above the threshold, an event ships in addition to
+// the breadcrumb. When the record carries an attr named "err",
+// "error", or "cause" with an error value, the event is a Sentry
+// Exception (stack frames from the running goroutine); otherwise
+// it's a Message event.
+//
+//	service.WithSentry(dsn),
+//	service.WithSentryErrorCapture(slog.LevelError)
+//
+// No-op without [WithSentry] or when the caller supplied their own
+// logger via WithLogger (user loggers are kept untouched). Duplicate
+// events for the same (level, category, message) within 60s are
+// suppressed; override with
+// service.WithSentryBreadcrumbs(sentrykit.WithCaptureDedupeWindow(d)).
+func WithSentryErrorCapture(level slog.Level) Option {
+	return func(o *options) {
+		o.sentrySlogOpts = append(o.sentrySlogOpts, sentrykit.WithCaptureLevel(level))
+	}
+}
+
 // WithSentryBreadcrumbs configures the slog→breadcrumb bridge that
 // service auto-installs on the kit-built logger when [WithSentry] is
 // passed. Forwarded to [sentrykit.SlogHandler]: WithDebugBreadcrumbs,
-// WithAttrFilter, WithCategoryAttr, WithMaxBreadcrumbValueLen.
+// WithAttrFilter, WithCategoryAttr, WithMaxBreadcrumbValueLen,
+// WithCaptureDedupeWindow, WithCaptureErrorAttrKeys.
 //
 //	service.New(... ,
 //	    service.WithSentry(dsn),

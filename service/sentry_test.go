@@ -133,6 +133,34 @@ type testWriter struct{}
 
 func (testWriter) Write(b []byte) (int, error) { return len(b), nil }
 
+func TestNew_WithSentryErrorCapture_CapturesErrorLog(t *testing.T) {
+	var captured []*sentry.Event
+	svc, err := New[testCtx, testClaims](context.Background(), Config{},
+		WithSentry(sentryTestDSN,
+			sentrykit.WithBeforeSend(func(e *sentry.Event, _ *sentry.EventHint) *sentry.Event {
+				captured = append(captured, e)
+				return nil
+			})),
+		WithSentryErrorCapture(slog.LevelError),
+		WithSentryBreadcrumbs(sentrykit.WithCaptureDedupeWindow(0)),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(svc.Close)
+
+	svc.Logger().Error("boom", "k", "v")
+	if len(captured) != 1 {
+		t.Errorf("expected 1 captured event, got %d", len(captured))
+	}
+
+	// Below threshold — no capture.
+	svc.Logger().Warn("not severe enough")
+	if len(captured) != 1 {
+		t.Errorf("Warn should not capture; total events = %d", len(captured))
+	}
+}
+
 func TestRegisterSentryShutdown_LIFO_AfterOtel(t *testing.T) {
 	// OnShutdown is LIFO. We want sentry to flush BEFORE otel — so
 	// we register otel first, then sentry. Calling Close should
