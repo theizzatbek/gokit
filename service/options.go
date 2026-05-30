@@ -52,7 +52,9 @@ type options struct {
 	sentryDSN           string
 	sentryOpts          []sentrykit.Option
 	sentrySlogOpts      []sentrykit.HandlerOption
-	skipSentryUserScope bool
+	skipSentryUserScope        bool
+	sentryRefreshGCSlug        string
+	skipSentryRefreshGCMonitor bool
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -237,6 +239,30 @@ func WithSentry(dsn string, opts ...sentrykit.Option) Option {
 		o.sentryDSN = dsn
 		o.sentryOpts = opts
 	}
+}
+
+// WithSentryRefreshGCSlug overrides the default "kit-refresh-gc"
+// monitor slug used when the refresh-token GC ticker reports
+// check-ins to Sentry Crons. Use to distinguish multiple kit-based
+// services sharing one Sentry project, e.g. "orders-refresh-gc".
+//
+// No effect unless [WithSentry] and [WithRefreshGC] are both set
+// (cron monitoring lights up only when both subsystems are wired).
+func WithSentryRefreshGCSlug(slug string) Option {
+	return func(o *options) { o.sentryRefreshGCSlug = slug }
+}
+
+// WithoutSentryRefreshGCMonitor disables Sentry Crons check-ins for
+// the refresh-token GC ticker. Use in multi-replica deployments
+// where every replica ticks on its own — Sentry doesn't deduplicate
+// by slug, so one configured monitor would receive one heartbeat
+// per replica per tick (the "Failing job" alert never fires, the
+// "Missed check-in" alert is impossible to tune).
+//
+// Tracing / breadcrumbs / error capture from PRs #1–#4 stay
+// enabled; only the periodic check-in is suppressed.
+func WithoutSentryRefreshGCMonitor() Option {
+	return func(o *options) { o.skipSentryRefreshGCMonitor = true }
 }
 
 // WithoutSentryUserScope disables the per-request user scope that

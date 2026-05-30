@@ -7,9 +7,12 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/getsentry/sentry-go"
 
 	"github.com/theizzatbek/gokit/auth"
 )
@@ -152,6 +155,115 @@ func TestStartRefreshGC_LogsRemovedCount(t *testing.T) {
 	}
 	if !strings.Contains(out, "removed=42") {
 		t.Errorf("log missing removed count: %q", out)
+	}
+}
+
+// gcCheckInTransport implements sentry.Transport — same pattern as
+// the sentrykit cron tests but kept package-local because the kit
+// doesn't expose its test transport publicly. Records every event
+// the GC ticker fires so refresh_gc_test can assert check-in
+// behaviour offline.
+type gcCheckInTransport struct {
+	mu     sync.Mutex
+	events []*sentry.Event
+}
+
+func (t *gcCheckInTransport) Configure(_ sentry.ClientOptions)        {}
+func (t *gcCheckInTransport) Flush(_ time.Duration) bool              { return true }
+func (t *gcCheckInTransport) FlushWithContext(_ context.Context) bool { return true }
+func (t *gcCheckInTransport) Close()                                  {}
+func (t *gcCheckInTransport) SendEvent(e *sentry.Event) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.events = append(t.events, e)
+}
+
+func (t *gcCheckInTransport) checkIns() []*sentry.CheckIn {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []*sentry.CheckIn
+	for _, e := range t.events {
+		if e.CheckIn != nil {
+			out = append(out, e.CheckIn)
+		}
+	}
+	return out
+}
+
+func installGCSentry(t *testing.T) *gcCheckInTransport {
+	t.Helper()
+	tr := &gcCheckInTransport{}
+	if err := sentry.Init(sentry.ClientOptions{
+		Dsn:       "https://public@o0.ingest.sentry.io/0",
+		Transport: tr,
+	}); err != nil {
+		t.Fatalf("sentry.Init: %v", err)
+	}
+	t.Cleanup(func() {
+		sentry.Flush(500 * time.Millisecond)
+		sentry.CurrentHub().BindClient(nil)
+	})
+	return tr
+}
+
+func TestStartRefreshGC_WithSentry_SendsCheckIns(t *testing.T) {
+	tr := installGCSentry(t)
+	store := &fakeStore{}
+	s := newServiceForGC(t, 5*time.Millisecond, store, nil)
+	// Pretend setupSentry succeeded — the GC code only looks at
+	// s.sentryShutdown != nil to decide whether to wrap ticks.
+	s.sentryShutdown = func(context.Context) error { return nil }
+	s.startRefreshGC()
+	time.Sleep(40 * time.Millisecond)
+	s.Close()
+	sentry.Flush(500 * time.Millisecond)
+
+	checkIns := tr.checkIns()
+	if len(checkIns) < 2 {
+		t.Fatalf("checkIns = %d, want at least 2 (InProgress + OK per tick)", len(checkIns))
+	}
+	for _, c := range checkIns {
+		if c.MonitorSlug != "kit-refresh-gc" {
+			t.Errorf("unexpected slug %q, want kit-refresh-gc", c.MonitorSlug)
+		}
+	}
+}
+
+func TestStartRefreshGC_WithoutSentryRefreshGCMonitor_NoCheckIns(t *testing.T) {
+	tr := installGCSentry(t)
+	store := &fakeStore{}
+	s := newServiceForGC(t, 5*time.Millisecond, store, nil)
+	s.sentryShutdown = func(context.Context) error { return nil }
+	s.opts.skipSentryRefreshGCMonitor = true
+	s.startRefreshGC()
+	time.Sleep(40 * time.Millisecond)
+	s.Close()
+	sentry.Flush(500 * time.Millisecond)
+
+	if got := len(tr.checkIns()); got != 0 {
+		t.Errorf("got %d check-ins with opt-out flag, want 0", got)
+	}
+}
+
+func TestStartRefreshGC_CustomSlug(t *testing.T) {
+	tr := installGCSentry(t)
+	store := &fakeStore{}
+	s := newServiceForGC(t, 5*time.Millisecond, store, nil)
+	s.sentryShutdown = func(context.Context) error { return nil }
+	s.opts.sentryRefreshGCSlug = "orders-refresh-gc"
+	s.startRefreshGC()
+	time.Sleep(40 * time.Millisecond)
+	s.Close()
+	sentry.Flush(500 * time.Millisecond)
+
+	checkIns := tr.checkIns()
+	if len(checkIns) == 0 {
+		t.Fatal("no check-ins captured")
+	}
+	for _, c := range checkIns {
+		if c.MonitorSlug != "orders-refresh-gc" {
+			t.Errorf("slug = %q, want orders-refresh-gc", c.MonitorSlug)
+		}
 	}
 }
 
