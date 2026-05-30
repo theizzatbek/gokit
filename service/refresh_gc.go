@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/theizzatbek/gokit/sentrykit"
 )
 
 // startRefreshGC spawns the goroutine that periodically calls
@@ -25,6 +27,18 @@ func (s *Service[T, C]) startRefreshGC() {
 	store := s.refreshStore
 	logger := s.logger
 
+	// Cron monitor wiring: when Sentry is also configured AND the
+	// caller didn't opt out, each tick reports a Sentry Crons
+	// check-in. When Sentry is off, monitorTick is a transparent
+	// pass-through (sentrykit.MonitorCronWithConfig no-ops when the
+	// hub has no client).
+	useMonitor := s.sentryShutdown != nil && !s.opts.skipSentryRefreshGCMonitor
+	slug := s.opts.sentryRefreshGCSlug
+	if slug == "" {
+		slug = "kit-refresh-gc"
+	}
+	monitorCfg := sentrykit.IntervalMonitorConfig(interval)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	var done sync.WaitGroup
 	done.Add(1)
@@ -43,7 +57,22 @@ func (s *Service[T, C]) startRefreshGC() {
 				return
 			case <-ticker.C:
 				runCtx, runCancel := context.WithTimeout(ctx, interval)
-				n, err := store.GarbageCollect(runCtx, time.Now())
+				tick := func(ctx context.Context) error {
+					n, err := store.GarbageCollect(ctx, time.Now())
+					if err != nil {
+						return err
+					}
+					if logger != nil && n > 0 {
+						logger.Info("service: refresh GC", "removed", n)
+					}
+					return nil
+				}
+				var err error
+				if useMonitor {
+					err = sentrykit.MonitorCronWithConfig(runCtx, slug, monitorCfg, tick)
+				} else {
+					err = tick(runCtx)
+				}
 				runCancel()
 				if err != nil {
 					if errors.Is(err, context.Canceled) {
@@ -53,9 +82,6 @@ func (s *Service[T, C]) startRefreshGC() {
 						logger.Warn("service: refresh GC failed", "err", err)
 					}
 					continue
-				}
-				if logger != nil && n > 0 {
-					logger.Info("service: refresh GC", "removed", n)
 				}
 			}
 		}

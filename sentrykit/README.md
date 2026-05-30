@@ -211,6 +211,45 @@ respected unchanged — opt in manually if you want breadcrumb
 coverage there. Use `service.WithSentryBreadcrumbs(...)` to forward
 handler options into the auto-wrap path.
 
+## Cron monitoring
+
+Sentry Crons turns periodic schedulers into monitored objects:
+expected schedule + last outcome shown in the UI, alerts on missing
+heartbeats, alerts on consecutive errors. `sentrykit` exposes three
+helpers; `service.WithRefreshGC` auto-wires them.
+
+```go
+err := sentrykit.MonitorCronWithConfig(ctx, "kit-refresh-gc",
+    sentrykit.IntervalMonitorConfig(15*time.Minute),
+    func(ctx context.Context) error { return store.GarbageCollect(ctx, time.Now()) })
+```
+
+Per invocation: send `in_progress`, run fn, send `ok` (nil return)
+or `error` (non-nil) with the actual duration. The check-in IDs are
+chained so Sentry pairs the start + end events.
+
+| Helper | Use when |
+|---|---|
+| `MonitorCron(ctx, slug, fn)` | The monitor is already configured in the Sentry UI; you just want heartbeats. |
+| `MonitorCronWithConfig(ctx, slug, cfg, fn)` | Code-defined schedule. Each check-in upserts the config so operators don't maintain it separately. |
+| `IntervalMonitorConfig(d)` | Sensible default `MonitorConfig` for ticker-style jobs: minute-grained schedule, checkInMargin + maxRuntime = 2×interval capped at 30. |
+
+When `sentrykit.Setup` hasn't run (no DSN, no `WithSentry`), the
+wrappers are a transparent pass-through — fn runs once, no check-in
+dispatched. This is so schedulers can call `MonitorCron(...)`
+unconditionally without conditional code paths.
+
+Panics in fn propagate; the `ok`/`error` check-in is NOT sent in
+that case. The wider crash path will surface the panic via the
+global hub.
+
+`service.WithRefreshGC` automatically uses
+`MonitorCronWithConfig("kit-refresh-gc", IntervalMonitorConfig(interval), ...)`
+when both `WithSentry` and `WithRefreshGC` are set. Override the
+slug via `service.WithSentryRefreshGCSlug(...)`; disable cron
+monitoring entirely (while keeping the rest of Sentry) via
+`service.WithoutSentryRefreshGCMonitor()`.
+
 ## Capture truth table
 
 | Trigger | FiberMiddleware? | WrapErrorHandler? | Captured? |
@@ -223,7 +262,7 @@ handler options into the auto-wrap path.
 | `HubFromContext(c).CaptureException(err)` explicit | yes | n/a | yes |
 | `sentry.CaptureException(err)` package-level (no ctx) | any | n/a | yes (process-global hub, no request scope) |
 
-## Limitations (v1)
+## Limitations
 
 - **Traces+metrics out of scope.** Performance belongs to
   [`otelkit`](../otelkit/README.md); Sentry can ingest those via OTLP
@@ -233,6 +272,9 @@ handler options into the auto-wrap path.
   uses the running goroutine's stack — not the stack the cause was
   produced on. Wiring a `runtime.Frame` extractor onto `errs.Cause`
   is a future follow-up if needed.
+- **No CPU profiling.** `sentry-go` v0.46.2 doesn't expose a stable
+  profiling client option. Will land in a follow-up once the SDK
+  ships `ProfilesSampleRate` (or successor) in its `ClientOptions`.
 - **No release auto-detection.** `WithRelease` must be passed
   explicitly (or `SENTRY_RELEASE` env). Follow-up wires the value
   from `service.Service.NodeName` / `service.version` resource attr.
