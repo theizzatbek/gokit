@@ -139,6 +139,20 @@ multi-node-relevant env vars surfaced through service:
 | `URL` | `NATS_URL` |
 | `Name` | `NATS_NAME` |
 
+### `RedisConfig`
+
+| Field | Env |
+|---|---|
+| `URL` | `REDIS_URL` |
+| `ConnectMaxRetries` | `REDIS_CONNECT_MAX_RETRIES` |
+| `ConnectBackoffBase` | `REDIS_CONNECT_BACKOFF_BASE` |
+| `ConnectBackoffMax` | `REDIS_CONNECT_BACKOFF_MAX` |
+
+`URL` is the opt-in trigger. When set, `service.New` calls
+`redisclient.Connect` (with the standard retry budget), exposes
+the result as `svc.Redis`, and tears it down in `Close`. Layer a
+typed cache on top with [`clients/cache`](../clients/cache/README.md).
+
 ### `APIMapConfig`
 
 | Field | Env |
@@ -278,6 +292,7 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithNATSMapEnv(m map[string]string)` | Explicit `${VAR}` values for natsmap's subscribers/publishers YAML. Map consulted before `os.LookupEnv`. |
 | `WithRoutes()` | Equivalent to `Config.Routes.Enabled = true`. Routes auto-load in `svc.Run()` from `service.DefaultRoutesPath` (`routes.yaml`). |
 | `WithNATSOptions(opts...)` | Extra natsclient options |
+| `WithRedisOptions(opts...)` | Extra redisclient options (logger + metrics auto-applied); use `redisclient.WithRedisOptions(fn)` to set `redis.Options` fields like `PoolSize` or `TLSConfig`. |
 | `WithRunOptions(opts...)` | Append `fibermap.RunOption`s to the default production-ops bundle |
 
 ## Common patterns

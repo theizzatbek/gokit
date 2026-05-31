@@ -12,6 +12,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/apimap"
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
+	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/fibermap"
 )
@@ -22,6 +23,7 @@ type Service[T any, C any] struct {
 	DB      *db.DB              // nil when Config.DB.User == ""
 	Auth    *auth.Auth[C]       // nil when Config.Auth.PrivateKeyPEM == ""
 	NATS    *natsclient.Client  // nil when Config.NATS.URL == ""
+	Redis   *redisclient.Client // nil when Config.Redis.URL == ""
 	NATSMap *natsmap.Runtime    // nil when Config.NATSMap.*Path is empty
 	HTTPC   *http.Client        // always built
 	APIMap  *apimap.Client      // nil when Config.APIMap.Path == ""

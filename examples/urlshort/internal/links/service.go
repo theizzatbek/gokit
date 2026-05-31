@@ -9,12 +9,24 @@ import (
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/theizzatbek/gokit/clients/cache"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/db/sqb"
 	xerrs "github.com/theizzatbek/gokit/errs"
 
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/events"
 )
+
+// CachedLink is the trimmed-down projection stored in Redis under
+// urlshort:link:<code>. visit_count + last_visited_at deliberately
+// omitted — they mutate on every click and would force an
+// invalidation per redirect, defeating the cache's purpose.
+type CachedLink struct {
+	ID          string `json:"id"`
+	UserID      string `json:"user_id"`
+	Code        string `json:"code"`
+	OriginalURL string `json:"original_url"`
+}
 
 // EnrichFn is the metadata fetcher injected by main.go. The service
 // does not depend on the enrich package directly to keep the dep tree
@@ -25,11 +37,11 @@ type Service struct {
 	db     *db.DB
 	enrich EnrichFn
 	pub    *events.Publisher
-	cache  *LinkCache // nil = no cache (graceful pass-through)
+	cache  *cache.Redis[CachedLink] // nil = no cache (graceful pass-through)
 }
 
-func NewService(d *db.DB, enrich EnrichFn, pub *events.Publisher, cache *LinkCache) *Service {
-	return &Service{db: d, enrich: enrich, pub: pub, cache: cache}
+func NewService(d *db.DB, enrich EnrichFn, pub *events.Publisher, c *cache.Redis[CachedLink]) *Service {
+	return &Service{db: d, enrich: enrich, pub: pub, cache: c}
 }
 
 // linkColumns is the canonical column order for every SELECT/RETURNING
@@ -153,13 +165,13 @@ func (s *Service) GetByCode(ctx context.Context, code string) (Link, error) {
 // returns, and the subscriber's batched UPDATE either commits all or
 // retries on failure.
 func (s *Service) Resolve(ctx context.Context, code, userAgent, ip string) (Link, error) {
-	if hit := s.cache.Get(ctx, code); hit.Link != nil {
+	if hit := s.cache.Get(ctx, code); hit.Value != nil {
 		s.publishVisit(ctx, code, userAgent, ip)
 		return Link{
-			ID:          hit.Link.ID,
-			UserID:      hit.Link.UserID,
-			Code:        hit.Link.Code,
-			OriginalURL: hit.Link.OriginalURL,
+			ID:          hit.Value.ID,
+			UserID:      hit.Value.UserID,
+			Code:        hit.Value.Code,
+			OriginalURL: hit.Value.OriginalURL,
 		}, nil
 	} else if hit.NotFound {
 		return Link{}, xerrs.NotFound("link_not_found", "urlshort: link not found")
@@ -172,7 +184,7 @@ func (s *Service) Resolve(ctx context.Context, code, userAgent, ip string) (Link
 		s.cache.SetNotFound(ctx, code)
 		return Link{}, err
 	}
-	s.cache.Set(ctx, CachedLink{
+	s.cache.Set(ctx, code, CachedLink{
 		ID: l.ID, UserID: l.UserID, Code: l.Code, OriginalURL: l.OriginalURL,
 	})
 	s.publishVisit(ctx, code, userAgent, ip)

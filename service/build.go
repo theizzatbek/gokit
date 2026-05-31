@@ -17,6 +17,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/httpc"
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
+	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	"github.com/theizzatbek/gokit/db"
 	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/fibermap"
@@ -103,6 +104,10 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		return nil, err
 	}
 	if err := s.buildNATS(ctx); err != nil {
+		s.Close()
+		return nil, err
+	}
+	if err := s.buildRedis(ctx); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -214,6 +219,31 @@ func (s *Service[T, C]) buildAPIMap() error {
 		return xerrs.Wrap(err, xerrs.KindValidation, CodeAPIMapLoadFailed, "service: apimap build failed")
 	}
 	s.APIMap = c
+	return nil
+}
+
+func (s *Service[T, C]) buildRedis(ctx context.Context) error {
+	if s.cfg.Redis.URL == "" {
+		return nil
+	}
+	applyConnectRetryDefaults(s.opts.skipConnectRetry,
+		&s.cfg.Redis.ConnectMaxRetries,
+		&s.cfg.Redis.ConnectBackoffBase,
+		&s.cfg.Redis.ConnectBackoffMax)
+	redisOpts := append([]redisclient.Option{
+		redisclient.WithLogger(s.logger),
+		redisclient.WithMetrics(s.metrics),
+	}, s.opts.redisOpts...)
+	c, err := redisclient.Connect(ctx, redisclient.Config{
+		URL:                s.cfg.Redis.URL,
+		ConnectMaxRetries:  s.cfg.Redis.ConnectMaxRetries,
+		ConnectBackoffBase: s.cfg.Redis.ConnectBackoffBase,
+		ConnectBackoffMax:  s.cfg.Redis.ConnectBackoffMax,
+	}, redisOpts...)
+	if err != nil {
+		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeRedisConnectFailed, "service: redis connect failed")
+	}
+	s.Redis = c
 	return nil
 }
 

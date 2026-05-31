@@ -141,6 +141,9 @@ func (s *Service[T, C]) Close() {
 	if s.NATS != nil {
 		s.NATS.Close()
 	}
+	if s.Redis != nil {
+		_ = s.Redis.Close()
+	}
 	if s.DB != nil {
 		s.DB.Close()
 	}
