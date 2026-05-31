@@ -17,10 +17,12 @@ import (
 	"time"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/redis/go-redis/v9"
 	"github.com/gofiber/fiber/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/testcontainers/testcontainers-go"
 	tcnats "github.com/testcontainers/testcontainers-go/modules/nats"
+	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/theizzatbek/gokit/auth"
@@ -103,15 +105,21 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Fatalf("service.New: %v", err)
 	}
 	visitCounter = links.NewVisitCounter(svc.DB, svc.Logger())
+	svc.OnShutdown(visitCounter.Close)
 	t.Cleanup(svc.Close)
 
 	// Apply migrations + ensure stream — same as production main.go.
-	sqlBytes, err := os.ReadFile("migrations/0001_init.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.DB.Exec(ctx, string(sqlBytes)); err != nil {
-		t.Fatalf("migrate: %v", err)
+	for _, mig := range []string{
+		"migrations/0001_init.sql",
+		"migrations/0002_idempotent_links.sql",
+	} {
+		sqlBytes, err := os.ReadFile(mig)
+		if err != nil {
+			t.Fatalf("read %s: %v", mig, err)
+		}
+		if _, err := svc.DB.Exec(ctx, string(sqlBytes)); err != nil {
+			t.Fatalf("migrate %s: %v", mig, err)
+		}
 	}
 	if err := svc.NATS.EnsureStream(ctx, natsclient.StreamConfig{
 		Name: "URLSHORT", Subjects: []string{"urlshort.>"}, MaxAge: 24 * time.Hour, Storage: natsclient.StorageFile,
@@ -119,10 +127,13 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Fatalf("ensure stream: %v", err)
 	}
 
+	rdb := startRedis(t, ctx)
+	linkCache := links.NewLinkCache(rdb, links.LinkCacheConfig{Logger: svc.Logger()})
+
 	fetcher := enrich.NewFetcher(svc.APIMap, svc.Logger())
 	usersSvc := users.NewService(svc.DB, svc.Hasher)
 	pub := events.NewPublisher(svc.NATSMap, svc.Logger())
-	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub)
+	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub, linkCache)
 	svc.SetContextBuilder(appctx.NewContextBuilder(svc.Auth, svc.Logger()))
 	users.RegisterHandlers(svc.Engine, usersSvc, svc.Auth)
 	links.RegisterHandlers(svc.Engine, linksSvc, cfg.ShortURLBase)
@@ -259,6 +270,26 @@ func startPostgres(t *testing.T, ctx context.Context) db.Config {
 		Database: "urlshort",
 		SSLMode:  "disable",
 	}
+}
+
+func startRedis(t *testing.T, ctx context.Context) *redis.Client {
+	t.Helper()
+	c, err := tcredis.Run(ctx, "redis:7-alpine")
+	if err != nil {
+		t.Fatalf("redis testcontainer: %v", err)
+	}
+	t.Cleanup(func() { _ = testcontainers.TerminateContainer(c) })
+	url, err := c.ConnectionString(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := redis.ParseURL(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdb := redis.NewClient(opts)
+	t.Cleanup(func() { _ = rdb.Close() })
+	return rdb
 }
 
 func startNATS(t *testing.T, ctx context.Context) string {

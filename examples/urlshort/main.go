@@ -18,6 +18,7 @@ import (
 	"syscall"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/theizzatbek/gokit/clients/apimap"
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
@@ -91,16 +92,38 @@ func run() error {
 	}
 	defer svc.Close()
 
-	visitCounter = links.NewVisitCounter(svc.DB, svc.Logger())
+	for _, mig := range []string{
+		"migrations/0001_init.sql",
+		"migrations/0002_idempotent_links.sql",
+	} {
+		if err := applyMigrations(ctx, svc.DB, mig); err != nil {
+			return err
+		}
+	}
 
-	if err := applyMigrations(ctx, svc.DB, "migrations/0001_init.sql"); err != nil {
-		return err
+	var linkCache *links.LinkCache
+	if cfg.RedisURL != "" {
+		opts, err := redis.ParseURL(cfg.RedisURL)
+		if err != nil {
+			return fmt.Errorf("urlshort: parse REDIS_URL: %w", err)
+		}
+		rdb := redis.NewClient(opts)
+		if err := rdb.Ping(ctx).Err(); err != nil {
+			return fmt.Errorf("urlshort: redis ping: %w", err)
+		}
+		svc.OnShutdown(func() error { return rdb.Close() })
+		linkCache = links.NewLinkCache(rdb, links.LinkCacheConfig{Logger: svc.Logger()})
 	}
 
 	fetcher := enrich.NewFetcher(svc.APIMap, svc.Logger())
 	usersSvc := users.NewService(svc.DB, svc.Hasher)
 	pub := events.NewPublisher(svc.NATSMap, svc.Logger())
-	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub)
+	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub, linkCache)
+	visitCounter = links.NewVisitCounter(svc.DB, svc.Logger())
+	// Drain pending visit batches before NATSMap.Drain runs so the
+	// subscriber has nowhere to deliver to but the in-memory buffer
+	// still flushes to Postgres.
+	svc.OnShutdown(visitCounter.Close)
 
 	svc.SetContextBuilder(appctx.NewContextBuilder(svc.Auth, svc.Logger()))
 	users.RegisterHandlers(svc.Engine, usersSvc, svc.Auth)

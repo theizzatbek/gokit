@@ -17,6 +17,11 @@ type Config struct {
 
 	MicrolinkBaseURL string `env:"MICROLINK_BASE_URL"`
 	ShortURLBase     string `env:"SHORT_URL_BASE" envDefault:"http://localhost:3000"`
+
+	// RedisURL enables the link cache layer. Empty disables — the
+	// service falls back to direct Postgres lookups on every redirect.
+	// Format: redis://[user:pass@]host:port[/db].
+	RedisURL string `env:"REDIS_URL"`
 }
 
 // Load reads Config from env, applies defaults, validates.

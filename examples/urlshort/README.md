@@ -116,45 +116,102 @@ be empty in handlers (because per-route `bearer: []` middleware runs
 AFTER `contextInit`). Per-route `bearer: []` still enforces 401 on
 protected paths.
 
-### Event-sourced visit counting
+### Redirect hot path
 
-`GET /:code` (redirect) does NOT write to the database in the request
-path. Instead the handler calls `links.Service.Resolve`, which:
+```
+GET /:code
+  │
+  ▼
+fibermap.Engine (rate_limit 50/100/IP via auth factory)
+  │
+  ▼
+links.Service.Resolve
+  ├─ Redis cache.Get(code)
+  │     positive hit  → return CachedLink
+  │     negative hit  → return 404 (no DB)
+  │     miss          ↓
+  ├─ Postgres SELECT … WHERE code = $1
+  │     hit  → cache.Set(code), continue
+  │     miss → cache.SetNotFound(code), return 404
+  ├─ pub.LinkVisited (fire-and-forget JetStream publish)
+  ▼
+302 Location: original_url
+```
 
-1. Reads the link by code (single SELECT).
-2. Publishes `urlshort.link.visited` via JetStream.
-3. Returns to Fiber for the 302.
+Three layers absorb scanner / hot-code traffic before it reaches
+Postgres:
 
-A separate subscriber declared in `subscribers.yaml` and registered
-via `service.WithNATSMapRegistration` (`link_visit_counter` →
-`links.VisitCounter.Handle`) consumes the events and runs the
-`UPDATE links SET visit_count = visit_count + 1 …` asynchronously.
+1. **Rate limit** at the route — 50 rps sustained per source IP,
+   burst 100. Returns 429 with `Retry-After`.
+2. **Negative cache** — the first 404 for an unknown code stores a
+   60s sentinel in Redis. Subsequent hits to that code return 404
+   without a DB round-trip.
+3. **Positive cache** — code → `{ID, UserID, OriginalURL}` cached
+   for 1h. `visit_count` + `last_visited_at` deliberately NOT
+   cached (they mutate every click; caching them would defeat the
+   purpose).
 
-Why:
+Invalidation: `Update` / `Delete` drop the cache entry after the DB
+write succeeds, so the next `Resolve` refetches.
 
-- **Latency.** The redirect returns in ~1ms — no UPDATE round-trip on
-  the popular short codes' row-level write locks.
-- **Throughput.** Hot codes don't serialise on a single row; the
-  subscriber drains the JetStream at its own pace.
-- **Durability.** JetStream persists every event before the
-  publisher's call returns. A crashed subscriber gets redeliveries on
-  restart; an erroring `Handle` triggers natsmap's automatic
-  exponential backoff.
-- **Scaling.** `queue_group: link-visit-counter` in the YAML means a
-  multi-replica deployment fans out — exactly one replica processes
-  each event, so horizontal scaling never double-counts.
+`REDIS_URL` env enables the cache; leaving it empty falls back to a
+direct-Postgres path so the example still runs in dev.
 
-Trade-off: `visit_count` is **eventually consistent**. Stats reads
-taken < ~10ms after a click may miss the most recent visit. For a
-click counter that's the right ratio (favour latency over precision);
-if you need exact-once semantics, add an idempotency-key column and
-deduplicate events by ID — out of scope for this example.
+### Batched visit counting
+
+`urlshort.link.visited` events accumulate in an in-memory map keyed
+by code; `links.VisitCounter` flushes the batch every second (or
+when the buffer hits 1000 distinct codes) via ONE statement:
+
+```sql
+UPDATE links AS l
+SET visit_count = l.visit_count + v.delta,
+    last_visited_at = greatest(
+        coalesce(l.last_visited_at, 'epoch'::timestamptz),
+        v.ts)
+FROM (VALUES
+    ($1::text, $2::bigint, $3::timestamptz),
+    ($4,        $5,         $6),
+    …
+) AS v(code, delta, ts)
+WHERE l.code = v.code;
+```
+
+One DB round-trip per second, regardless of click rate. Hot codes
+no longer serialise on a single row-level write lock — the redirect
+returns in ~1ms even under load.
+
+`subscribers.yaml` declares the binding by name only; natsmap
+auto-derives `durable = "link_visit_counter"` and `queue_group =
+"link_visit_counter"` (see `resolveDurableQueueGroup` in
+`clients/natsmap/engine.go`), so horizontal scaling never
+double-counts.
+
+**Delivery semantics — at-most-once during a crash window.** natsmap
+auto-acks each event when `Handle` returns nil. Events live in the
+in-memory buffer between "ack'd" and "row updated"; a crash inside
+that ≤1s window loses the buffer. For click-counter analytics this
+is the right trade (vs. the complexity of manual-ack JetStream
+subscriptions); domains needing strict at-least-once should
+subscribe via `natsclient` directly and Ack only after the flush
+succeeds.
+
+`VisitCounter.Close` (registered via `service.OnShutdown`) does one
+final flush before NATSMap.Drain shuts the subscription down.
+
+### Idempotent Create
+
+Migration `0002_idempotent_links.sql` adds `UNIQUE (user_id,
+original_url)`. `links.Service.Create` pre-checks via SELECT and
+falls back to fetch-on-conflict if a concurrent request wins the
+race — two posts of the same URL from one user return the same code
+without duplicate rows.
 
 ## Limitations
 
 - **Best-effort enrichment:** if MicroLink or the target URL is down, the link is still created with empty metadata. Not a bug — the demo deliberately picks "user-visible failures should be loud; analytics should be quiet".
 - **6-char base62 code:** ~1e10 keyspace; retry up to 5 times on unique-violation, then error. Increase length for higher volume.
-- **No rate-limit** (fibermap ships no rate-limit middleware in v0.x).
+- **At-most-once visit counting** during the ≤1s buffer window (see above). Production deployments needing strict counts should switch to a manual-ack JetStream subscription.
 - **No HTTPS, no real secrets handling** — dev only.
 - **Refresh-token rotation works** but no per-device tracking beyond `user_agent`.
 

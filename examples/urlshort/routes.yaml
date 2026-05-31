@@ -81,5 +81,13 @@ groups:
         path: /:code
         handler: links.redirect
         name: links.redirect
+        # Public endpoint — absorb scanner / bot traffic before it
+        # reaches Redis or Postgres. 50 rps sustained, burst 100 per
+        # source IP. Pairs with the cache layer's negative TTL: the
+        # first 404 from a scan populates the negative cache, and
+        # the rate limit prevents the scanner from probing many
+        # codes per second.
+        middleware:
+          - rate_limit: ["50", "100"]
         tags: [redirect]
         summary: Follow a short code (public 302)
