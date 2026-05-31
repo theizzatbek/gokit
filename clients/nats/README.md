@@ -217,6 +217,18 @@ All errors are `*errs.Error` with stable `Code`:
 | `publish_failed` | Unavailable | JetStream / NATS publish failure |
 | `encode_failed` / `decode_failed` | Internal | Codec failures |
 
+## OpenTelemetry trace propagation
+
+Every publish path (`Publisher.Publish`, `PublishViaCodec`, `PublishRaw`) injects W3C `traceparent` / `tracestate` headers onto the outbound msg using the process-global OTel propagator (no-op when none is installed). Every subscribe path (`Subscribe`, `SubscribeRaw`) extracts them back into the handler's `ctx`, so handler spans are children of the publisher's span. Result: a Sentry / Jaeger / Tempo waterfall shows HTTP → NATS publish → NATS handle as one continuous trace across the async boundary.
+
+```go
+otel.SetTextMapPropagator(propagation.TraceContext{}) // kit doesn't install one for you
+```
+
+The `Inject` path is **idempotent on existing `traceparent`**: when the headers map already carries one (typical of the `db/outbox` flow, where the original request's TraceContext was snapshotted into the row at Enqueue time), the propagator does NOT overwrite. This keeps the outbox Worker's later dispatch on the originating trace instead of a fresh worker-loop trace.
+
+For the batched JetStream Pull path (`natsmap` with `batch_size: N`), the dispatch ctx is `context.Background()` (a batch can mix traces — picking one is wrong). Handlers iterating per-msg can extract per-event: `ctx = natsclient.ExtractTraceContext(ctx, msg.Headers)`.
+
 ## Observability
 
 ### slog

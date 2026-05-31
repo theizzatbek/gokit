@@ -167,6 +167,39 @@ subject := auth.Subject[MyClaims](c)         // "" when no principal
 allowed := auth.HasScope[MyClaims](c, "admin:write")
 ```
 
+### API key authentication
+
+For service-to-service (B2B) calls where the JWT user-flow doesn't fit. The middleware extracts a key from `X-API-Key` (configurable), HMAC-SHA256-hashes with a kit-side secret, looks up a [`auth.KeyStore`](apikey.go) implementation, and populates the same `Principal[C]` Bearer would — so `RequireScope` / `MustFrom` / `HasScope` work identically regardless of which path authenticated the request.
+
+```go
+// 1. Configure the secret (32 random bytes, treat like a signing key).
+authObj, _ := auth.New[MyClaims](auth.Config{
+    ...,
+    APIKeyHashSecret: cfg.APIKeyHashSecret,
+})
+
+// 2. Plug a KeyStore (apikeypg.New(svc.DB) for Postgres, or roll your own).
+store := apikeypg.New(svc.DB)
+
+// 3. Mount the middleware. Required + optional modes both supported.
+app.Use(authObj.APIKey(store))                    // 401 on missing
+app.Use(authObj.APIKey(store, auth.WithAPIKeyOptional())) // pass-through on missing
+```
+
+YAML route gating via the `api_key` factory:
+
+```yaml
+middleware:
+  - api_key: []            # required
+  - api_key: ["optional"]  # allow anonymous
+```
+
+Wire via `auth/fibermount.MountAPIKeyFactory(eng, authObj, store)`.
+
+Hashing: every key is `HMAC-SHA256(plain, APIKeyHashSecret)`. The hash is the lookup key — a DB dump alone doesn't reveal raw keys without the kit secret. Rotating `APIKeyHashSecret` invalidates every stored hash; treat it like a long-lived signing key. Use `auth.HashAPIKey(plain, secret)` at mint time so the table and the verify path share the same hash function.
+
+Stable error Codes: `api_key_missing`, `api_key_invalid` (existence side-channel suppressed — unknown keys return the same shape as missing ones), `api_key_expired`, `api_key_revoked`.
+
 ### Password hashing
 
 ```go

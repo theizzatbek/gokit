@@ -31,6 +31,44 @@ func MountMiddlewareFactories[T, C any](eng *fibermap.Engine[T], a *auth.Auth[C]
 	return nil
 }
 
+// MountAPIKeyFactory registers the `api_key` middleware factory
+// against eng, bound to store. Separate from
+// [MountMiddlewareFactories] because the KeyStore must be supplied
+// by the caller — it's an external dependency, not a side effect of
+// constructing Auth.
+//
+// YAML usage:
+//
+//	middleware:
+//	  - api_key: []            # required
+//	  - api_key: ["optional"]  # anonymous fallback
+//
+// service.WithAPIKeyStore(store) auto-calls this when both Auth and
+// the supplied store are wired.
+func MountAPIKeyFactory[T, C any](eng *fibermap.Engine[T], a *auth.Auth[C], store auth.KeyStore) error {
+	fibermap.RegisterMiddlewareFactory(eng, "api_key", adapt[T](a.APIKeyFactory(store)))
+	return nil
+}
+
+// MountIdempotencyKeyFactory registers the `idempotency_key`
+// factory backed by the supplied [fibermap.IdempotencyStore] (e.g.
+// `cache.NewIdempotencyStore`). The auth-side `idempotency` factory
+// (already registered by [MountMiddlewareFactories]) wraps the
+// in-memory store; this one wraps the cleaner fibermap.IdempotencyKey
+// path with a pluggable, Redis-backed store. The two coexist —
+// new code should prefer `idempotency_key`.
+//
+// YAML usage:
+//
+//	middleware:
+//	  - idempotency_key: ["1h"]            # custom TTL
+//	  - idempotency_key: ["1h", "required"] # require header
+func MountIdempotencyKeyFactory[T any](eng *fibermap.Engine[T], store fibermap.IdempotencyStore) error {
+	fibermap.RegisterMiddlewareFactory(eng, "idempotency_key",
+		idempotencyKeyFactory[T](store))
+	return nil
+}
+
 // adapt bridges auth's factory signature (func([]any) (fiber.Handler, error))
 // to fibermap's (func([]string) (MiddlewareFunc[T], error)). YAML factory args
 // always arrive as []string; we promote them to []any for the auth factory,
