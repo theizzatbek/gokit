@@ -24,43 +24,44 @@ Use this package when you need any of:
 
 ## Quickstart
 
-Apply the schema (migration runner is out of scope — the kit ships the
-DDL):
+The shortest path — let `service.New` wire everything:
 
 ```go
-//go:embed migrations/*.sql
-var migrationsFS embed.FS
-
-// ... migrate via golang-migrate or run outbox.Schema() once at boot:
-_, _ = svc.DB.Exec(ctx, outbox.Schema())
+svc, _ := service.New[Ctx, Claims](ctx, cfg,
+    service.WithNATSMap(),
+    service.WithOutbox(
+        outbox.WithRetention(7*24*time.Hour),
+    ),
+    service.WithOutboxAutoSchema(), // applies schema.sql idempotently
+)
 ```
 
-Enqueue inside the surrounding transaction:
+In the domain service, enqueue inside the surrounding transaction
+via the typed sugar:
 
 ```go
 err := svc.DB.Tx(ctx, func(tx *db.Tx) error {
     if _, err := svc.LinksRepo.Create(ctx, tx, link); err != nil {
         return err
     }
-    payload, _ := json.Marshal(linkCreated)
-    return outbox.Enqueue(ctx, tx, outbox.Event{
-        AggregateType: "link",
-        AggregateID:   link.Code,
-        EventType:     "urlshort.link.created",
-        Payload:       payload,
-    })
+    return outbox.EnqueueTyped(ctx, tx, "urlshort.link.created",
+        events.LinkCreated{LinkID: link.ID, Code: link.Code, ...},
+        outbox.WithAggregate("link", link.Code))
 })
 ```
 
-Drain with a worker:
+For non-`service.New` callers, use the building blocks directly:
 
 ```go
-w, _ := outbox.NewWorker(svc.DB, func(ctx context.Context, e outbox.Event) error {
-    return natsmap.PublishRaw(ctx, svc.NATSMap, e.EventType, e.Payload, e.Headers)
-},
-    outbox.WithInterval(5*time.Second),
-    outbox.WithBatchSize(100),
+_, _ = svc.DB.Exec(ctx, outbox.Schema())            // apply DDL
+w, _ := outbox.NewWorker(svc.DB,
+    func(ctx context.Context, e outbox.Event) error {
+        return natsmap.PublishRaw(ctx, svc.NATSMap,
+            e.EventType, e.Payload, e.Headers)
+    },
     outbox.WithLogger(svc.Logger()),
+    outbox.WithMetrics(reg),
+    outbox.WithRetention(7*24*time.Hour),
 )
 _ = w.Start(ctx)
 svc.OnShutdown(w.Stop)
@@ -72,26 +73,34 @@ svc.OnShutdown(w.Stop)
 
 No setup required — propagation activates automatically once a `TextMapPropagator` is installed globally (`otel.SetTextMapPropagator(propagation.TraceContext{})`, which `service.WithOtel` does).
 
-## Schema
+## Schema (v2)
 
-`schema.sql` defines a single `outbox` table with a partial index over
-the unpublished set:
+`schema.sql` is **idempotent** for both fresh installs and v1 → v2
+upgrades. Columns:
 
-```sql
-CREATE INDEX outbox_unpublished_created_at_idx
-    ON outbox (created_at)
-    WHERE published_at IS NULL;
-```
+| Column | Notes |
+|---|---|
+| `id uuid PRIMARY KEY` | DB-generated UUID — surfaces in `Event.ID`. |
+| `aggregate_type, aggregate_id text` | Optional aggregate-shape labels. |
+| `event_type text NOT NULL` | Bus subject the Worker dispatches to. |
+| `payload bytea NOT NULL` | Opaque wire bytes — JSON, protobuf, anything. |
+| `headers jsonb` | Per-event metadata (W3C traceparent, etc). |
+| `created_at, published_at timestamptz` | Lifecycle stamps. |
+| `attempts integer, last_error text` | Retry bookkeeping. |
+| `next_retry_at timestamptz NOT NULL DEFAULT NOW()` | **v2** — per-row backoff "ready at". |
 
-The partial index keeps the polling SELECT fast even after millions of
-delivered rows accumulate. Drop old rows from a periodic cron — the
-worker doesn't garbage-collect.
+Indexes:
+
+- `outbox_pending_idx (next_retry_at, created_at) WHERE published_at IS NULL` — the polling SELECT touches only rows whose retry window has arrived.
+- `outbox_aggregate_idx (aggregate_type, aggregate_id)` — for replay tooling.
+
+Use `outbox.Schema()` once at boot (or fold into your migration tool); `service.WithOutboxAutoSchema()` does this automatically.
 
 ## Worker semantics
 
-- **Polling**: `SELECT ... WHERE published_at IS NULL ORDER BY created_at
-  LIMIT $batch_size FOR UPDATE SKIP LOCKED`. Multi-replica safe — two
-  workers draining the same table don't collide.
+- **Polling**: `SELECT ... WHERE published_at IS NULL AND next_retry_at <= NOW() ORDER BY next_retry_at, created_at LIMIT $batch_size FOR UPDATE SKIP LOCKED`. Multi-replica safe — two workers draining the same table don't collide.
+- **LISTEN/NOTIFY fast path** (v2, default-on): a dedicated pool connection LISTENs on `outbox_new`; Enqueue runs `pg_notify('outbox_new', '')` after INSERT, so commit-to-publish latency is ~ms instead of waiting for the next polling tick. Polling stays as the fallback for crash recovery / dropped NOTIFY. Disable via `WithoutListen()` when running behind a connection pooler that breaks NOTIFY (PgBouncer transaction mode).
+- **Per-row exponential backoff** (v2): on failure, `next_retry_at = NOW() + base * 2^(attempts-1)` capped at max. Defaults: base 1s, max 1h. Stops failed events from hammering the bus every poll tick.
 - **Per-event dispatch**: `PublishFn(ctx, Event) error`. Returning nil
   marks the row published; returning an error bumps `attempts` and
   records the message in `last_error`.
@@ -109,10 +118,15 @@ worker doesn't garbage-collect.
 
 | Option | Default | Notes |
 |---|---|---|
-| `WithInterval(d)` | 5s | Polling cadence. The worker fires the first fetch immediately so events Enqueued just before Start land without waiting. |
-| `WithBatchSize(n)` | 100 | Max events fetched per tick. Larger amortises round-trips; locks held longer. |
-| `WithMaxAttempts(n)` | 0 (no cap) | Dead-letter rows whose attempt count reaches n. Stays in table for operator. |
-| `WithLogger(*slog.Logger)` | silent | Debug per successful batch, Warn per publish failure, Error per drain failure. |
+| `WithInterval(d)` | 5s | Polling cadence (LISTEN/NOTIFY usually wakes the worker first; this is the fallback). |
+| `WithBatchSize(n)` | 100 | Max events fetched per tick. |
+| `WithMaxAttempts(n)` | 0 (no cap) | Dead-letter rows whose attempt count reaches n. |
+| `WithBackoff(base, max)` | 1s, 1h | Per-row exponential retry timing. Pass `(0, 0)` to disable. |
+| `WithoutListen()` | listen on | Disable LISTEN/NOTIFY. Polling-only mode. |
+| `WithRetention(d)` | off | GC published rows older than d. |
+| `WithGCInterval(d)` | 1h | Retention sweep cadence (no-op without `WithRetention`). |
+| `WithLogger(*slog.Logger)` | silent | Debug / Warn / Error per lifecycle event. |
+| `WithMetrics(prometheus.Registerer)` | off | Register `outbox_events_total{outcome}` (counter), `outbox_publish_duration_seconds` (histogram), `outbox_pending_count` (gauge), `outbox_gc_deleted_total` (counter), `outbox_listen_wakes_total` (counter). |
 
 ## Error codes
 

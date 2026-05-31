@@ -115,6 +115,10 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		s.Close()
 		return nil, err
 	}
+	if err := s.buildOutbox(ctx); err != nil {
+		s.Close()
+		return nil, err
+	}
 	if err := s.buildEngine(); err != nil {
 		s.Close()
 		return nil, err

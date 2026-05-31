@@ -14,6 +14,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/db/outbox"
 	"github.com/theizzatbek/gokit/fibermap"
 )
 
@@ -29,6 +30,7 @@ type Service[T any, C any] struct {
 	APIMap  *apimap.Client      // nil when Config.APIMap.Path == ""
 	Engine  *fibermap.Engine[T] // always built
 	Hasher  *auth.Hasher        // nil when Auth is nil
+	Outbox  *outbox.Worker      // nil unless WithOutbox + DB + NATSMap all wired
 
 	cfg     Config
 	logger  *slog.Logger

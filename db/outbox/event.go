@@ -133,9 +133,18 @@ func Enqueue(ctx context.Context, q db.Querier, e Event) error {
 				"outbox: encode headers")
 		}
 	}
+	// pg_notify('outbox_new', '') fires at COMMIT time (per Postgres
+	// semantics — NOTIFY is buffered to commit) so Worker LISTENers
+	// wake up immediately when the surrounding transaction is durable.
+	// Payload is empty: listeners only need the "something happened"
+	// signal, the lookup happens via the indexed SELECT.
 	const sql = `
-		INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload, headers)
-		VALUES ($1, $2, $3, $4, $5)
+		WITH ins AS (
+			INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload, headers)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING 1
+		)
+		SELECT pg_notify('` + NotifyChannel + `', '') FROM ins
 	`
 	if _, err := q.Exec(ctx, sql,
 		e.AggregateType, e.AggregateID, e.EventType, e.Payload, headersJSON,
@@ -145,3 +154,10 @@ func Enqueue(ctx context.Context, q db.Querier, e Event) error {
 	}
 	return nil
 }
+
+// NotifyChannel is the Postgres LISTEN channel the Worker subscribes
+// to for low-latency wake-up. Enqueue's INSERT fires
+// pg_notify(NotifyChannel, ”) so Worker.Start's listen goroutine
+// signals the drain loop within milliseconds of COMMIT instead of
+// waiting for the next polling tick.
+const NotifyChannel = "outbox_new"

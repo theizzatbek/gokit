@@ -2,7 +2,6 @@ package links
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -108,24 +107,17 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 			if qerr != nil {
 				return qerr
 			}
-			payload, jerr := json.Marshal(events.LinkCreated{
-				LinkID:    l.ID,
-				UserID:    l.UserID,
-				Code:      l.Code,
-				URL:       l.OriginalURL,
-				Title:     l.Title,
-				CreatedAt: l.CreatedAt,
-			})
-			if jerr != nil {
-				return xerrs.Wrap(jerr, xerrs.KindInternal,
-					"urlshort_event_encode_failed", "urlshort: encode LinkCreated")
-			}
-			if oerr := outbox.Enqueue(ctx, tx, outbox.Event{
-				AggregateType: "link",
-				AggregateID:   l.Code,
-				EventType:     events.SubjectLinkCreated,
-				Payload:       payload,
-			}); oerr != nil {
+			if oerr := outbox.EnqueueTyped(ctx, tx, events.SubjectLinkCreated,
+				events.LinkCreated{
+					LinkID:    l.ID,
+					UserID:    l.UserID,
+					Code:      l.Code,
+					URL:       l.OriginalURL,
+					Title:     l.Title,
+					CreatedAt: l.CreatedAt,
+				},
+				outbox.WithAggregate("link", l.Code),
+			); oerr != nil {
 				return oerr
 			}
 			inserted = l

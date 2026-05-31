@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"strconv"
 	"sync"
@@ -58,13 +57,18 @@ func initPostgresContainer() {
 		Database:       "test",
 		SSLMode:        "disable",
 		ConnectTimeout: 5 * time.Second,
-		MaxConns:       1,
-		MinConns:       1,
+		// Two slots: one for the LISTEN goroutine the worker holds
+		// for its lifetime, one for the drain SELECT/UPDATE path.
+		MaxConns: 2,
+		MinConns: 2,
 	}
 }
 
-// freshDB opens a *db.DB against a freshly-created schema so each
-// test sees an empty outbox table.
+// freshDB opens a *db.DB and TRUNCATEs the outbox table so each
+// test starts from an empty queue. Switched from per-test schemas
+// to truncate-on-start because the v2 worker holds a dedicated
+// LISTEN connection — search_path SET only applies to that conn
+// and other queries land on a stale public.outbox.
 func freshDB(t *testing.T) *db.DB {
 	t.Helper()
 	if testing.Short() {
@@ -79,13 +83,11 @@ func freshDB(t *testing.T) *db.DB {
 		t.Fatalf("db.Connect: %v", err)
 	}
 	t.Cleanup(d.Close)
-	schema := fmt.Sprintf("ob_%d_%d", time.Now().UnixNano(), os.Getpid())
-	if _, err := d.Pool().Exec(context.Background(),
-		fmt.Sprintf("CREATE SCHEMA %s; SET search_path TO %s", schema, schema)); err != nil {
-		t.Fatalf("create schema: %v", err)
-	}
 	if _, err := d.Exec(context.Background(), outbox.Schema()); err != nil {
 		t.Fatalf("apply schema: %v", err)
+	}
+	if _, err := d.Exec(context.Background(), "TRUNCATE TABLE outbox"); err != nil {
+		t.Fatalf("truncate outbox: %v", err)
 	}
 	return d
 }
@@ -216,7 +218,13 @@ func TestWorker_FailedPublishRetries(t *testing.T) {
 			return errors.New("transient")
 		}
 		return nil
-	}, outbox.WithInterval(50*time.Millisecond))
+	},
+		outbox.WithInterval(50*time.Millisecond),
+		// Disable backoff so the test isn't blocked by the 1s default
+		// between retries — backoff itself is covered by a dedicated
+		// TestWorker_BackoffStampsNextRetryAt test below.
+		outbox.WithBackoff(0, 0),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,6 +275,7 @@ func TestWorker_MaxAttemptsDeadLetters(t *testing.T) {
 	},
 		outbox.WithInterval(30*time.Millisecond),
 		outbox.WithMaxAttempts(2),
+		outbox.WithBackoff(0, 0),
 	)
 	if err != nil {
 		t.Fatal(err)

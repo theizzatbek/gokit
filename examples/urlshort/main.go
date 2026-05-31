@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 
@@ -92,6 +93,14 @@ func run() error {
 					return visitCounter.Handle(ctx, batch)
 				})
 		}),
+		// Transactional outbox: writes LinkCreated inside the same
+		// db.Tx as the link insert, drains via natsmap.PublishRaw.
+		// LISTEN/NOTIFY auto-wakes the worker within ~ms of commit.
+		// 7-day retention keeps published rows for replay tooling.
+		service.WithOutbox(
+			outbox.WithRetention(7*24*time.Hour),
+		),
+		service.WithOutboxAutoSchema(),
 	)
 	if err != nil {
 		return err
@@ -106,24 +115,6 @@ func run() error {
 			return err
 		}
 	}
-	if _, err := svc.DB.Exec(ctx, outbox.Schema()); err != nil {
-		return fmt.Errorf("urlshort: apply outbox schema: %w", err)
-	}
-
-	// Outbox worker: drains the `outbox` table the Create transaction
-	// writes to. Publishes raw JSON bytes onto the LinkCreated subject
-	// via natsmap.PublishRaw — bypasses the typed codec because the
-	// bytes are already JSON-encoded and re-encoding would re-order keys.
-	w, err := outbox.NewWorker(svc.DB, func(ctx context.Context, e outbox.Event) error {
-		return natsmap.PublishRaw(ctx, svc.NATSMap, e.EventType, e.Payload, e.Headers)
-	}, outbox.WithLogger(svc.Logger()))
-	if err != nil {
-		return err
-	}
-	if err := w.Start(ctx); err != nil {
-		return err
-	}
-	svc.OnShutdown(w.Stop)
 
 	linkCache := cache.For[links.CachedLink](svc.Redis, "urlshort:link:")
 

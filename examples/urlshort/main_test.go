@@ -104,6 +104,10 @@ func TestSmoke_EndToEnd(t *testing.T) {
 					return visitCounter.Handle(ctx, batch)
 				})
 		}),
+		// Same outbox wiring as production main.go — exercises the
+		// auto-schema path + the natsmap dispatch bridge.
+		service.WithOutbox(outbox.WithInterval(50*time.Millisecond)),
+		service.WithOutboxAutoSchema(),
 	)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
@@ -124,9 +128,6 @@ func TestSmoke_EndToEnd(t *testing.T) {
 			t.Fatalf("migrate %s: %v", mig, err)
 		}
 	}
-	if _, err := svc.DB.Exec(ctx, outbox.Schema()); err != nil {
-		t.Fatalf("apply outbox schema: %v", err)
-	}
 	if err := svc.NATS.EnsureStream(ctx, natsclient.StreamConfig{
 		Name: "URLSHORT", Subjects: []string{"urlshort.>"}, MaxAge: 24 * time.Hour, Storage: natsclient.StorageFile,
 	}); err != nil {
@@ -139,21 +140,6 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	usersSvc := users.NewService(svc.DB, svc.Hasher)
 	pub := events.NewPublisher(svc.NATSMap, svc.Logger())
 	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub, linkCache)
-
-	// Outbox worker — drains LinkCreated events the Create transaction
-	// enqueues, dispatching to natsmap.PublishRaw on the same subject
-	// the typed publisher would have used. Tight poll interval keeps
-	// the test latency under the waitForSubject deadline.
-	w, err := outbox.NewWorker(svc.DB, func(ctx context.Context, e outbox.Event) error {
-		return natsmap.PublishRaw(ctx, svc.NATSMap, e.EventType, e.Payload, e.Headers)
-	}, outbox.WithInterval(50*time.Millisecond))
-	if err != nil {
-		t.Fatalf("outbox worker: %v", err)
-	}
-	if err := w.Start(ctx); err != nil {
-		t.Fatalf("worker start: %v", err)
-	}
-	t.Cleanup(func() { _ = w.Stop() })
 
 	svc.SetContextBuilder(appctx.NewContextBuilder(svc.Auth, svc.Logger()))
 	users.RegisterHandlers(svc.Engine, usersSvc, svc.Auth)

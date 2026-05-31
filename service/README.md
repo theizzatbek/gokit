@@ -320,6 +320,9 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithDBOptions(opts...)` | Extra `db.Option`s applied to the kit-built `*db.DB`. Logger is already wired; reach for this to add `db.WithMetrics`, `db.WithSlowQueryThreshold`, additional `db.WithTracer` (audit / custom backends), etc. |
 | `WithOtelPgxOptions(opts...)` | Configure the OTel pgx tracer auto-attached by `WithOtel`. Forwards `otelkit.WithPgxTracerName`, `WithPgxSpanNamer`, `WithoutPgxSQL`, `WithPgxMaxSQLLength`. No-op without `WithOtel`. |
 | `WithoutOtelPgxTracer()` | Suppress the auto-wired OTel pgx tracer. HTTP-path tracing (otelfiber / otelhttp) stays on. Use when DB tracing is provided by a sidecar or when per-query span volume would blow the export budget. |
+| `WithOutbox(outbox.WorkerOption...)` | Enable the transactional outbox worker. Requires DB + (NATSMap OR `WithOutboxDispatcher`). Auto-wires logger + metrics, registers `OnShutdown(Stop)`. Default PublishFn = `natsmap.PublishRaw(ctx, rt, e.EventType, e.Payload, e.Headers)`. |
+| `WithOutboxDispatcher(fn)` | Override the default outbox PublishFn (e.g. fan out to multiple subjects, wrap with audit log, dispatch to a non-natsmap bus). |
+| `WithOutboxAutoSchema()` | Apply `outbox.Schema()` at boot. Off by default — most deployments fold the DDL into their migration tool. |
 
 ## Common patterns
 
