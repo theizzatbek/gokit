@@ -20,6 +20,7 @@ import (
 	"github.com/go-playground/validator/v10"
 
 	"github.com/theizzatbek/gokit/clients/apimap"
+	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/appctx"
@@ -56,6 +57,13 @@ func run() error {
 		return err
 	}
 
+	// visitCounter is constructed AFTER service.New but referenced from
+	// the natsmap registration callback (which runs INSIDE service.New
+	// once buildDB has populated svc.DB but before subscriptions
+	// open). Captured by pointer so the handler closure sees the
+	// fully-built instance by the time the first event lands.
+	var visitCounter *links.VisitCounter
+
 	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
 		service.WithValidator(v),
 		service.WithAPIMap(),
@@ -72,12 +80,18 @@ func run() error {
 		service.WithNATSMapRegistration(func(e *natsmap.Engine) {
 			natsmap.RegisterPublisher[events.LinkCreated](e, "urlshort.link.created")
 			natsmap.RegisterPublisher[events.LinkVisited](e, "urlshort.link.visited")
+			natsmap.RegisterHandler[events.LinkVisited](e, "link_visit_counter",
+				func(ctx context.Context, m natsclient.Msg[events.LinkVisited]) error {
+					return visitCounter.Handle(ctx, m)
+				})
 		}),
 	)
 	if err != nil {
 		return err
 	}
 	defer svc.Close()
+
+	visitCounter = links.NewVisitCounter(svc.DB, svc.Logger())
 
 	if err := applyMigrations(ctx, svc.DB, "migrations/0001_init.sql"); err != nil {
 		return err

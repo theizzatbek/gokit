@@ -116,6 +116,40 @@ be empty in handlers (because per-route `bearer: []` middleware runs
 AFTER `contextInit`). Per-route `bearer: []` still enforces 401 on
 protected paths.
 
+### Event-sourced visit counting
+
+`GET /:code` (redirect) does NOT write to the database in the request
+path. Instead the handler calls `links.Service.Resolve`, which:
+
+1. Reads the link by code (single SELECT).
+2. Publishes `urlshort.link.visited` via JetStream.
+3. Returns to Fiber for the 302.
+
+A separate subscriber declared in `subscribers.yaml` and registered
+via `service.WithNATSMapRegistration` (`link_visit_counter` →
+`links.VisitCounter.Handle`) consumes the events and runs the
+`UPDATE links SET visit_count = visit_count + 1 …` asynchronously.
+
+Why:
+
+- **Latency.** The redirect returns in ~1ms — no UPDATE round-trip on
+  the popular short codes' row-level write locks.
+- **Throughput.** Hot codes don't serialise on a single row; the
+  subscriber drains the JetStream at its own pace.
+- **Durability.** JetStream persists every event before the
+  publisher's call returns. A crashed subscriber gets redeliveries on
+  restart; an erroring `Handle` triggers natsmap's automatic
+  exponential backoff.
+- **Scaling.** `queue_group: link-visit-counter` in the YAML means a
+  multi-replica deployment fans out — exactly one replica processes
+  each event, so horizontal scaling never double-counts.
+
+Trade-off: `visit_count` is **eventually consistent**. Stats reads
+taken < ~10ms after a click may miss the most recent visit. For a
+click counter that's the right ratio (favour latency over precision);
+if you need exact-once semantics, add an idempotency-key column and
+deduplicate events by ID — out of scope for this example.
+
 ## Limitations
 
 - **Best-effort enrichment:** if MicroLink or the target URL is down, the link is still created with empty metadata. Not a bug — the demo deliberately picks "user-visible failures should be loud; analytics should be quiet".

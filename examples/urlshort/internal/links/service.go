@@ -94,17 +94,26 @@ func (s *Service) GetByCode(ctx context.Context, code string) (Link, error) {
 	return l, nil
 }
 
-// IncVisit bumps visit_count and last_visited_at, then publishes
-// urlshort.link.visited.
-func (s *Service) IncVisit(ctx context.Context, code, userAgent, ip string) (Link, error) {
-	l, err := sqb.QueryOne[Link](ctx, s.db, sqb.Builder.
-		Update("links").
-		Set("visit_count", sq.Expr("visit_count + 1")).
-		Set("last_visited_at", sq.Expr("now()")).
-		Where(sq.Eq{"code": code}).
-		Suffix(linkReturning), scanLink)
+// Resolve returns the link for code and fires a urlshort.link.visited
+// event so the visit counter subscriber persists the increment
+// asynchronously. The redirect happens BEFORE any DB write, so an
+// open browser tab doesn't wait on UPDATE round-trips.
+//
+// Trade-off: visit_count + last_visited_at are eventually consistent
+// — stats reads taken < N ms after a click may lag by one visit.
+// The window is bounded by JetStream delivery latency (single-digit
+// ms in normal operation, seconds during back-pressure spikes). The
+// counts are durable: JetStream persists the event before this
+// function returns, and the visit_counter subscriber retries on
+// failure until the UPDATE lands.
+//
+// Replaces the previous IncVisit which performed an UPDATE ...
+// RETURNING in the hot path; that pattern serialised every redirect
+// behind a row-level write lock on the popular short codes.
+func (s *Service) Resolve(ctx context.Context, code, userAgent, ip string) (Link, error) {
+	l, err := s.GetByCode(ctx, code)
 	if err != nil {
-		return Link{}, xerrs.NotFound("link_not_found", "urlshort: link not found")
+		return Link{}, err
 	}
 	s.pub.LinkVisited(ctx, events.LinkVisited{
 		Code:      code,

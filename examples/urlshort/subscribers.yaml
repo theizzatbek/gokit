@@ -1,0 +1,17 @@
+streams: auto
+
+subscribers:
+  # Persists visit counts asynchronously. The Redirect handler
+  # publishes urlshort.link.visited and returns; this subscriber
+  # consumes the event and runs UPDATE links SET visit_count =
+  # visit_count + 1 ... — keeping the DB write out of the redirect
+  # latency.
+  #
+  # queue_group fans out across replicas: each event is delivered to
+  # one consumer in the group, so scaling the deployment horizontally
+  # doesn't multiply visit counts.
+  - name: link_visit_counter
+    subject: urlshort.link.visited
+    durable: link-visit-counter
+    queue_group: link-visit-counter
+    max_in_flight: 64

@@ -77,6 +77,7 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Fatalf("override safe_url: %v", err)
 	}
 
+	var visitCounter *links.VisitCounter
 	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
 		service.WithValidator(v),
 		service.WithAPIMap(),
@@ -92,11 +93,16 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		service.WithNATSMapRegistration(func(e *natsmap.Engine) {
 			natsmap.RegisterPublisher[events.LinkCreated](e, "urlshort.link.created")
 			natsmap.RegisterPublisher[events.LinkVisited](e, "urlshort.link.visited")
+			natsmap.RegisterHandler[events.LinkVisited](e, "link_visit_counter",
+				func(ctx context.Context, m natsclient.Msg[events.LinkVisited]) error {
+					return visitCounter.Handle(ctx, m)
+				})
 		}),
 	)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
 	}
+	visitCounter = links.NewVisitCounter(svc.DB, svc.Logger())
 	t.Cleanup(svc.Close)
 
 	// Apply migrations + ensure stream — same as production main.go.
@@ -181,7 +187,10 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	// 4. NATS event arrived
 	waitForSubject(t, events, "urlshort.link.created", 5*time.Second)
 
-	// 5. Redirect (public)
+	// 5. Redirect (public). Visit counting is now event-sourced —
+	// the handler publishes urlshort.link.visited and returns; the
+	// link_visit_counter subscriber persists the increment
+	// asynchronously.
 	redirResp := doJSON(t, app, "GET", "/"+code, "", "")
 	if redirResp.StatusCode != fiber.StatusFound {
 		t.Errorf("redirect status = %d, want 302", redirResp.StatusCode)
@@ -190,15 +199,25 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Errorf("Location = %q, want %q", loc, target)
 	}
 
-	// 6. Stats
-	statsResp := doJSON(t, app, "GET", "/links/"+code+"/stats", "", token)
-	requireStatus(t, statsResp, fiber.StatusOK)
+	// 6. Stats — visit_count is eventually consistent. Poll until
+	// the subscriber's UPDATE lands (single-digit ms in healthy
+	// runs; the 2s budget covers slow CI containers).
+	deadline := time.Now().Add(2 * time.Second)
 	var stats map[string]any
-	if err := json.NewDecoder(statsResp.Body).Decode(&stats); err != nil {
-		t.Fatalf("decode stats: %v", err)
+	for time.Now().Before(deadline) {
+		statsResp := doJSON(t, app, "GET", "/links/"+code+"/stats", "", token)
+		requireStatus(t, statsResp, fiber.StatusOK)
+		stats = nil
+		if err := json.NewDecoder(statsResp.Body).Decode(&stats); err != nil {
+			t.Fatalf("decode stats: %v", err)
+		}
+		if vc, _ := stats["visit_count"].(float64); vc >= 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	if vc, _ := stats["visit_count"].(float64); vc != 1 {
-		t.Errorf("visit_count = %v, want 1", stats["visit_count"])
+		t.Errorf("visit_count = %v, want 1 (subscriber did not catch up within 2s)", stats["visit_count"])
 	}
 
 	// 7. NATS visited event
