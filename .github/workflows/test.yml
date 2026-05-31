@@ -5,9 +5,17 @@ on:
     branches: [main]
   pull_request:
 
-# Three parallel jobs: static (~5s), unit-race (~30-60s), integration
-# (~90s with testcontainers). PRs get fast feedback from the first two;
-# integration finishes a bit later but doesn't gate the others.
+# Pipeline:
+#   static            gofmt + vet + warm module/build cache  (~15s)
+#   ├─ unit-race      go test -race -short ./...             (~25s, hot cache)
+#   └─ integration    go test ./...                          (~60s, hot cache)
+#
+# unit-race + integration declare `needs: static` so they reuse the
+# module download + compiled-test cache that static populated. Without
+# the dependency every parallel job would re-download modules from
+# scratch (`actions/setup-go cache: true` only restores from a previous
+# WORKFLOW RUN; parallel jobs within one run can't see each other's
+# uploads).
 jobs:
   static:
     runs-on: ubuntu-latest
@@ -19,6 +27,13 @@ jobs:
           go-version: '1.26.3'
           cache: true
 
+      - name: Cache compiled tests
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-build-
+
       - name: gofmt
         run: |
           out=$(gofmt -l .)
@@ -28,9 +43,14 @@ jobs:
             exit 1
           fi
 
+      # vet downloads the module graph + compiles every package — same
+      # work the downstream jobs need. Doing it here once means
+      # unit-race + integration boot with a hot $GOPATH/pkg/mod and
+      # ~/.cache/go-build.
       - run: go vet ./...
 
   unit-race:
+    needs: static
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,22 +60,20 @@ jobs:
           go-version: '1.26.3'
           cache: true
 
-      # Cache test binaries + build artifacts in addition to modules
-      # (setup-go's cache: true covers only the module cache).
-      - name: Cache build/test artifacts
+      - name: Cache compiled tests
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache/go-build
+          path: ~/.cache/go-build
           key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-build-
 
-      # -short skips every package whose tests need Docker (testcontainers).
-      # The race detector only runs against pure unit code, which is where
-      # most concurrency bugs live anyway.
+      # -short skips every package whose tests need Docker
+      # (testcontainers). The race detector only runs against pure
+      # unit code, which is where most concurrency bugs live anyway.
       - run: go test -race -short ./...
 
   integration:
+    needs: static
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,16 +83,15 @@ jobs:
           go-version: '1.26.3'
           cache: true
 
-      - name: Cache build/test artifacts
+      - name: Cache compiled tests
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache/go-build
+          path: ~/.cache/go-build
           key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-build-
 
       # No -race here: combining the race detector with the full
-      # testcontainers stack tripled wall time without catching new bugs in
-      # practice (race-prone code lives in the kit core, covered by the
-      # unit-race job above).
+      # testcontainers stack tripled wall time without catching new
+      # bugs in practice (race-prone code lives in the kit core,
+      # covered by the unit-race job above).
       - run: go test ./...

@@ -68,6 +68,14 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	if err := links.RegisterValidators(v); err != nil {
 		t.Fatalf("links.RegisterValidators: %v", err)
 	}
+	// Override safe_url with a permissive variant: the smoke test
+	// uses httptest.NewServer for the upstream (loopback 127.0.0.1),
+	// which the production validator deliberately rejects to block
+	// SSRF. Test-only override; production code path is unchanged.
+	if err := v.RegisterValidation("safe_url",
+		func(validator.FieldLevel) bool { return true }); err != nil {
+		t.Fatalf("override safe_url: %v", err)
+	}
 
 	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
 		service.WithValidator(v),
