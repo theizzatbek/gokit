@@ -75,7 +75,7 @@ func (h *Handler) List(c *fibermap.Context[appctx.AppCtx], p ListParams) error {
 // Redirect handles GET /:code — public 302 to the original URL,
 // recording a visit asynchronously.
 func (h *Handler) Redirect(c *fibermap.Context[appctx.AppCtx], p CodeParams) error {
-	l, err := h.svc.IncVisit(c.UserContext(), p.Code, c.Get("User-Agent"), c.IP())
+	l, err := h.svc.Resolve(c.UserContext(), p.Code, c.Get("User-Agent"), c.IP())
 	if err != nil {
 		return err
 	}

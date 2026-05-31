@@ -18,8 +18,10 @@ import (
 	"syscall"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/theizzatbek/gokit/clients/apimap"
+	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/appctx"
@@ -56,6 +58,13 @@ func run() error {
 		return err
 	}
 
+	// visitCounter is constructed AFTER service.New but referenced from
+	// the natsmap registration callback (which runs INSIDE service.New
+	// once buildDB has populated svc.DB but before subscriptions
+	// open). Captured by pointer so the handler closure sees the
+	// fully-built instance by the time the first event lands.
+	var visitCounter *links.VisitCounter
+
 	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
 		service.WithValidator(v),
 		service.WithAPIMap(),
@@ -72,6 +81,10 @@ func run() error {
 		service.WithNATSMapRegistration(func(e *natsmap.Engine) {
 			natsmap.RegisterPublisher[events.LinkCreated](e, "urlshort.link.created")
 			natsmap.RegisterPublisher[events.LinkVisited](e, "urlshort.link.visited")
+			natsmap.RegisterHandler[events.LinkVisited](e, "link_visit_counter",
+				func(ctx context.Context, m natsclient.Msg[events.LinkVisited]) error {
+					return visitCounter.Handle(ctx, m)
+				})
 		}),
 	)
 	if err != nil {
@@ -79,14 +92,38 @@ func run() error {
 	}
 	defer svc.Close()
 
-	if err := applyMigrations(ctx, svc.DB, "migrations/0001_init.sql"); err != nil {
-		return err
+	for _, mig := range []string{
+		"migrations/0001_init.sql",
+		"migrations/0002_idempotent_links.sql",
+	} {
+		if err := applyMigrations(ctx, svc.DB, mig); err != nil {
+			return err
+		}
+	}
+
+	var linkCache *links.LinkCache
+	if cfg.RedisURL != "" {
+		opts, err := redis.ParseURL(cfg.RedisURL)
+		if err != nil {
+			return fmt.Errorf("urlshort: parse REDIS_URL: %w", err)
+		}
+		rdb := redis.NewClient(opts)
+		if err := rdb.Ping(ctx).Err(); err != nil {
+			return fmt.Errorf("urlshort: redis ping: %w", err)
+		}
+		svc.OnShutdown(func() error { return rdb.Close() })
+		linkCache = links.NewLinkCache(rdb, links.LinkCacheConfig{Logger: svc.Logger()})
 	}
 
 	fetcher := enrich.NewFetcher(svc.APIMap, svc.Logger())
 	usersSvc := users.NewService(svc.DB, svc.Hasher)
 	pub := events.NewPublisher(svc.NATSMap, svc.Logger())
-	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub)
+	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub, linkCache)
+	visitCounter = links.NewVisitCounter(svc.DB, svc.Logger())
+	// Drain pending visit batches before NATSMap.Drain runs so the
+	// subscriber has nowhere to deliver to but the in-memory buffer
+	// still flushes to Postgres.
+	svc.OnShutdown(visitCounter.Close)
 
 	svc.SetContextBuilder(appctx.NewContextBuilder(svc.Auth, svc.Logger()))
 	users.RegisterHandlers(svc.Engine, usersSvc, svc.Auth)

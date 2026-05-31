@@ -17,10 +17,12 @@ import (
 	"time"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/redis/go-redis/v9"
 	"github.com/gofiber/fiber/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/testcontainers/testcontainers-go"
 	tcnats "github.com/testcontainers/testcontainers-go/modules/nats"
+	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/theizzatbek/gokit/auth"
@@ -77,6 +79,7 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Fatalf("override safe_url: %v", err)
 	}
 
+	var visitCounter *links.VisitCounter
 	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
 		service.WithValidator(v),
 		service.WithAPIMap(),
@@ -92,20 +95,31 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		service.WithNATSMapRegistration(func(e *natsmap.Engine) {
 			natsmap.RegisterPublisher[events.LinkCreated](e, "urlshort.link.created")
 			natsmap.RegisterPublisher[events.LinkVisited](e, "urlshort.link.visited")
+			natsmap.RegisterHandler[events.LinkVisited](e, "link_visit_counter",
+				func(ctx context.Context, m natsclient.Msg[events.LinkVisited]) error {
+					return visitCounter.Handle(ctx, m)
+				})
 		}),
 	)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
 	}
+	visitCounter = links.NewVisitCounter(svc.DB, svc.Logger())
+	svc.OnShutdown(visitCounter.Close)
 	t.Cleanup(svc.Close)
 
 	// Apply migrations + ensure stream — same as production main.go.
-	sqlBytes, err := os.ReadFile("migrations/0001_init.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.DB.Exec(ctx, string(sqlBytes)); err != nil {
-		t.Fatalf("migrate: %v", err)
+	for _, mig := range []string{
+		"migrations/0001_init.sql",
+		"migrations/0002_idempotent_links.sql",
+	} {
+		sqlBytes, err := os.ReadFile(mig)
+		if err != nil {
+			t.Fatalf("read %s: %v", mig, err)
+		}
+		if _, err := svc.DB.Exec(ctx, string(sqlBytes)); err != nil {
+			t.Fatalf("migrate %s: %v", mig, err)
+		}
 	}
 	if err := svc.NATS.EnsureStream(ctx, natsclient.StreamConfig{
 		Name: "URLSHORT", Subjects: []string{"urlshort.>"}, MaxAge: 24 * time.Hour, Storage: natsclient.StorageFile,
@@ -113,10 +127,13 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Fatalf("ensure stream: %v", err)
 	}
 
+	rdb := startRedis(t, ctx)
+	linkCache := links.NewLinkCache(rdb, links.LinkCacheConfig{Logger: svc.Logger()})
+
 	fetcher := enrich.NewFetcher(svc.APIMap, svc.Logger())
 	usersSvc := users.NewService(svc.DB, svc.Hasher)
 	pub := events.NewPublisher(svc.NATSMap, svc.Logger())
-	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub)
+	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub, linkCache)
 	svc.SetContextBuilder(appctx.NewContextBuilder(svc.Auth, svc.Logger()))
 	users.RegisterHandlers(svc.Engine, usersSvc, svc.Auth)
 	links.RegisterHandlers(svc.Engine, linksSvc, cfg.ShortURLBase)
@@ -181,7 +198,10 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	// 4. NATS event arrived
 	waitForSubject(t, events, "urlshort.link.created", 5*time.Second)
 
-	// 5. Redirect (public)
+	// 5. Redirect (public). Visit counting is now event-sourced —
+	// the handler publishes urlshort.link.visited and returns; the
+	// link_visit_counter subscriber persists the increment
+	// asynchronously.
 	redirResp := doJSON(t, app, "GET", "/"+code, "", "")
 	if redirResp.StatusCode != fiber.StatusFound {
 		t.Errorf("redirect status = %d, want 302", redirResp.StatusCode)
@@ -190,15 +210,25 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Errorf("Location = %q, want %q", loc, target)
 	}
 
-	// 6. Stats
-	statsResp := doJSON(t, app, "GET", "/links/"+code+"/stats", "", token)
-	requireStatus(t, statsResp, fiber.StatusOK)
+	// 6. Stats — visit_count is eventually consistent. Poll until
+	// the subscriber's UPDATE lands (single-digit ms in healthy
+	// runs; the 2s budget covers slow CI containers).
+	deadline := time.Now().Add(2 * time.Second)
 	var stats map[string]any
-	if err := json.NewDecoder(statsResp.Body).Decode(&stats); err != nil {
-		t.Fatalf("decode stats: %v", err)
+	for time.Now().Before(deadline) {
+		statsResp := doJSON(t, app, "GET", "/links/"+code+"/stats", "", token)
+		requireStatus(t, statsResp, fiber.StatusOK)
+		stats = nil
+		if err := json.NewDecoder(statsResp.Body).Decode(&stats); err != nil {
+			t.Fatalf("decode stats: %v", err)
+		}
+		if vc, _ := stats["visit_count"].(float64); vc >= 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	if vc, _ := stats["visit_count"].(float64); vc != 1 {
-		t.Errorf("visit_count = %v, want 1", stats["visit_count"])
+		t.Errorf("visit_count = %v, want 1 (subscriber did not catch up within 2s)", stats["visit_count"])
 	}
 
 	// 7. NATS visited event
@@ -240,6 +270,26 @@ func startPostgres(t *testing.T, ctx context.Context) db.Config {
 		Database: "urlshort",
 		SSLMode:  "disable",
 	}
+}
+
+func startRedis(t *testing.T, ctx context.Context) *redis.Client {
+	t.Helper()
+	c, err := tcredis.Run(ctx, "redis:7-alpine")
+	if err != nil {
+		t.Fatalf("redis testcontainer: %v", err)
+	}
+	t.Cleanup(func() { _ = testcontainers.TerminateContainer(c) })
+	url, err := c.ConnectionString(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := redis.ParseURL(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdb := redis.NewClient(opts)
+	t.Cleanup(func() { _ = rdb.Close() })
+	return rdb
 }
 
 func startNATS(t *testing.T, ctx context.Context) string {

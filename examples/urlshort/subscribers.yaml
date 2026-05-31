@@ -1,0 +1,14 @@
+streams: auto
+
+# natsmap auto-derives both `durable` and `queue_group` from the
+# subscriber `name` (see resolveDurableQueueGroup in
+# clients/natsmap/engine.go) — no need to repeat them here. queue_group
+# fans out across replicas so horizontal scaling does not double-count.
+subscribers:
+  # Persists visit counts asynchronously. The Redirect handler
+  # publishes urlshort.link.visited and returns; this subscriber
+  # buffers events and flushes batched UPDATE … FROM (VALUES …)
+  # writes to Postgres at most every second OR every 1000 events.
+  - name: link_visit_counter
+    subject: urlshort.link.visited
+    max_in_flight: 256
