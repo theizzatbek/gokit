@@ -5,8 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Three parallel jobs: static (~5s), unit-race (~30-60s), integration
+# (~90s with testcontainers). PRs get fast feedback from the first two;
+# integration finishes a bit later but doesn't gate the others.
 jobs:
-  test:
+  static:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,4 +30,51 @@ jobs:
 
       - run: go vet ./...
 
-      - run: go test -race -count=1 ./...
+  unit-race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: true
+
+      # Cache test binaries + build artifacts in addition to modules
+      # (setup-go's cache: true covers only the module cache).
+      - name: Cache build/test artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-build-
+
+      # -short skips every package whose tests need Docker (testcontainers).
+      # The race detector only runs against pure unit code, which is where
+      # most concurrency bugs live anyway.
+      - run: go test -race -short ./...
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: true
+
+      - name: Cache build/test artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-build-
+
+      # No -race here: combining the race detector with the full
+      # testcontainers stack tripled wall time without catching new bugs in
+      # practice (race-prone code lives in the kit core, covered by the
+      # unit-race job above).
+      - run: go test ./...

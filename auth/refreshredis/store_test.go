@@ -25,7 +25,9 @@ func TestMain(m *testing.M) {
 func runMain(m *testing.M) int {
 	flag.Parse()
 	if testing.Short() {
-		return m.Run()
+		// Skip the entire package under -short — every test needs
+		// the Redis container.
+		return 0
 	}
 	ctx := context.Background()
 	c, err := tcredis.Run(ctx, "redis:7-alpine")

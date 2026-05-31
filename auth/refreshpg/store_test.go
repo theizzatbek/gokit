@@ -35,7 +35,10 @@ func runMain(m *testing.M) int {
 	// the (expensive) container.
 	flag.Parse()
 	if testing.Short() {
-		return m.Run()
+		// Skip the entire package under -short — every test needs
+		// the Postgres container, so running them without setup
+		// would just nil-deref testDB.
+		return 0
 	}
 	ctx := context.Background()
 	c, err := tcpostgres.Run(ctx, "postgres:16-alpine",

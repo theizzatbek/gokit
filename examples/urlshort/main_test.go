@@ -201,6 +201,9 @@ func TestSmoke_EndToEnd(t *testing.T) {
 
 func startPostgres(t *testing.T, ctx context.Context) db.Config {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("requires Postgres testcontainer; rerun without -short")
+	}
 	c, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("urlshort"),
 		tcpg.WithUsername("urlshort"),
