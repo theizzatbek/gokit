@@ -130,13 +130,7 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Fatalf("ensure stream: %v", err)
 	}
 
-	linkCache, err := cache.New[links.CachedLink](svc.Redis.Redis(), cache.Config{
-		KeyPrefix: "urlshort:link:",
-		Logger:    svc.Logger(),
-	})
-	if err != nil {
-		t.Fatalf("cache.New: %v", err)
-	}
+	linkCache := cache.For[links.CachedLink](svc.Redis, "urlshort:link:")
 
 	fetcher := enrich.NewFetcher(svc.APIMap, svc.Logger())
 	usersSvc := users.NewService(svc.DB, svc.Hasher)

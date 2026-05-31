@@ -91,6 +91,15 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*Client, error) {
 		"redisclient: ping failed after retries")
 }
 
+// Logger returns the *slog.Logger configured via WithLogger, or nil
+// when none was supplied. Nil-receiver safe — returns nil.
+func (c *Client) Logger() *slog.Logger {
+	if c == nil {
+		return nil
+	}
+	return c.logger
+}
+
 // Redis returns the underlying *redis.Client. Use any go-redis API
 // the wrapper doesn't expose directly. The lifetime is owned by
 // *Client; do NOT close the returned client yourself.

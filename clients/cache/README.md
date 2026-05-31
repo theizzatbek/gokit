@@ -17,6 +17,17 @@ type User struct {
     Name string `json:"name"`
 }
 
+// One-liner via cache.For — auto-wires the logger from the
+// kit's *redisclient.Client, returns nil when svc.Redis is nil
+// (cache methods are nil-receiver-safe), panics with *errs.Error
+// on an empty KeyPrefix (programmer error, fail-fast at startup).
+c := cache.For[User](svc.Redis, "session:user:")
+```
+
+Or with full control over TTLs / custom logger / a raw
+`*redis.Client`:
+
+```go
 c, err := cache.New[User](svc.Redis.Redis(), cache.Config{
     KeyPrefix:   "session:user:",
     PositiveTTL: time.Hour,

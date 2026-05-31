@@ -37,6 +37,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
@@ -127,6 +128,38 @@ func New[T any](rdb *redis.Client, cfg Config) (*Redis[T], error) {
 		logger:    cfg.Logger,
 		negEnable: negEnable,
 	}, nil
+}
+
+// For is the kit-aware convenience constructor: takes a
+// [*redisclient.Client] (rather than the raw *redis.Client), auto-
+// wires its logger, and applies default TTLs. Returns nil when rc
+// is nil — call sites can wire the cache unconditionally and rely
+// on the nil-receiver-safe API:
+//
+//	linkCache := cache.For[CachedLink](svc.Redis, "urlshort:link:")
+//	// linkCache is *Redis[CachedLink] or nil; all method calls work
+//
+// Panics with *errs.Error{Code: CodeInvalidKeyPrefix} on empty
+// keyPrefix — that's a hard-coded programmer literal, same
+// "panic-on-misuse" convention as fibermap.RegisterHandler.
+//
+// For full control (custom TTLs, custom logger, raw *redis.Client),
+// fall back to [New].
+func For[T any](rc *redisclient.Client, keyPrefix string) *Redis[T] {
+	if rc == nil {
+		return nil
+	}
+	c, err := New[T](rc.Redis(), Config{
+		KeyPrefix: keyPrefix,
+		Logger:    rc.Logger(),
+	})
+	if err != nil {
+		// New only errors on empty KeyPrefix — that's caller's
+		// hard-coded literal, panic per kit convention so it surfaces
+		// at startup rather than as a silent miss in production.
+		panic(err)
+	}
+	return c
 }
 
 // Get reads from Redis. Returns a miss on transport error so callers

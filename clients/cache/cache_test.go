@@ -12,6 +12,7 @@ import (
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
 	"github.com/theizzatbek/gokit/clients/cache"
+	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
@@ -218,5 +219,63 @@ func TestNegativeTTL_Default(t *testing.T) {
 	}
 	if ttl <= 30*time.Second || ttl > 65*time.Second {
 		t.Errorf("TTL = %v, want ~60s", ttl)
+	}
+}
+
+func TestFor_NilClientReturnsNil(t *testing.T) {
+	// cache.For must return nil for a nil *redisclient.Client so
+	// callers can wire it unconditionally. nil-receiver-safe methods
+	// keep working downstream.
+	c := cache.For[payload](nil, "t:")
+	if c != nil {
+		t.Errorf("For(nil) = %v, want nil", c)
+	}
+	// Verify the nil cache still satisfies the API contract.
+	hit := c.Get(context.Background(), "anything")
+	if hit.Value != nil || hit.NotFound {
+		t.Errorf("nil.Get = %+v, want empty", hit)
+	}
+}
+
+func TestFor_PanicsOnEmptyPrefix(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on empty KeyPrefix")
+		}
+		if _, ok := r.(*xerrs.Error); !ok {
+			t.Errorf("recovered %T, want *xerrs.Error", r)
+		}
+	}()
+
+	rc, err := redisclient.Connect(context.Background(), redisclient.Config{
+		URL: "redis://" + testRDB.Options().Addr,
+	})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer rc.Close()
+	cache.For[payload](rc, "") // expected to panic
+}
+
+func TestFor_RoundTrip(t *testing.T) {
+	rc, err := redisclient.Connect(context.Background(), redisclient.Config{
+		URL: "redis://" + testRDB.Options().Addr,
+	})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer rc.Close()
+
+	flushRedis(t)
+	c := cache.For[payload](rc, "f:")
+	if c == nil {
+		t.Fatal("For(non-nil) returned nil")
+	}
+	ctx := context.Background()
+	c.Set(ctx, "k", payload{ID: "x", Name: "y"})
+	hit := c.Get(ctx, "k")
+	if hit.Value == nil || hit.Value.Name != "y" {
+		t.Errorf("Get = %+v, want positive hit Name=y", hit)
 	}
 }

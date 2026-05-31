@@ -101,16 +101,7 @@ func run() error {
 		}
 	}
 
-	var linkCache *cache.Redis[links.CachedLink]
-	if svc.Redis != nil {
-		linkCache, err = cache.New[links.CachedLink](svc.Redis.Redis(), cache.Config{
-			KeyPrefix: "urlshort:link:",
-			Logger:    svc.Logger(),
-		})
-		if err != nil {
-			return err
-		}
-	}
+	linkCache := cache.For[links.CachedLink](svc.Redis, "urlshort:link:")
 
 	fetcher := enrich.NewFetcher(svc.APIMap, svc.Logger())
 	usersSvc := users.NewService(svc.DB, svc.Hasher)
