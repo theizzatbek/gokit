@@ -77,6 +77,7 @@ curl -H "authorization: Bearer $TOKEN" http://localhost:3000/links/<code>/stats
 | `gokit/clients/httpc` | `enrich.Fetcher` does arbitrary-URL fetch to parse `<title>` from HTML |
 | `gokit/clients/apimap` | Declarative `microlink` client; `base_url` from `${MICROLINK_BASE_URL}` env |
 | `gokit/clients/nats` | JetStream publish of `urlshort.link.{created,visited}` on stream `URLSHORT` |
+| `gokit/db/outbox` | `LinkCreated` enqueued INSIDE the Create transaction; `outbox.Worker` drains the table and publishes via `natsmap.PublishRaw`. Closes the commit→publish crash window. |
 
 ## Architecture
 
@@ -239,6 +240,14 @@ The deployed surface ships with kit-default OWASP-baseline protections; this exa
   - `GET /:code` — 50 rps / burst 100 per IP (scanner absorption; already documented above).
 
 429s from the rate limiter expose the stable `rate_limited` Code so the client UI can show a "slow down" message instead of leaking a "wrong password" hint to an attacker.
+
+### LinkCreated through the transactional outbox
+
+The Create handler runs INSERT + `outbox.Enqueue` in ONE `db.Tx`, so the link row and the `LinkCreated` event commit atomically. A long-lived `outbox.Worker` started in `main.go` polls the table on a 5-second cadence, calls `natsmap.PublishRaw` per event, and marks the row published on success — bumps `attempts` and stashes the error otherwise.
+
+Why bother for a click-tracking demo? Because the **commit→publish crash window** is exactly the kind of bug that escapes integration tests and surfaces only in production: the link is durable, the downstream "user got their new short URL" notification never fires, no error gets logged anywhere. The outbox pushes the publish step into a separate retryable transaction, so a crash anywhere in the pipeline either rolls back the entire link creation OR delivers the event eventually.
+
+`LinkVisited` deliberately stays on the direct publish path — fire-and-forget analytics, bounded loss on a node crash is acceptable, and the outbox storage cost (one INSERT per click) would dominate the redirect hot path's latency budget.
 
 ## Limitations
 

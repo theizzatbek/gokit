@@ -368,6 +368,9 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 			publish: func(ctx context.Context, payload any, callHdrs map[string][]string) error {
 				return natsclient.PublishViaCodec(ctx, c, subject, payload, callHdrs)
 			},
+			publishRaw: func(ctx context.Context, body []byte, callHdrs map[string][]string) error {
+				return natsclient.PublishRaw(ctx, c, subject, body, callHdrs)
+			},
 		}
 	}
 

@@ -2,6 +2,7 @@ package links
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/theizzatbek/gokit/clients/cache"
 	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/db/outbox"
 	"github.com/theizzatbek/gokit/db/sqb"
 	xerrs "github.com/theizzatbek/gokit/errs"
 
@@ -60,11 +62,17 @@ func scanLink(row pgx.Row, l *Link) error {
 }
 
 // Create enriches metadata best-effort, generates a unique code (with
-// retries on collision), inserts, and publishes urlshort.link.created.
+// retries on collision), inserts, and enqueues urlshort.link.created
+// into the transactional outbox.
+//
+// The INSERT + outbox.Enqueue run inside ONE db.Tx so the event is
+// persisted atomically with the link row — no crash window between
+// commit and publish. The kit-managed outbox.Worker drains the
+// outbox table asynchronously and publishes through natsmap.
 //
 // Idempotent on (user_id, original_url): the second time a user posts
 // the same URL, this returns the existing link without inserting a
-// duplicate and without re-publishing LinkCreated. Backed by the
+// duplicate and without re-enqueuing LinkCreated. Backed by the
 // UNIQUE (user_id, original_url) index from migration 0002 and a
 // pre-check SELECT — the INSERT path runs only on a true miss.
 //
@@ -89,13 +97,18 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 			return Link{}, xerrs.Wrap(err, xerrs.KindInternal,
 				"urlshort_code_rand_failed", "urlshort: random failed")
 		}
-		l, err := sqb.QueryOne[Link](ctx, s.db, sqb.Builder.
-			Insert("links").
-			Columns("user_id", "code", "original_url", "title", "description", "image_url").
-			Values(userID, code, originalURL, title, desc, img).
-			Suffix(linkReturning), scanLink)
-		if err == nil {
-			s.pub.LinkCreated(ctx, events.LinkCreated{
+
+		var inserted Link
+		txErr := s.db.Tx(ctx, func(tx *db.Tx) error {
+			l, qerr := sqb.QueryOne[Link](ctx, tx, sqb.Builder.
+				Insert("links").
+				Columns("user_id", "code", "original_url", "title", "description", "image_url").
+				Values(userID, code, originalURL, title, desc, img).
+				Suffix(linkReturning), scanLink)
+			if qerr != nil {
+				return qerr
+			}
+			payload, jerr := json.Marshal(events.LinkCreated{
 				LinkID:    l.ID,
 				UserID:    l.UserID,
 				Code:      l.Code,
@@ -103,9 +116,25 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 				Title:     l.Title,
 				CreatedAt: l.CreatedAt,
 			})
-			return l, nil
+			if jerr != nil {
+				return xerrs.Wrap(jerr, xerrs.KindInternal,
+					"urlshort_event_encode_failed", "urlshort: encode LinkCreated")
+			}
+			if oerr := outbox.Enqueue(ctx, tx, outbox.Event{
+				AggregateType: "link",
+				AggregateID:   l.Code,
+				EventType:     events.SubjectLinkCreated,
+				Payload:       payload,
+			}); oerr != nil {
+				return oerr
+			}
+			inserted = l
+			return nil
+		})
+		if txErr == nil {
+			return inserted, nil
 		}
-		if e, ok := errors.AsType[*xerrs.Error](err); ok && e.Kind == xerrs.KindAlreadyExists {
+		if e, ok := errors.AsType[*xerrs.Error](txErr); ok && e.Kind == xerrs.KindAlreadyExists {
 			// AlreadyExists covers TWO unique constraints:
 			//   links_code_key (UNIQUE code) — code generator collided.
 			//     Retry with a fresh code.
@@ -117,7 +146,7 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 			}
 			continue // assume it was the code collision; retry
 		}
-		return Link{}, err
+		return Link{}, txErr
 	}
 	return Link{}, xerrs.Internal("code_collision_exhausted",
 		"urlshort: could not generate unique code after retries")

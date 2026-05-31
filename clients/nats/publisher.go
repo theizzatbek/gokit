@@ -98,6 +98,21 @@ var streamCacheStats struct {
 	lookups int64
 }
 
+// PublishRaw publishes pre-encoded bytes without running them through
+// the client's codec. Use for cases where the payload was already
+// encoded upstream — outbox tables, replay tools, schema registries
+// — and re-encoding would either fail (bytes are not the codec's
+// native shape) or change the wire bytes (sub-millisecond float drift,
+// re-ordered JSON keys, …). For typed payloads use [Publisher.Publish]
+// or [PublishViaCodec] instead.
+//
+// Headers, Content-Type fallback, Nats-Msg-Id generation, and
+// core-vs-JS subject routing all match PublishViaCodec — only the
+// Marshal step is bypassed.
+func PublishRaw(ctx context.Context, c *Client, subject string, payload []byte, headers map[string][]string) error {
+	return publishBytes(ctx, c, subject, payload, headers)
+}
+
 // PublishViaCodec is the non-generic publish entry point used by other
 // kit packages (notably natsmap) that need to publish a typed payload
 // resolved at runtime via reflection. It uses the client's codec
@@ -108,6 +123,13 @@ func PublishViaCodec(ctx context.Context, c *Client, subject string, payload any
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation, CodeEncodeFailed, "natsclient: payload encode")
 	}
+	return publishBytes(ctx, c, subject, body, headers)
+}
+
+// publishBytes is the shared wire-up shared by PublishViaCodec
+// (encodes first) and PublishRaw (already encoded). Owns the header
+// defaults, JS-vs-core routing decision, and metric accounting.
+func publishBytes(ctx context.Context, c *Client, subject string, body []byte, headers map[string][]string) error {
 	m := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
 	for k, v := range headers {
 		m.Header[k] = v

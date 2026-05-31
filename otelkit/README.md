@@ -87,12 +87,31 @@ registry is a `prometheus.Gatherer` (the default
 `service.WithoutOtelMetrics()` when the deployment already scrapes
 `/metrics` and doesn't want a parallel push pipeline.
 
+## pgx tracer
+
+`otelkit.NewPgxTracer(opts...)` returns a `pgx.QueryTracer` that opens a CLIENT span per query, attaches `db.system=postgresql` + `db.query.text` (sanitised SQL truncated at 4096 chars by default) at start, and records the resulting status at end. Plug it into `db.Connect`:
+
+```go
+pgxTracer := otelkit.NewPgxTracer(
+    otelkit.WithPgxTracerName("orders-db"),
+)
+dbConn, _ := db.Connect(ctx, cfg, db.WithTracer(pgxTracer))
+```
+
+| Option | Notes |
+|---|---|
+| `WithPgxTracerName(name)` | Override the tracer name appearing in instrumentation library metadata. Default: kit package path. |
+| `WithPgxSpanNamer(fn)` | Custom span-name builder from SQL. Default returns the constant `"db.query"` — PII-free, low-cardinality. |
+| `WithoutPgxSQL()` | Suppress the `db.query.text` attribute (multi-tenant predicates / audit constraints). |
+| `WithPgxMaxSQLLength(n)` | Truncate the statement at n bytes. Default 4096; 0 disables truncation. |
+
+`service.WithOtel` auto-wires this on the kit's DB pool whenever DB is configured — `service.WithOtelPgxOptions(...)` forwards options, `service.WithoutOtelPgxTracer()` disables.
+
 ## Limitations
 
 - **Logs pipeline out of scope.** Add manually if needed.
 - **OTLP/HTTP only.** No gRPC exporter (would add `google.golang.org/grpc` to direct deps). Wire it manually via `WithExporterOption` / `WithMetricsExporterOption` if you really need it.
 - **No SDK-level customisation.** SpanProcessor stack is fixed at one Batcher; metric pipeline is fixed at one PeriodicReader. For multi-pipeline setups, construct your own `TracerProvider` / `MeterProvider` and call `otel.SetTracerProvider` / `otel.SetMeterProvider` directly.
-- **No db tracer.** pgx supports a custom tracer, but the kit's `db` package doesn't yet expose it as an option. Add it manually via `pgxpool.Config` if you need DB spans.
 
 ## See also
 

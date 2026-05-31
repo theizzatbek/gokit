@@ -105,12 +105,8 @@ func connectPool(ctx context.Context, raw, name string, cfg Config, o *options) 
 	if cfg.MaxConnIdle > 0 {
 		pgxCfg.MaxConnIdleTime = cfg.MaxConnIdle
 	}
-	if o.logger != nil || o.metrics != nil {
-		pgxCfg.ConnConfig.Tracer = &tracer{
-			logger:        o.logger,
-			metrics:       o.metrics,
-			slowThreshold: o.slowThreshold,
-		}
+	if t := composeTracer(o); t != nil {
+		pgxCfg.ConnConfig.Tracer = t
 	}
 
 	var pool *pgxpool.Pool

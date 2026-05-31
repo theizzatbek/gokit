@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/theizzatbek/gokit/clients/httpc"
+	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/otelkit"
 )
 
@@ -50,6 +51,16 @@ func (s *Service[T, C]) setupOtel(ctx context.Context) error {
 	// is the convention most APMs (Tempo, Jaeger, Honeycomb) expect.
 	s.opts.httpcOpts = append(s.opts.httpcOpts,
 		httpc.WithBaseTransport(otelhttp.NewTransport(http.DefaultTransport)))
+
+	// DB query tracing: prepend a pgx tracer to dbOpts so every
+	// Query / Exec opens a CLIENT span. Auto-skipped via
+	// WithoutOtelPgxTracer or when DB isn't configured (db.Connect
+	// won't fire either way). Tracer name defaults to the otelkit
+	// package path; callers override via WithOtelPgxOptions.
+	if !s.opts.skipOtelPgxTracer {
+		pgxTracer := otelkit.NewPgxTracer(s.opts.otelPgxOpts...)
+		s.opts.dbOpts = append(s.opts.dbOpts, db.WithTracer(pgxTracer))
+	}
 
 	// Metrics pipeline: bridge the service-wide Prometheus registry
 	// onto OTLP/HTTP so the same /metrics scrape data also lands at
