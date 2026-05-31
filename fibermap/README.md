@@ -95,6 +95,8 @@ That's it. The `Run` bundle gives you `/healthz`, `/metrics`, request-id, struct
 | `WithMetrics(path)` / `WithoutMetrics()` | `/metrics` (only via `Default[T]`) | Prometheus endpoint |
 | `WithMetricsRegistry(reg)` | private registry | Route middleware + scrape through caller-provided registry — unifies `fibermap_http_*` with the app's own collectors. |
 | `WithHealthCheck(path)` / `WithoutHealthCheck()` | `/healthz` | Always-200 health endpoint, bypasses ContextBuilder |
+| `WithReadiness(path, checkers...)` | off | Auto-probed readiness endpoint — runs every `Checker` in parallel, 200 `{"status":"ok"}` or 503 `{"status":"degraded","checks":{…}}`. Bypasses ContextBuilder. |
+| `WithReadinessOpts(opts...)` | none | Forwards `[]ReadinessOption` (e.g. `WithReadinessTimeout(d)`) to the auto-installed readiness handler. |
 
 ## Common patterns
 
@@ -248,9 +250,34 @@ Use `fibermap.ErrorHandler(logger)` as the `fiber.Config.ErrorHandler` to wire `
 - **slog access log** with method, path, status, duration_ms, request_id, response_size
 - **Prometheus metrics** at `/metrics` — `http_requests_total{method,path,status}`, `http_request_duration_seconds`, in-flight gauge
 - **Health endpoint** at `/healthz` — bypasses ContextBuilder so it works even when auth/db is down
+- **Readiness endpoint** (opt-in via `WithReadiness`) — runs supplied `Checker`s in parallel under a shared deadline; 200 `{"status":"ok"}` when every check passes, 503 `{"status":"degraded","checks":{name:err}}` otherwise. `db`, `clients/nats`, `clients/redis` ship `NewChecker(client, name)` adapters.
 - **Request ID** propagated as `X-Request-ID` header + stored in `c.Locals(fibermap.LocalsRequestID)`
 
 Pass a `*slog.Logger` to `WithRecover`, `WithRequestLogger`. nil = `slog.Default()`.
+
+## Security headers
+
+`fibermap.SecurityHeaders(opts...)` returns a Fiber middleware that adds the OWASP baseline response headers — `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and an API-friendly `Content-Security-Policy`. Mount at the App level so `/metrics`, `/healthz`, `/readyz` carry the headers too:
+
+```go
+app.Use(fibermap.SecurityHeaders(
+    fibermap.WithHSTSIncludeSubdomains(),
+    fibermap.WithCSP("default-src 'self'; script-src 'self'"),
+))
+```
+
+| Option | Effect |
+|---|---|
+| `WithHSTSMaxAge(seconds)` | Override the default 1-year `max-age` |
+| `WithHSTSIncludeSubdomains()` | Append `includeSubDomains` — every subdomain becomes HTTPS-only |
+| `WithHSTSPreload()` | Append `preload` (only valid with includeSubdomains + after registering at hstspreload.org) |
+| `WithoutHSTS()` | Drop the HSTS header (use for non-HTTPS deployments) |
+| `WithCSP(policy)` | Override the default API-friendly CSP |
+| `WithoutCSP()` | Drop the CSP header |
+| `WithFrameOptions(value)` | Override `X-Frame-Options` (default `DENY`) |
+| `WithReferrerPolicy(value)` | Override `Referrer-Policy` (default `strict-origin-when-cross-origin`) |
+
+`service.New` auto-installs the middleware with defaults; pass `service.WithoutSecurityHeaders` or `service.WithSecurityHeaders(opts...)` to disable or customise.
 
 ## Testing
 

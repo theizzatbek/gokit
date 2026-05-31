@@ -21,18 +21,35 @@ groups:
         name: auth.register
         tags: [auth]
         summary: Register a new user
+        # Brute-force / mass-signup guard: 1 rps, burst 5 per source
+        # IP. Pairs with the unique-email constraint so a botnet can't
+        # cheaply enumerate the registered user table.
+        middleware:
+          - rate_limit: ["1", "5"]
       - method: POST
         path: /login
         handler: users.login
         name: auth.login
         tags: [auth]
         summary: Verify credentials and issue access + refresh tokens
+        # Credential-stuffing guard: 2 rps, burst 10 per source IP.
+        # 429s expose the rate_limited Code so the client UI can show
+        # a "slow down" message instead of leaking a "wrong password"
+        # hint to the attacker.
+        middleware:
+          - rate_limit: ["2", "10"]
       - method: POST
         path: /refresh
         handler: users.refresh
         name: auth.refresh
         tags: [auth]
         summary: Rotate the refresh cookie and issue a fresh access token
+        # Refresh-cookie probing: a legitimate client rotates once per
+        # access-token lifetime (~15min), so 1 rps / burst 5 is very
+        # generous. An attacker harvesting cookies would hit the cap
+        # immediately.
+        middleware:
+          - rate_limit: ["1", "5"]
       - method: POST
         path: /logout
         handler: users.logout
@@ -50,6 +67,12 @@ groups:
         name: links.create
         tags: [links]
         summary: Shorten a URL
+        # Authenticated, but still rate-limited to cap a single
+        # compromised token's mint rate. 5 rps sustained, burst 20
+        # per source IP — far above what a normal UI emits, well
+        # below what a runaway script would.
+        middleware:
+          - rate_limit: ["5", "20"]
       - method: GET
         path: ""
         handler: links.list

@@ -310,6 +310,13 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithNATSOptions(opts...)` | Extra natsclient options |
 | `WithRedisOptions(opts...)` | Extra redisclient options (logger + metrics auto-applied); use `redisclient.WithRedisOptions(fn)` to set `redis.Options` fields like `PoolSize` or `TLSConfig`. |
 | `WithRunOptions(opts...)` | Append `fibermap.RunOption`s to the default production-ops bundle |
+| `WithoutReadiness()` | Suppress the auto-mounted `/readyz` probe. Liveness (`/healthz`) stays on. |
+| `WithReadinessPath(path)` | Override the default `/readyz` mount point. |
+| `WithReadinessTimeout(d)` | Per-probe deadline for the full checker set; forwarded to `fibermap.WithReadinessOpts`. 0 → fibermap's built-in default (5s). |
+| `WithReadinessChecker(c...)` | Append app-level checkers (migrate gate, cache warmup, external API ping) to the auto-wired DB / NATS / Redis set. |
+| `WithoutSecurityHeaders()` | Suppress the auto-installed OWASP security headers (HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, CSP). Use when the headers are handled upstream (CDN, reverse proxy). |
+| `WithSecurityHeaders(fibermap.SecurityHeadersOption...)` | Customise the auto-installed security headers — forwards `fibermap.WithHSTSIncludeSubdomains`, `WithCSP`, `WithoutHSTS`, etc. Middleware still installs; pass `WithoutSecurityHeaders` to suppress. |
+| `WithBodyLimit(bytes)` | Cap inbound request bodies (Fiber returns 413 above the limit). 0 → Fiber default (4 MiB). Loses to caller-supplied `fibermap.WithFiberConfig` via `WithRunOptions`. |
 
 ## Common patterns
 

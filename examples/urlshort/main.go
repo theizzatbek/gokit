@@ -71,6 +71,11 @@ func run() error {
 		service.WithNATSMap(),
 		service.WithRoutes(),
 		service.WithOpenAPI(),
+		// 64 KiB is plenty for the largest payload urlshort actually
+		// accepts (a long URL + title + description). Reject anything
+		// bigger at the edge — Fiber returns 413 before the handler
+		// allocates a body buffer.
+		service.WithBodyLimit(64*1024),
 		service.WithAPIMapEnv(map[string]string{
 			"MICROLINK_BASE_URL": cfg.MicrolinkBaseURL,
 		}),

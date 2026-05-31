@@ -57,6 +57,13 @@ type options struct {
 	skipSentryUserScope        bool
 	sentryRefreshGCSlug        string
 	skipSentryRefreshGCMonitor bool
+	skipReadiness              bool               // WithoutReadiness — suppress auto /readyz
+	readinessPath              string             // override default "/readyz"
+	readinessTimeout           time.Duration      // forwarded to fibermap.WithReadinessOpts; 0 → default
+	readinessExtraCheckers     []fibermap.Checker // app-level checkers appended after kit-wired subsystems
+	skipSecurityHeaders        bool               // WithoutSecurityHeaders — suppress auto OWASP headers
+	securityHeaderOpts         []fibermap.SecurityHeadersOption
+	bodyLimit                  int // WithBodyLimit — fiber.Config.BodyLimit override; 0 → fiber default (4 MiB)
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -484,6 +491,88 @@ func WithRoutes() Option {
 // the user wants the registry to contain only kit/app series.
 func WithoutRuntimeMetrics() Option {
 	return func(o *options) { o.skipRuntimeMetrics = true }
+}
+
+// WithoutReadiness suppresses the auto-installed /readyz endpoint.
+// By default service auto-mounts /readyz that pings every wired
+// subsystem (DB, NATS, Redis) in parallel — pass this option when
+// the deployment uses a custom readiness probe or doesn't want one.
+//
+// Liveness (/healthz) is unaffected — it always stays on unless
+// explicitly disabled via fibermap.WithoutHealthCheck through
+// [WithRunOptions].
+func WithoutReadiness() Option {
+	return func(o *options) { o.skipReadiness = true }
+}
+
+// WithReadinessPath overrides the default "/readyz" mount point.
+// Set to a custom path when an upstream proxy or LB expects a
+// specific readiness URL.
+func WithReadinessPath(path string) Option {
+	return func(o *options) { o.readinessPath = path }
+}
+
+// WithReadinessTimeout sets the deadline for the full set of
+// checkers run by the auto-mounted /readyz handler. Each Checker
+// receives this ctx, so a slow DB doesn't block on stalled NATS
+// indefinitely. 0 → fibermap's built-in default (5s).
+func WithReadinessTimeout(d time.Duration) Option {
+	return func(o *options) { o.readinessTimeout = d }
+}
+
+// WithReadinessChecker appends app-level checkers to the
+// auto-wired subsystem set (DB, NATS, Redis). Each checker must
+// satisfy `fibermap.Checker` — `Name() string` + `Check(ctx) error`.
+// Use for migration probes, cache warmup gates, external API
+// pings the service must clear before serving traffic.
+//
+//	svc.WithReadinessChecker(
+//	    migrate.NewChecker(svc.DB),
+//	    cache.NewWarmupChecker(svc.Redis),
+//	)
+func WithReadinessChecker(c ...fibermap.Checker) Option {
+	return func(o *options) { o.readinessExtraCheckers = append(o.readinessExtraCheckers, c...) }
+}
+
+// WithoutSecurityHeaders suppresses the auto-installed OWASP
+// security headers middleware (HSTS, X-Content-Type-Options,
+// X-Frame-Options, Referrer-Policy, CSP). Use when the headers
+// are handled upstream (CDN, reverse proxy) or when the service
+// is internal-only and the operator has decided the cost of the
+// extra headers isn't worth paying.
+func WithoutSecurityHeaders() Option {
+	return func(o *options) { o.skipSecurityHeaders = true }
+}
+
+// WithSecurityHeaders configures the auto-installed OWASP
+// security headers middleware. Forwards any [fibermap.SecurityHeadersOption]
+// — e.g. [fibermap.WithHSTSIncludeSubdomains], [fibermap.WithCSP],
+// [fibermap.WithoutHSTS]. The middleware is installed regardless;
+// pass [WithoutSecurityHeaders] instead to suppress it entirely.
+//
+//	service.New(... ,
+//	    service.WithSecurityHeaders(
+//	        fibermap.WithHSTSIncludeSubdomains(),
+//	        fibermap.WithCSP("default-src 'self'; script-src 'self' 'unsafe-inline'"),
+//	    ))
+func WithSecurityHeaders(opts ...fibermap.SecurityHeadersOption) Option {
+	return func(o *options) { o.securityHeaderOpts = append(o.securityHeaderOpts, opts...) }
+}
+
+// WithBodyLimit overrides Fiber's default request-body limit
+// (4 MiB) with the supplied byte count. Fiber returns 413
+// Request Entity Too Large when an inbound request exceeds the
+// limit — set this tight when the service only accepts small
+// JSON payloads to blunt accidental or malicious oversize POSTs.
+//
+//	service.WithBodyLimit(64 * 1024) // 64 KiB cap
+//
+// Pass 0 to keep Fiber's default. When the caller also supplies
+// a fiber.Config via [WithRunOptions] / [fibermap.WithFiberConfig],
+// the caller's config wins (it's applied later in the RunOption
+// chain).
+func WithBodyLimit(bytes int) Option {
+	return func(o *options) { o.bodyLimit = bytes }
 }
 
 // WithoutConnectRetry disables the auto-injected K8s-friendly retry

@@ -224,6 +224,22 @@ falls back to fetch-on-conflict if a concurrent request wins the
 race — two posts of the same URL from one user return the same code
 without duplicate rows.
 
+### Security hardening
+
+The deployed surface ships with kit-default OWASP-baseline protections; this example tightens a few extras on top:
+
+- **`/readyz`** — auto-mounted by `service.New`; runs DB + NATS + Redis ping in parallel under a 5s deadline. K8s readiness probe target. Distinct from `/healthz` which is always 200.
+- **Security headers** — `service.New` auto-installs `fibermap.SecurityHeaders`: HSTS (1y), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, an API-friendly CSP.
+- **64 KiB body limit** — `service.WithBodyLimit(64*1024)` in `main.go`. Fiber returns 413 above the cap before the handler allocates a request buffer.
+- **Per-route rate limits** declared in `configs/routes.yaml` via the auth `rate_limit` factory:
+  - `POST /auth/register` — 1 rps / burst 5 per IP (mass-signup guard).
+  - `POST /auth/login` — 2 rps / burst 10 per IP (credential stuffing).
+  - `POST /auth/refresh` — 1 rps / burst 5 per IP (cookie probing).
+  - `POST /links` — 5 rps / burst 20 per IP (authenticated abuse cap).
+  - `GET /:code` — 50 rps / burst 100 per IP (scanner absorption; already documented above).
+
+429s from the rate limiter expose the stable `rate_limited` Code so the client UI can show a "slow down" message instead of leaking a "wrong password" hint to an attacker.
+
 ## Limitations
 
 - **Best-effort enrichment:** if MicroLink or the target URL is down, the link is still created with empty metadata. Not a bug — the demo deliberately picks "user-visible failures should be loud; analytics should be quiet".

@@ -6,6 +6,9 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/theizzatbek/gokit/auth"
+	natsclient "github.com/theizzatbek/gokit/clients/nats"
+	redisclient "github.com/theizzatbek/gokit/clients/redis"
+	"github.com/theizzatbek/gokit/db"
 	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/fibermap"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
@@ -82,6 +85,24 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 		fibermap.WithHealthCheck("/healthz"),
 		fibermap.WithRecover(s.logger),
 	}
+	if !s.opts.skipReadiness {
+		path := s.opts.readinessPath
+		if path == "" {
+			path = "/readyz"
+		}
+		checkers := s.readinessCheckers()
+		out = append(out, fibermap.WithReadiness(path, checkers...))
+		if s.opts.readinessTimeout > 0 {
+			out = append(out, fibermap.WithReadinessOpts(
+				fibermap.WithReadinessTimeout(s.opts.readinessTimeout)))
+		}
+	}
+	if s.opts.bodyLimit > 0 {
+		out = append(out, fibermap.WithFiberConfig(fiber.Config{
+			BodyLimit:    s.opts.bodyLimit,
+			ErrorHandler: fibermap.ErrorHandler(s.logger),
+		}))
+	}
 	// Route /metrics through the unified service registry when the
 	// configured Registerer is also a Gatherer (the default
 	// prometheus.NewRegistry() satisfies both). Otherwise leave the
@@ -92,6 +113,9 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 		out = append(out, fibermap.WithMetricsRegistry(reg))
 	}
 	var fiberMW []fiber.Handler
+	if !s.opts.skipSecurityHeaders {
+		fiberMW = append(fiberMW, fibermap.SecurityHeaders(s.opts.securityHeaderOpts...))
+	}
 	if s.Auth != nil && !s.opts.skipBearerLayer {
 		fiberMW = append(fiberMW, s.Auth.Bearer(auth.BearerOptional))
 	}
@@ -101,6 +125,26 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 	}
 	out = append(out, s.opts.runOpts...)
 	return out
+}
+
+// readinessCheckers assembles the live subsystem checker set in
+// the order DB → NATS → Redis, followed by any user-appended
+// checkers passed via [WithReadinessChecker]. Nil subsystems are
+// skipped so a misconfigured probe never reports "redis_not_ready"
+// on a service that never wired Redis to begin with.
+func (s *Service[T, C]) readinessCheckers() []fibermap.Checker {
+	checkers := make([]fibermap.Checker, 0, 3+len(s.opts.readinessExtraCheckers))
+	if s.DB != nil {
+		checkers = append(checkers, db.NewChecker(s.DB, ""))
+	}
+	if s.NATS != nil {
+		checkers = append(checkers, natsclient.NewChecker(s.NATS, ""))
+	}
+	if s.Redis != nil {
+		checkers = append(checkers, redisclient.NewChecker(s.Redis, ""))
+	}
+	checkers = append(checkers, s.opts.readinessExtraCheckers...)
+	return checkers
 }
 
 // Close releases owned long-lived resources in reverse construction
