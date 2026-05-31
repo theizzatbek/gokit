@@ -44,6 +44,10 @@ type runConfig struct {
 	healthCheckSet  bool
 	noHealthCheck   bool
 
+	readinessPath     string
+	readinessCheckers []Checker
+	readinessOpts     []ReadinessOption
+
 	withReqLog      bool
 	reqLog          *slog.Logger
 	reqLogSkipPaths []string
@@ -284,6 +288,33 @@ func WithHealthCheck(path string) RunOption {
 	}
 }
 
+// WithReadiness installs a readiness probe at `path` that runs the
+// supplied [Checker] set in parallel and returns 200 with
+// `{"status":"ok"}` if all pass OR 503 with
+// `{"status":"degraded","checks":{...}}` if any fail. Like
+// /healthz the route is wired BEFORE any middleware so it isn't
+// blocked by auth, recover, or any user-installed Use chain — K8s
+// readiness probes always reach the kit's check logic.
+//
+// Off by default at the fibermap layer; service.New auto-installs
+// it from the wired subsystem set (DB, NATS, Redis) at `/readyz`.
+// Customise the per-probe timeout via [WithReadinessTimeout].
+//
+//	eng.Run(fibermap.WithReadiness("/readyz", svc.ReadinessCheckers()...))
+func WithReadiness(path string, checkers ...Checker) RunOption {
+	return func(c *runConfig) {
+		c.readinessPath = path
+		c.readinessCheckers = checkers
+	}
+}
+
+// WithReadinessOpts forwards [ReadinessOption] values to the
+// readiness handler installed by [WithReadiness]. No-op when
+// WithReadiness was not also passed.
+func WithReadinessOpts(opts ...ReadinessOption) RunOption {
+	return func(c *runConfig) { c.readinessOpts = append(c.readinessOpts, opts...) }
+}
+
 // WithoutHealthCheck disables the built-in health-check route that
 // Run otherwise installs by default. Equivalent to
 // `WithHealthCheck("")`.
@@ -364,6 +395,12 @@ func (e *Engine[T]) Run(opts ...RunOption) error {
 		app.Get(cfg.healthCheckPath, func(c *fiber.Ctx) error {
 			return c.SendString("ok")
 		})
+	}
+	// Readiness alongside healthcheck for the same isolation
+	// guarantee — K8s probes must not race the Use chain or
+	// Recover middleware.
+	if cfg.readinessPath != "" {
+		app.Get(cfg.readinessPath, Readiness(cfg.readinessCheckers, cfg.readinessOpts...))
 	}
 	if cfg.withRecover {
 		app.Use(Recover(cfg.recoverLog))
