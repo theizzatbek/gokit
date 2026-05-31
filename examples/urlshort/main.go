@@ -81,9 +81,9 @@ func run() error {
 		service.WithNATSMapRegistration(func(e *natsmap.Engine) {
 			natsmap.RegisterPublisher[events.LinkCreated](e, "urlshort.link.created")
 			natsmap.RegisterPublisher[events.LinkVisited](e, "urlshort.link.visited")
-			natsmap.RegisterHandler[events.LinkVisited](e, "link_visit_counter",
-				func(ctx context.Context, m natsclient.Msg[events.LinkVisited]) error {
-					return visitCounter.Handle(ctx, m)
+			natsmap.RegisterBatchedHandler[events.LinkVisited](e, "link_visit_counter",
+				func(ctx context.Context, batch []natsclient.Msg[events.LinkVisited]) error {
+					return visitCounter.Handle(ctx, batch)
 				})
 		}),
 	)
@@ -108,10 +108,9 @@ func run() error {
 	pub := events.NewPublisher(svc.NATSMap, svc.Logger())
 	linksSvc := links.NewService(svc.DB, fetcher.FetchMetadata, pub, linkCache)
 	visitCounter = links.NewVisitCounter(svc.DB, svc.Logger())
-	// Drain pending visit batches before NATSMap.Drain runs so the
-	// subscriber has nowhere to deliver to but the in-memory buffer
-	// still flushes to Postgres.
-	svc.OnShutdown(visitCounter.Close)
+	// natsmap.Runtime.Drain (invoked by service.Close) owns the
+	// subscription lifecycle — no explicit Close on the counter
+	// since the batched fetch loop lives inside natsmap.
 
 	svc.SetContextBuilder(appctx.NewContextBuilder(svc.Auth, svc.Logger()))
 	users.RegisterHandlers(svc.Engine, usersSvc, svc.Auth)

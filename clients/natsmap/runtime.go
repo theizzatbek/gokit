@@ -6,14 +6,21 @@ import (
 	"sort"
 	"sync"
 
-	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/reqctx"
 )
 
+// drainer is the polymorphic shutdown surface for both regular
+// (`*natsclient.Subscription`) and batched (`*batchedPuller`)
+// subscribers. Drain stops new deliveries / fetches and waits for
+// in-flight work to finish.
+type drainer interface {
+	Drain() error
+}
+
 // Runtime is the post-Build dispatcher. Goroutine-safe.
 type Runtime struct {
-	subs            []*natsclient.Subscription
+	subs            []drainer
 	subscriberNames []string
 
 	publishers map[string]publishShim

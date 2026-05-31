@@ -3,47 +3,38 @@ package links
 import (
 	"context"
 	"log/slog"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
+
+	sq "github.com/Masterminds/squirrel"
 
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/db/sqb"
 
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/events"
 )
 
-// VisitCounter is the NATS subscriber that persists visit counts.
+// VisitCounter is the batched NATS subscriber that persists visit
+// counts. Wired through natsmap.RegisterBatchedHandler against a
+// subscriber declared with `batch_size: N` in subscribers.yaml.
 //
-// Each Handle call accumulates the event into an in-memory map keyed
-// by code; a background goroutine flushes the map periodically (every
-// flushInterval) OR when it reaches batchTrigger entries. The flush
-// runs ONE SQL statement: an UPDATE … FROM (VALUES …) that bumps every
-// affected row in a single round-trip. For a hot-code endpoint this
-// converts thousands of single-row UPDATEs into one batched write per
-// second.
+// Per delivery:
 //
-// Delivery semantics: natsmap auto-acks each event when Handle
-// returns nil. The buffer therefore lives between "event ack'd" and
-// "row updated" — a crash inside that window loses up to one
-// flushInterval worth of clicks. For click-counter analytics this is
-// an acceptable trade (vs. the complexity of manual-ack JetStream
-// subscriptions); if your domain needs strict at-least-once,
-// subscribe via natsclient directly and Ack only after a successful
-// flush.
+//  1. natsmap pulls up to BatchSize messages with a deadline of
+//     BatchInterval and hands them to Handle as one slice.
+//  2. Handle aggregates the events in-memory per code (domain
+//     decision — a single visit_count bump on a popular code is
+//     one row, not N).
+//  3. Handle runs ONE `UPDATE … FROM (VALUES …)` against Postgres.
+//  4. On nil return → natsmap Acks every message in the batch.
+//     On non-nil return → natsmap Naks every message → JetStream
+//     redelivers the whole batch on the next fetch.
+//
+// All-or-nothing: the DB UPDATE and the per-message ack live on the
+// same "did the batch succeed?" boolean. No partial commits.
 type VisitCounter struct {
 	db  *db.DB
 	log *slog.Logger
-
-	mu       sync.Mutex
-	pending  map[string]*visitAgg
-	maxBatch int
-
-	flushCh  chan struct{}
-	doneCh   chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
 }
 
 type visitAgg struct {
@@ -51,166 +42,79 @@ type visitAgg struct {
 	lastTS time.Time
 }
 
-const (
-	// flushInterval bounds the in-memory buffer's age. Lower = less
-	// loss on crash, more DB writes. 1s is a sane default for click
-	// counters: 99.9% of clicks land within this window.
-	flushInterval = time.Second
-
-	// batchTrigger forces a flush as soon as the pending map holds
-	// this many distinct codes. Caps memory + ensures a sudden burst
-	// drains rather than waiting for the ticker.
-	batchTrigger = 1000
-)
-
-// NewVisitCounter starts the background flush goroutine. Close stops
-// it (one final flush included). The returned instance is safe to
-// concurrently invoke Handle on from many subscriber goroutines.
+// NewVisitCounter wires the persistence side. The subscription
+// lifecycle is owned by natsmap — Drain it via natsmap.Runtime.Drain
+// (service.Close already does this before the DB pool tears down).
 func NewVisitCounter(d *db.DB, log *slog.Logger) *VisitCounter {
-	vc := &VisitCounter{
-		db:       d,
-		log:      log,
-		pending:  make(map[string]*visitAgg, batchTrigger),
-		maxBatch: batchTrigger,
-		flushCh:  make(chan struct{}, 1),
-		doneCh:   make(chan struct{}),
-	}
-	vc.wg.Add(1)
-	go vc.flushLoop()
-	return vc
+	return &VisitCounter{db: d, log: log}
 }
 
-// Close stops the flush loop after one final drain. Idempotent.
-// Register via service.OnShutdown so in-flight events make it to
-// Postgres before the DB pool tears down.
-func (vc *VisitCounter) Close() error {
-	vc.stopOnce.Do(func() { close(vc.doneCh) })
-	vc.wg.Wait()
-	return nil
-}
-
-// Handle is the natsmap-compatible signature. Accumulates the event
-// into the pending map; the goroutine takes care of the SQL.
-func (vc *VisitCounter) Handle(_ context.Context, m natsclient.Msg[events.LinkVisited]) error {
-	e := m.Data
-
-	vc.mu.Lock()
-	agg, ok := vc.pending[e.Code]
-	if !ok {
-		agg = &visitAgg{}
-		vc.pending[e.Code] = agg
+// Handle receives one batch from natsmap's pull subscriber. Returns
+// nil on success (natsmap Acks all) or err on failure (natsmap Naks
+// all → redelivery).
+func (vc *VisitCounter) Handle(ctx context.Context, batch []natsclient.Msg[events.LinkVisited]) error {
+	if len(batch) == 0 {
+		return nil
 	}
-	agg.delta++
-	if e.VisitedAt.After(agg.lastTS) {
-		agg.lastTS = e.VisitedAt
-	}
-	full := len(vc.pending) >= vc.maxBatch
-	vc.mu.Unlock()
-
-	if full {
-		// Best-effort kick — if the channel is full a tick will
-		// pick it up.
-		select {
-		case vc.flushCh <- struct{}{}:
-		default:
+	agg := make(map[string]visitAgg, len(batch))
+	for _, m := range batch {
+		e := m.Data
+		a := agg[e.Code] // zero-value when absent
+		a.delta++
+		if e.VisitedAt.After(a.lastTS) {
+			a.lastTS = e.VisitedAt
 		}
+		agg[e.Code] = a
 	}
-	return nil
-}
-
-func (vc *VisitCounter) flushLoop() {
-	defer vc.wg.Done()
-	t := time.NewTicker(flushInterval)
-	defer t.Stop()
-	for {
-		select {
-		case <-vc.doneCh:
-			vc.flush(context.Background())
-			return
-		case <-t.C:
-			vc.flush(context.Background())
-		case <-vc.flushCh:
-			vc.flush(context.Background())
-		}
-	}
-}
-
-// flush swaps the pending map and runs one batched UPDATE per call.
-// The map swap happens under the mutex; the network round-trip and
-// SQL building happen outside it so Handle remains lock-free for
-// new events arriving during the flush.
-func (vc *VisitCounter) flush(ctx context.Context) {
-	vc.mu.Lock()
-	if len(vc.pending) == 0 {
-		vc.mu.Unlock()
-		return
-	}
-	batch := vc.pending
-	vc.pending = make(map[string]*visitAgg, vc.maxBatch)
-	vc.mu.Unlock()
-
-	sql, args := buildVisitUpdate(batch)
-	if _, err := vc.db.Exec(ctx, sql, args...); err != nil {
-		// Best effort: log + drop. We've already ack'd these events
-		// upstream (natsmap auto-ack on nil Handle return), so
-		// retrying here would force us to re-add to the buffer at
-		// the risk of unbounded growth. Production deployments that
-		// can't tolerate the loss should switch to a manual-ack
-		// JetStream subscription.
+	if _, err := sqb.Exec(ctx, vc.db, buildVisitUpdate(agg)); err != nil {
 		if vc.log != nil {
 			vc.log.Warn("urlshort visit counter: batch update failed",
-				"batch_codes", len(batch), "err", err.Error())
+				"batch_codes", len(agg), "batch_events", len(batch), "err", err.Error())
 		}
-		return
+		return err
 	}
 	if vc.log != nil {
 		var total int64
-		for _, a := range batch {
+		for _, a := range agg {
 			total += a.delta
 		}
-		vc.log.Debug("urlshort visit counter: flushed",
-			"codes", len(batch), "visits", total)
+		vc.log.Debug("urlshort visit counter: batch persisted",
+			"codes", len(agg), "events", len(batch), "visits", total)
 	}
+	return nil
 }
 
-// buildVisitUpdate produces a single UPDATE … FROM (VALUES …) query
-// that bumps every (code, delta, lastTS) tuple in batch. Generated as
-// a raw $-numbered SQL string instead of squirrel because squirrel
-// doesn't have a first-class VALUES-list builder.
-//
-// Example output for two entries:
+// buildVisitUpdate composes the batched-increment query:
 //
 //	UPDATE links AS l
-//	SET visit_count = l.visit_count + v.delta,
-//	    last_visited_at = greatest(
-//	        coalesce(l.last_visited_at, 'epoch'::timestamptz),
-//	        v.ts)
-//	FROM (VALUES
-//	    ($1::text, $2::bigint, $3::timestamptz),
-//	    ($4, $5, $6)
-//	) AS v(code, delta, ts)
-//	WHERE l.code = v.code;
-func buildVisitUpdate(batch map[string]*visitAgg) (string, []any) {
-	var b strings.Builder
-	b.WriteString(`UPDATE links AS l SET visit_count = l.visit_count + v.delta, ` +
-		`last_visited_at = greatest(coalesce(l.last_visited_at, 'epoch'::timestamptz), v.ts) ` +
-		`FROM (VALUES `)
-	args := make([]any, 0, len(batch)*3)
-	first := true
-	i := 1
-	for code, agg := range batch {
-		if !first {
-			b.WriteByte(',')
-		}
-		first = false
-		if i == 1 {
-			b.WriteString(`($` + strconv.Itoa(i) + `::text,$` + strconv.Itoa(i+1) + `::bigint,$` + strconv.Itoa(i+2) + `::timestamptz)`)
-		} else {
-			b.WriteString(`($` + strconv.Itoa(i) + `,$` + strconv.Itoa(i+1) + `,$` + strconv.Itoa(i+2) + `)`)
-		}
-		args = append(args, code, agg.delta, agg.lastTS)
-		i += 3
+//	SET visit_count    = l.visit_count + v.delta,
+//	    last_visited_at = greatest(coalesce(l.last_visited_at, 'epoch'::timestamptz), v.ts)
+//	FROM unnest($1::text[], $2::bigint[], $3::timestamptz[]) AS v(code, delta, ts)
+//	WHERE l.code = v.code
+//
+// `unnest` keeps the parameter count fixed at three regardless of
+// batch size — one text[], one bigint[], one timestamptz[]. pgx
+// binds the Go slices natively. The trade vs. multi-row VALUES is
+// (a) no per-row stringbuilding, (b) no first-row type-cast
+// asymmetry, (c) the prepared statement plan stays stable since
+// the parameter shape never changes.
+func buildVisitUpdate(agg map[string]visitAgg) sq.UpdateBuilder {
+	codes := make([]string, 0, len(agg))
+	deltas := make([]int64, 0, len(agg))
+	timestamps := make([]time.Time, 0, len(agg))
+	for code, a := range agg {
+		codes = append(codes, code)
+		deltas = append(deltas, a.delta)
+		timestamps = append(timestamps, a.lastTS)
 	}
-	b.WriteString(`) AS v(code, delta, ts) WHERE l.code = v.code`)
-	return b.String(), args
+	return sqb.Builder.
+		Update("links AS l").
+		Set("visit_count", sq.Expr("l.visit_count + v.delta")).
+		Set("last_visited_at", sq.Expr(
+			"greatest(coalesce(l.last_visited_at, 'epoch'::timestamptz), v.ts)")).
+		Suffix(
+			"FROM unnest(?::text[], ?::bigint[], ?::timestamptz[]) AS v(code, delta, ts) "+
+				"WHERE l.code = v.code",
+			codes, deltas, timestamps,
+		)
 }

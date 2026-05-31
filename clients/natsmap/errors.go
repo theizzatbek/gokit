@@ -30,6 +30,21 @@ const (
 	CodeStreamInvalidRetention = "natsmap_stream_invalid_retention"
 	CodeStreamsAutoConflict    = "natsmap_streams_auto_conflict"
 	CodeEnsureStreamFailed     = "natsmap_ensure_stream_failed"
+
+	// CodeInvalidBatchSize — Subscriber.BatchSize is negative.
+	CodeInvalidBatchSize = "natsmap_invalid_batch_size"
+
+	// CodeInvalidBatchInterval — Subscriber.BatchInterval is negative.
+	CodeInvalidBatchInterval = "natsmap_invalid_batch_interval"
+
+	// CodeBatchHandlerRequired — Subscriber.BatchSize > 0 but the
+	// registered handler is the per-message kind (RegisterHandler).
+	// Use RegisterBatchedHandler instead.
+	CodeBatchHandlerRequired = "natsmap_batch_handler_required"
+
+	// CodeRegularHandlerRequired — Subscriber.BatchSize == 0 but
+	// RegisterBatchedHandler was called. Use RegisterHandler.
+	CodeRegularHandlerRequired = "natsmap_regular_handler_required"
 )
 
 // Runtime error codes returned from Publish / PublishWithHeaders.

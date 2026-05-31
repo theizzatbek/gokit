@@ -159,9 +159,16 @@ direct-Postgres path so the example still runs in dev.
 
 ### Batched visit counting
 
-`urlshort.link.visited` events accumulate in an in-memory map keyed
-by code; `links.VisitCounter` flushes the batch every second (or
-when the buffer hits 1000 distinct codes) via ONE statement:
+`urlshort.link.visited` is consumed via natsmap's batched-handler
+mode: `subscribers.yaml` declares
+`batch_size: 1000` + `batch_interval: 1s`, and
+`natsmap.RegisterBatchedHandler[events.LinkVisited]` binds the
+`link_visit_counter` subscriber to `links.VisitCounter.Handle`.
+Under the hood natsmap opens a JetStream Pull subscription, fetches
+up to 1000 messages with a 1s deadline, and hands them to Handle as
+one slice. The handler aggregates events by code (domain-side
+decision: many visits on a popular code collapse into one row) and
+runs ONE statement:
 
 ```sql
 UPDATE links AS l
@@ -187,17 +194,27 @@ auto-derives `durable = "link_visit_counter"` and `queue_group =
 `clients/natsmap/engine.go`), so horizontal scaling never
 double-counts.
 
-**Delivery semantics — at-most-once during a crash window.** natsmap
-auto-acks each event when `Handle` returns nil. Events live in the
-in-memory buffer between "ack'd" and "row updated"; a crash inside
-that ≤1s window loses the buffer. For click-counter analytics this
-is the right trade (vs. the complexity of manual-ack JetStream
-subscriptions); domains needing strict at-least-once should
-subscribe via `natsclient` directly and Ack only after the flush
-succeeds.
+**Delivery semantics — at-least-once via JetStream Pull + atomic
+ack.** natsmap's batched dispatcher runs in Pull mode; messages
+are NOT auto-acked on receipt. The handler's return drives the
+entire batch's ack/nak status:
 
-`VisitCounter.Close` (registered via `service.OnShutdown`) does one
-final flush before NATSMap.Drain shuts the subscription down.
+- `Handle` returns nil → kit Acks every message in the slice
+  (atomic with the DB UPDATE — both succeed together).
+- `Handle` returns err → kit Naks every message; JetStream
+  redelivers the whole batch on the next fetch.
+
+A crash mid-Handle (after `db.Exec` but before the kit's ack walk)
+results in redelivery — the DB UPDATE was committed but the ack
+wasn't sent. The handler is idempotent enough for this not to
+matter for visit counts (a re-applied UPDATE bumps the count
+again — over-count, never under-count). Strict-once
+deployments would need a separate dedup table keyed by NATS
+sequence number; out of scope for this example.
+
+Subscription lifecycle is owned by natsmap — `service.Close` calls
+`Runtime.Drain` which stops the pull loop and unsubscribes
+gracefully. No explicit `VisitCounter.Close`.
 
 ### Idempotent Create
 
