@@ -17,4 +17,18 @@ const (
 	CodeNATSMapYAMLNotFound = "service_natsmap_yaml_not_found"
 	CodeRoutesYAMLNotFound  = "service_routes_yaml_not_found"
 	CodeOpenAPIYAMLParse    = "service_openapi_yaml_parse"
+
+	// CodeOutboxNeedsDB — WithOutbox requested but Config.DB is empty.
+	CodeOutboxNeedsDB = "service_outbox_needs_db"
+
+	// CodeOutboxNeedsNATSMap — WithOutbox requested without a dispatcher
+	// override AND without NATSMap (the default PublishFn target).
+	CodeOutboxNeedsNATSMap = "service_outbox_needs_natsmap"
+
+	// CodeOutboxStartFailed — outbox.Worker.Start returned an error
+	// at boot time.
+	CodeOutboxStartFailed = "service_outbox_start_failed"
+
+	// CodeOutboxSchemaFailed — WithOutboxAutoSchema run failed.
+	CodeOutboxSchemaFailed = "service_outbox_schema_failed"
 )

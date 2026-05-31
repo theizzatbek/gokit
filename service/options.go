@@ -15,6 +15,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/db/outbox"
 	"github.com/theizzatbek/gokit/fibermap"
 	"github.com/theizzatbek/gokit/fibermap/bind"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
@@ -68,6 +69,10 @@ type options struct {
 	dbOpts                     []db.Option
 	otelPgxOpts                []otelkit.PgxTracerOption
 	skipOtelPgxTracer          bool
+	outboxEnable               bool
+	outboxOpts                 []outbox.WorkerOption
+	outboxDispatch             outbox.PublishFn
+	outboxAutoSchema           bool
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -613,6 +618,66 @@ func WithSecurityHeaders(opts ...fibermap.SecurityHeadersOption) Option {
 // chain).
 func WithBodyLimit(bytes int) Option {
 	return func(o *options) { o.bodyLimit = bytes }
+}
+
+// WithOutbox enables the transactional outbox worker. Requires
+// both DB and NATSMap to also be configured — without NATSMap the
+// default PublishFn has nothing to dispatch to (use
+// [WithOutboxDispatcher] to plug a different bus).
+//
+// Auto-wires:
+//   - Worker construction with the unified service logger + metrics
+//     registry (zero footprint when neither is set).
+//   - OnShutdown(Stop) so Service.Close waits for the drain to
+//     finish before tearing down the DB pool.
+//   - service.metrics → outbox.WithMetrics so outbox_* series land
+//     on the same /metrics endpoint as the rest of the kit.
+//
+// Default PublishFn: `natsmap.PublishRaw(ctx, rt, e.EventType,
+// e.Payload, e.Headers)`. Override via [WithOutboxDispatcher] for
+// non-natsmap buses or to add per-event side effects (audit log,
+// fan-out to multiple subjects).
+//
+//	service.New(... ,
+//	    service.WithNATSMap(),
+//	    service.WithOutbox(
+//	        outbox.WithInterval(10*time.Second),
+//	        outbox.WithRetention(7*24*time.Hour),
+//	    ))
+func WithOutbox(opts ...outbox.WorkerOption) Option {
+	return func(o *options) {
+		o.outboxEnable = true
+		o.outboxOpts = append(o.outboxOpts, opts...)
+	}
+}
+
+// WithOutboxDispatcher overrides the default PublishFn (which
+// wraps natsmap.PublishRaw). Use to dispatch to a non-natsmap bus,
+// to fan out one event onto multiple subjects, or to wrap the
+// natsmap publish with per-event side effects (audit log, metric
+// tag).
+//
+//	service.WithOutboxDispatcher(func(ctx context.Context, e outbox.Event) error {
+//	    if err := natsmap.PublishRaw(ctx, svc.NATSMap, e.EventType, e.Payload, e.Headers); err != nil {
+//	        return err
+//	    }
+//	    return auditLog.Write(ctx, e)
+//	})
+func WithOutboxDispatcher(fn outbox.PublishFn) Option {
+	return func(o *options) { o.outboxDispatch = fn }
+}
+
+// WithOutboxAutoSchema applies [outbox.Schema] via svc.DB.Exec at
+// Service.New time. Convenience for callers that don't run a
+// dedicated migration tool — the kit's schema.sql is idempotent
+// (CREATE TABLE IF NOT EXISTS + ALTER ADD COLUMN IF NOT EXISTS)
+// so repeated boots stay safe.
+//
+// Off by default to keep schema management in the operator's
+// hands; explicitly enable on local dev / smoke tests where the
+// migration burden isn't worth the boilerplate.
+func WithOutboxAutoSchema() Option {
+	return func(o *options) { o.outboxAutoSchema = true }
 }
 
 // WithoutConnectRetry disables the auto-injected K8s-friendly retry

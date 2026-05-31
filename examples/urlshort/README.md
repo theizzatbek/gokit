@@ -77,7 +77,7 @@ curl -H "authorization: Bearer $TOKEN" http://localhost:3000/links/<code>/stats
 | `gokit/clients/httpc` | `enrich.Fetcher` does arbitrary-URL fetch to parse `<title>` from HTML |
 | `gokit/clients/apimap` | Declarative `microlink` client; `base_url` from `${MICROLINK_BASE_URL}` env |
 | `gokit/clients/nats` | JetStream publish of `urlshort.link.{created,visited}` on stream `URLSHORT` |
-| `gokit/db/outbox` | `LinkCreated` enqueued INSIDE the Create transaction; `outbox.Worker` drains the table and publishes via `natsmap.PublishRaw`. Closes the commit→publish crash window. |
+| `gokit/db/outbox` | v2 outbox: `LinkCreated` enqueued via `outbox.EnqueueTyped` INSIDE the Create transaction; `service.WithOutbox` auto-wires the worker; `pg_notify` wakes the dispatcher within ~ms of commit; 7-day retention sweeps published rows. |
 
 ## Architecture
 
