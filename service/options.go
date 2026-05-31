@@ -1,6 +1,7 @@
 package service
 
 import (
+	"io/fs"
 	"log/slog"
 	"strings"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/robfig/cron/v3"
 
 	"github.com/theizzatbek/gokit/clients/apimap"
 	"github.com/theizzatbek/gokit/clients/httpc"
@@ -73,6 +75,11 @@ type options struct {
 	outboxOpts                 []outbox.WorkerOption
 	outboxDispatch             outbox.PublishFn
 	outboxAutoSchema           bool
+	cronJobs                   []CronJob
+	cronSlugs                  map[string]string
+	cronParser                 cron.Parser
+	skipLoggerInjector         bool
+	migrationsFS               fs.FS
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -579,6 +586,21 @@ func WithoutOtelPgxTracer() Option {
 	return func(o *options) { o.skipOtelPgxTracer = true }
 }
 
+// WithoutLoggerInjector suppresses the auto-installed
+// [fibermap.LoggerInjector] middleware. By default service.New
+// installs it at the App level so handlers can call
+// `fibermap.LoggerFrom(c)` and get a *slog.Logger pre-bound with
+// `method`, `path`, `request_id`, `user_id` (when authenticated),
+// and `route` (when set).
+//
+// Disable when:
+//   - You install your own request-scoped logger middleware.
+//   - You don't care about the per-request enrichment and want to
+//     keep the middleware chain minimal.
+func WithoutLoggerInjector() Option {
+	return func(o *options) { o.skipLoggerInjector = true }
+}
+
 // WithoutSecurityHeaders suppresses the auto-installed OWASP
 // security headers middleware (HSTS, X-Content-Type-Options,
 // X-Frame-Options, Referrer-Policy, CSP). Use when the headers
@@ -618,6 +640,30 @@ func WithSecurityHeaders(opts ...fibermap.SecurityHeadersOption) Option {
 // chain).
 func WithBodyLimit(bytes int) Option {
 	return func(o *options) { o.bodyLimit = bytes }
+}
+
+// WithMigrations applies the migrations bundled into fsys via
+// [migrate.Up] right after the DB pool is built and before any
+// subsystem that reads schema (auth.refreshpg, outbox, apikeypg).
+// Files use the `NNNN_name.sql` convention; see the db/migrate
+// README for details on the schema_migrations tracking table and
+// the optional `-- @migrate:no-transaction` directive.
+//
+//	//go:embed migrations/*.sql
+//	var migrationsFS embed.FS
+//
+//	svc, _ := service.New(ctx, cfg,
+//	    service.WithMigrations(migrationsFS))
+//
+// Migration failures surface from service.New with the original
+// *errs.Error from db/migrate (CodeApplyFailed, CodeBootstrapFailed,
+// etc) — no extra wrapping.
+//
+// Off by default — operators who run a separate migration tool
+// (golang-migrate, goose) skip this option and apply schema before
+// process start.
+func WithMigrations(fsys fs.FS) Option {
+	return func(o *options) { o.migrationsFS = fsys }
 }
 
 // WithOutbox enables the transactional outbox worker. Requires

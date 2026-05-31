@@ -281,6 +281,31 @@ The default cache backend is `clients/cache.NewIdempotencyStore(svc.Redis, prefi
 
 Concurrency note: two simultaneous requests with the same key may BOTH run the handler — the middleware does not lock around the store. Downstream systems must be idempotent themselves (transactional outbox + DB unique constraints is the canonical pattern); this middleware suppresses duplicate work across NON-overlapping requests only.
 
+## Request-scoped logger
+
+`fibermap.LoggerInjector(base)` is a Fiber middleware that derives a per-request `*slog.Logger` from `base` and stores it under `LocalsLogger`. Handlers read it back via `fibermap.LoggerFrom(c)` and get a logger pre-bound with:
+
+- `method` (HTTP method)
+- `path` (routed pattern)
+- `request_id` (when `RequestID` middleware ran first)
+- `user_id` (when `LocalsAuthSubject` is populated — the kit's `service` package auto-wires this from the JWT principal)
+- `route` (when the route has a `.Name(...)` set)
+
+```go
+app.Use(fibermap.RequestID())
+app.Use(fibermap.LoggerInjector(svc.Logger()))
+
+app.Post("/links", func(c *fiber.Ctx) error {
+    fibermap.LoggerFrom(c).Info("link created", "code", code)
+    // emits {... method=POST path=/links request_id=... user_id=... code=...}
+    return c.SendStatus(201)
+}).Name("links.create")
+```
+
+`service.New` auto-installs `LoggerInjector` at the App level; opt out via `service.WithoutLoggerInjector()` when you wire your own.
+
+`LoggerFrom(nil)` and `LoggerFrom(c)` without the middleware installed both fall back to `slog.Default()` so handler code stays panic-free in any wiring context.
+
 ## Security headers
 
 `fibermap.SecurityHeaders(opts...)` returns a Fiber middleware that adds the OWASP baseline response headers — `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and an API-friendly `Content-Security-Policy`. Mount at the App level so `/metrics`, `/healthz`, `/readyz` carry the headers too:

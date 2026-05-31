@@ -118,6 +118,16 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 	}
 	if s.Auth != nil && !s.opts.skipBearerLayer {
 		fiberMW = append(fiberMW, s.Auth.Bearer(auth.BearerOptional))
+		// Pull the principal subject (set by Bearer above) into the
+		// shared Locals slot LoggerFrom reads at call time. Bearer
+		// stores the full Principal[C] under its private key; we
+		// pluck the public Subject string into a separate slot so
+		// the fibermap package doesn't need a runtime dependency on
+		// auth's Principal type.
+		fiberMW = append(fiberMW, s.authSubjectBridge())
+	}
+	if !s.opts.skipLoggerInjector {
+		fiberMW = append(fiberMW, fibermap.LoggerInjector(s.logger))
 	}
 	fiberMW = append(fiberMW, s.opts.fiberMiddleware...)
 	if len(fiberMW) > 0 {
