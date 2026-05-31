@@ -29,7 +29,7 @@ func (s *Service[T, C]) Run() error {
 	if s.opts.routesEnable {
 		s.cfg.Routes.Enabled = true
 	}
-	routesPath := resolvePath(s.cfg.Routes.Path, DefaultRoutesPath, s.cfg.Routes.Enabled)
+	routesPath := resolvePathInDir(s.cfg.Service.ConfigsDir, s.cfg.Routes.Path, DefaultRoutesPath, s.cfg.Routes.Enabled)
 	if routesPath != "" {
 		if _, err := os.Stat(routesPath); err != nil {
 			return xerrs.Wrapf(err, xerrs.KindNotFound, CodeRoutesYAMLNotFound,
@@ -140,6 +140,9 @@ func (s *Service[T, C]) Close() {
 	}
 	if s.NATS != nil {
 		s.NATS.Close()
+	}
+	if s.Redis != nil {
+		_ = s.Redis.Close()
 	}
 	if s.DB != nil {
 		s.DB.Close()

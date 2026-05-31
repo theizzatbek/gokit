@@ -33,6 +33,7 @@ type Config struct {
 	HTTPC   httpc.Config  `envPrefix:"HTTPC_"`
 	APIMap  APIMapConfig  `envPrefix:"APIMAP_"`
 	Routes  RoutesConfig  `envPrefix:"ROUTES_"`
+	Redis   RedisConfig   `envPrefix:"REDIS_"`
 }
 
 // ServiceConfig — server + logging knobs.
@@ -50,6 +51,18 @@ type ServiceConfig struct {
 	LogFormat   string `env:"LOG_FORMAT"   envDefault:"json"` // json | text
 	NodeName    string `env:"NODE_NAME"`
 	ServerGroup string `env:"SERVER_GROUP"`
+
+	// ConfigsDir is the directory the kit looks in for every
+	// default-named YAML (routes.yaml, clients.yaml, subscribers.yaml,
+	// publishers.yaml). Empty (default) preserves the current
+	// CWD-based lookup. When set, e.g. "configs", the kit reads
+	// configs/routes.yaml, configs/clients.yaml, etc.
+	//
+	// Per-subsystem `Path` overrides (Routes.Path, APIMap.Path,
+	// NATSMap.SubscribersPath, …) are taken as operator-supplied
+	// literal paths and are NOT prefixed — keeping the override
+	// channel transparent.
+	ConfigsDir string `env:"CONFIGS_DIR"`
 }
 
 // AuthConfig — JWT signing material + TTLs. PrivateKeyPEM is the
@@ -81,6 +94,17 @@ type NATSMapConfig struct {
 	Enabled         bool   `env:"ENABLED"`
 	SubscribersPath string `env:"SUBSCRIBERS_PATH"`
 	PublishersPath  string `env:"PUBLISHERS_PATH"`
+}
+
+// RedisConfig — URL is the opt-in trigger. Empty URL leaves
+// svc.Redis nil. Retry semantics mirror NATSConfig / DB.Config:
+// ConnectMaxRetries==0 → service auto-injects 5 unless
+// WithoutConnectRetry is passed; pass -1 to disable explicitly.
+type RedisConfig struct {
+	URL                string        `env:"URL"`
+	ConnectMaxRetries  int           `env:"CONNECT_MAX_RETRIES"`
+	ConnectBackoffBase time.Duration `env:"CONNECT_BACKOFF_BASE"`
+	ConnectBackoffMax  time.Duration `env:"CONNECT_BACKOFF_MAX"`
 }
 
 // APIMapConfig — Enabled (or Path override) triggers apimap auto-build.

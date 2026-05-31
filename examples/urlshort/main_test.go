@@ -17,13 +17,13 @@ import (
 	"time"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/redis/go-redis/v9"
 	"github.com/gofiber/fiber/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/testcontainers/testcontainers-go"
 	tcnats "github.com/testcontainers/testcontainers-go/modules/nats"
-	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
+	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
+	"github.com/theizzatbek/gokit/clients/cache"
 
 	"github.com/theizzatbek/gokit/auth"
 	"github.com/theizzatbek/gokit/clients/apimap"
@@ -54,17 +54,20 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	natsURL := startNATS(t, ctx)
 	upstream := startUpstreamStub(t)
 	pemKey := generateEd25519PEM(t)
+	redisURL := startRedis(t, ctx)
 
 	cfg := config.Config{
 		Config: service.Config{
-			DB:   dbCfg,
-			Auth: service.AuthConfig{PrivateKeyPEM: pemKey, KID: "k1", Issuer: "urlshort", AccessTTL: 15 * time.Minute, RefreshTTL: time.Hour},
-			NATS: service.NATSConfig{URL: natsURL},
+			DB:    dbCfg,
+			Auth:  service.AuthConfig{PrivateKeyPEM: pemKey, KID: "k1", Issuer: "urlshort", AccessTTL: 15 * time.Minute, RefreshTTL: time.Hour},
+			NATS:  service.NATSConfig{URL: natsURL},
+			Redis: service.RedisConfig{URL: redisURL},
 		},
 		MicrolinkBaseURL: upstream.URL,
 		ShortURLBase:     "http://test.local",
 	}
 	cfg.Service.LogLevel = "error"
+	cfg.Service.ConfigsDir = "configs"
 
 	v := validator.New(validator.WithRequiredStructEnabled())
 	if err := links.RegisterValidators(v); err != nil {
@@ -127,8 +130,7 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Fatalf("ensure stream: %v", err)
 	}
 
-	rdb := startRedis(t, ctx)
-	linkCache := links.NewLinkCache(rdb, links.LinkCacheConfig{Logger: svc.Logger()})
+	linkCache := cache.For[links.CachedLink](svc.Redis, "urlshort:link:")
 
 	fetcher := enrich.NewFetcher(svc.APIMap, svc.Logger())
 	usersSvc := users.NewService(svc.DB, svc.Hasher)
@@ -139,8 +141,9 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	links.RegisterHandlers(svc.Engine, linksSvc, cfg.ShortURLBase)
 
 	// Load routes.yaml explicitly — svc.Run() auto-loads when Routes.Enabled,
-	// but this test exercises app.Test (no Run), so we load here.
-	if err := svc.Engine.LoadFile("routes.yaml"); err != nil {
+	// but this test exercises app.Test (no Run), so we load here. The
+	// configs/ folder layout is set via cfg.Service.ConfigsDir above.
+	if err := svc.Engine.LoadFile("configs/routes.yaml"); err != nil {
 		t.Fatalf("LoadFile routes.yaml: %v", err)
 	}
 
@@ -272,7 +275,7 @@ func startPostgres(t *testing.T, ctx context.Context) db.Config {
 	}
 }
 
-func startRedis(t *testing.T, ctx context.Context) *redis.Client {
+func startRedis(t *testing.T, ctx context.Context) string {
 	t.Helper()
 	c, err := tcredis.Run(ctx, "redis:7-alpine")
 	if err != nil {
@@ -283,13 +286,7 @@ func startRedis(t *testing.T, ctx context.Context) *redis.Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts, err := redis.ParseURL(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rdb := redis.NewClient(opts)
-	t.Cleanup(func() { _ = rdb.Close() })
-	return rdb
+	return url
 }
 
 func startNATS(t *testing.T, ctx context.Context) string {

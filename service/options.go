@@ -13,6 +13,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/httpc"
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
+	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	"github.com/theizzatbek/gokit/fibermap"
 	"github.com/theizzatbek/gokit/fibermap/bind"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
@@ -39,6 +40,7 @@ type options struct {
 	natsmapEnv                 map[string]string
 	natsmapEnable              bool
 	natsOpts                   []natsclient.Option
+	redisOpts                  []redisclient.Option
 	routesEnable               bool
 	runOpts                    []fibermap.RunOption
 	skipConnectRetry           bool
@@ -447,6 +449,14 @@ func WithNATSMap() Option {
 // WithNATSOptions appends to the natsclient options.
 func WithNATSOptions(opts ...natsclient.Option) Option {
 	return func(o *options) { o.natsOpts = append(o.natsOpts, opts...) }
+}
+
+// WithRedisOptions appends to the redisclient options applied by
+// service.New (logger + metrics are auto-applied). Use to set
+// custom redis.Options fields (PoolSize, TLSConfig, ...) via
+// redisclient.WithRedisOptions.
+func WithRedisOptions(opts ...redisclient.Option) Option {
+	return func(o *options) { o.redisOpts = append(o.redisOpts, opts...) }
 }
 
 // WithRunOptions appends fibermap.RunOption entries to the default

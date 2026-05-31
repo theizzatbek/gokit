@@ -110,6 +110,7 @@ or set the per-subsystem env sentinel `_CONNECT_MAX_RETRIES=-1`.
 | `LogFormat` | `LOG_FORMAT` | `json` (also: `text`) |
 | `NodeName` | `SERVICE_NODE_NAME` | `os.Hostname()` if unset. Flows to `natsclient.Config.Name` (when `NATS.Name` is not explicit) and to default slog attrs (`node=...`). |
 | `ServerGroup` | `SERVICE_SERVER_GROUP` | Empty by default. When set, passed to `natsmap.WithServerGroup(...)` — auto-derived subscriber queue groups suffix with `-<ServerGroup>` for cross-region isolation. See [natsmap multi-node](../clients/natsmap/README.md#multi-node-behaviour). |
+| `ConfigsDir` | `CONFIGS_DIR` | Empty = current CWD-based lookup (`routes.yaml`, `clients.yaml`, …). When set (e.g. `configs`), every default-named YAML resolves to `<ConfigsDir>/<name>.yaml`. Per-subsystem `Path` overrides (`ROUTES_PATH`, `APIMAP_PATH`, `NATSMAP_*_PATH`) bypass the prefix — operator-typed paths are honoured literally. See [Default paths convention](#default-paths-convention). |
 
 ### `DBConfig`
 
@@ -138,6 +139,20 @@ multi-node-relevant env vars surfaced through service:
 |---|---|
 | `URL` | `NATS_URL` |
 | `Name` | `NATS_NAME` |
+
+### `RedisConfig`
+
+| Field | Env |
+|---|---|
+| `URL` | `REDIS_URL` |
+| `ConnectMaxRetries` | `REDIS_CONNECT_MAX_RETRIES` |
+| `ConnectBackoffBase` | `REDIS_CONNECT_BACKOFF_BASE` |
+| `ConnectBackoffMax` | `REDIS_CONNECT_BACKOFF_MAX` |
+
+`URL` is the opt-in trigger. When set, `service.New` calls
+`redisclient.Connect` (with the standard retry budget), exposes
+the result as `svc.Redis`, and tears it down in `Close`. Layer a
+typed cache on top with [`clients/cache`](../clients/cache/README.md).
 
 ### `APIMapConfig`
 
@@ -168,6 +183,21 @@ When `Enabled=true` or `Path` is set, routes YAML is loaded and mounted at `svc.
 ## Default paths convention
 
 Each YAML-driven subsystem exposes an `Enabled` flag plus an optional `Path` override. When `Enabled=true` and no `Path` is set, service uses the canonical default filename — drop the file in your binary's working directory and you're done.
+
+**Folder layout via `CONFIGS_DIR`.** Set `ServiceConfig.ConfigsDir` (env `CONFIGS_DIR`) to keep all four YAMLs under one folder:
+
+```
+my-service/
+├── main.go
+├── go.mod
+└── configs/
+    ├── routes.yaml
+    ├── clients.yaml
+    ├── subscribers.yaml
+    └── publishers.yaml
+```
+
+With `CONFIGS_DIR=configs` every default-named lookup resolves to `configs/<name>.yaml`. Per-subsystem `Path` overrides bypass the prefix — `ROUTES_PATH=/etc/foo.yaml` stays `/etc/foo.yaml`, so operators tuning a single file via env still get the literal path they typed.
 
 | Subsystem | Enabled env | Default filename | Path override env |
 |---|---|---|---|
@@ -278,6 +308,7 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithNATSMapEnv(m map[string]string)` | Explicit `${VAR}` values for natsmap's subscribers/publishers YAML. Map consulted before `os.LookupEnv`. |
 | `WithRoutes()` | Equivalent to `Config.Routes.Enabled = true`. Routes auto-load in `svc.Run()` from `service.DefaultRoutesPath` (`routes.yaml`). |
 | `WithNATSOptions(opts...)` | Extra natsclient options |
+| `WithRedisOptions(opts...)` | Extra redisclient options (logger + metrics auto-applied); use `redisclient.WithRedisOptions(fn)` to set `redis.Options` fields like `PoolSize` or `TLSConfig`. |
 | `WithRunOptions(opts...)` | Append `fibermap.RunOption`s to the default production-ops bundle |
 
 ## Common patterns

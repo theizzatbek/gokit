@@ -18,9 +18,9 @@ import (
 	"syscall"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/redis/go-redis/v9"
 
 	"github.com/theizzatbek/gokit/clients/apimap"
+	"github.com/theizzatbek/gokit/clients/cache"
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	"github.com/theizzatbek/gokit/db"
@@ -101,19 +101,7 @@ func run() error {
 		}
 	}
 
-	var linkCache *links.LinkCache
-	if cfg.RedisURL != "" {
-		opts, err := redis.ParseURL(cfg.RedisURL)
-		if err != nil {
-			return fmt.Errorf("urlshort: parse REDIS_URL: %w", err)
-		}
-		rdb := redis.NewClient(opts)
-		if err := rdb.Ping(ctx).Err(); err != nil {
-			return fmt.Errorf("urlshort: redis ping: %w", err)
-		}
-		svc.OnShutdown(func() error { return rdb.Close() })
-		linkCache = links.NewLinkCache(rdb, links.LinkCacheConfig{Logger: svc.Logger()})
-	}
+	linkCache := cache.For[links.CachedLink](svc.Redis, "urlshort:link:")
 
 	fetcher := enrich.NewFetcher(svc.APIMap, svc.Logger())
 	usersSvc := users.NewService(svc.DB, svc.Hasher)

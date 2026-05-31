@@ -8,6 +8,7 @@ const (
 	CodeDBConnectFailed     = "service_db_connect_failed"
 	CodeAPIMapLoadFailed    = "service_apimap_load_failed"
 	CodeNATSConnectFailed   = "service_nats_connect_failed"
+	CodeRedisConnectFailed  = "service_redis_connect_failed"
 	CodeHTTPCNewFailed      = "service_httpc_new_failed"
 	CodeOpenAPIMountFailed  = "service_openapi_mount_failed"
 	CodeNATSMapNeedsNATS    = "service_natsmap_needs_nats"
