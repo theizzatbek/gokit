@@ -190,7 +190,7 @@ func (s *Service[T, C]) buildAPIMap() error {
 	if s.opts.apimapEnable {
 		s.cfg.APIMap.Enabled = true
 	}
-	path := resolvePath(s.cfg.APIMap.Path, DefaultAPIMapPath, s.cfg.APIMap.Enabled)
+	path := resolvePathInDir(s.cfg.Service.ConfigsDir, s.cfg.APIMap.Path, DefaultAPIMapPath, s.cfg.APIMap.Enabled)
 	if path == "" {
 		return nil
 	}
@@ -278,8 +278,8 @@ func (s *Service[T, C]) buildNATSMap(ctx context.Context) error {
 	if s.opts.natsmapEnable {
 		s.cfg.NATSMap.Enabled = true
 	}
-	subs := resolvePath(s.cfg.NATSMap.SubscribersPath, DefaultNATSMapSubscribersPath, s.cfg.NATSMap.Enabled)
-	pubs := resolvePath(s.cfg.NATSMap.PublishersPath, DefaultNATSMapPublishersPath, s.cfg.NATSMap.Enabled)
+	subs := resolvePathInDir(s.cfg.Service.ConfigsDir, s.cfg.NATSMap.SubscribersPath, DefaultNATSMapSubscribersPath, s.cfg.NATSMap.Enabled)
+	pubs := resolvePathInDir(s.cfg.Service.ConfigsDir, s.cfg.NATSMap.PublishersPath, DefaultNATSMapPublishersPath, s.cfg.NATSMap.Enabled)
 	if subs == "" && pubs == "" {
 		return nil
 	}

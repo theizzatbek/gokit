@@ -51,6 +51,18 @@ type ServiceConfig struct {
 	LogFormat   string `env:"LOG_FORMAT"   envDefault:"json"` // json | text
 	NodeName    string `env:"NODE_NAME"`
 	ServerGroup string `env:"SERVER_GROUP"`
+
+	// ConfigsDir is the directory the kit looks in for every
+	// default-named YAML (routes.yaml, clients.yaml, subscribers.yaml,
+	// publishers.yaml). Empty (default) preserves the current
+	// CWD-based lookup. When set, e.g. "configs", the kit reads
+	// configs/routes.yaml, configs/clients.yaml, etc.
+	//
+	// Per-subsystem `Path` overrides (Routes.Path, APIMap.Path,
+	// NATSMap.SubscribersPath, …) are taken as operator-supplied
+	// literal paths and are NOT prefixed — keeping the override
+	// channel transparent.
+	ConfigsDir string `env:"CONFIGS_DIR"`
 }
 
 // AuthConfig — JWT signing material + TTLs. PrivateKeyPEM is the

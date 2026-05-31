@@ -67,6 +67,7 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		ShortURLBase:     "http://test.local",
 	}
 	cfg.Service.LogLevel = "error"
+	cfg.Service.ConfigsDir = "configs"
 
 	v := validator.New(validator.WithRequiredStructEnabled())
 	if err := links.RegisterValidators(v); err != nil {
@@ -146,8 +147,9 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	links.RegisterHandlers(svc.Engine, linksSvc, cfg.ShortURLBase)
 
 	// Load routes.yaml explicitly — svc.Run() auto-loads when Routes.Enabled,
-	// but this test exercises app.Test (no Run), so we load here.
-	if err := svc.Engine.LoadFile("routes.yaml"); err != nil {
+	// but this test exercises app.Test (no Run), so we load here. The
+	// configs/ folder layout is set via cfg.Service.ConfigsDir above.
+	if err := svc.Engine.LoadFile("configs/routes.yaml"); err != nil {
 		t.Fatalf("LoadFile routes.yaml: %v", err)
 	}
 
