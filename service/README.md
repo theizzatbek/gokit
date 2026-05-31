@@ -317,6 +317,9 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithoutSecurityHeaders()` | Suppress the auto-installed OWASP security headers (HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, CSP). Use when the headers are handled upstream (CDN, reverse proxy). |
 | `WithSecurityHeaders(fibermap.SecurityHeadersOption...)` | Customise the auto-installed security headers — forwards `fibermap.WithHSTSIncludeSubdomains`, `WithCSP`, `WithoutHSTS`, etc. Middleware still installs; pass `WithoutSecurityHeaders` to suppress. |
 | `WithBodyLimit(bytes)` | Cap inbound request bodies (Fiber returns 413 above the limit). 0 → Fiber default (4 MiB). Loses to caller-supplied `fibermap.WithFiberConfig` via `WithRunOptions`. |
+| `WithDBOptions(opts...)` | Extra `db.Option`s applied to the kit-built `*db.DB`. Logger is already wired; reach for this to add `db.WithMetrics`, `db.WithSlowQueryThreshold`, additional `db.WithTracer` (audit / custom backends), etc. |
+| `WithOtelPgxOptions(opts...)` | Configure the OTel pgx tracer auto-attached by `WithOtel`. Forwards `otelkit.WithPgxTracerName`, `WithPgxSpanNamer`, `WithoutPgxSQL`, `WithPgxMaxSQLLength`. No-op without `WithOtel`. |
+| `WithoutOtelPgxTracer()` | Suppress the auto-wired OTel pgx tracer. HTTP-path tracing (otelfiber / otelhttp) stays on. Use when DB tracing is provided by a sidecar or when per-query span volume would blow the export budget. |
 
 ## Common patterns
 

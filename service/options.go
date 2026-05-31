@@ -14,6 +14,7 @@ import (
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
+	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/fibermap"
 	"github.com/theizzatbek/gokit/fibermap/bind"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
@@ -64,6 +65,9 @@ type options struct {
 	skipSecurityHeaders        bool               // WithoutSecurityHeaders — suppress auto OWASP headers
 	securityHeaderOpts         []fibermap.SecurityHeadersOption
 	bodyLimit                  int // WithBodyLimit — fiber.Config.BodyLimit override; 0 → fiber default (4 MiB)
+	dbOpts                     []db.Option
+	otelPgxOpts                []otelkit.PgxTracerOption
+	skipOtelPgxTracer          bool
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -532,6 +536,42 @@ func WithReadinessTimeout(d time.Duration) Option {
 //	)
 func WithReadinessChecker(c ...fibermap.Checker) Option {
 	return func(o *options) { o.readinessExtraCheckers = append(o.readinessExtraCheckers, c...) }
+}
+
+// WithDBOptions appends to the db options applied by service.New.
+// `WithLogger` is already wired automatically; use this for
+// `db.WithMetrics`, `db.WithSlowQueryThreshold`, additional
+// `db.WithTracer` calls (e.g. plugging an audit tracer alongside
+// the OTel one auto-installed by [WithOtel]), or any future db
+// option the kit grows.
+func WithDBOptions(opts ...db.Option) Option {
+	return func(o *options) { o.dbOpts = append(o.dbOpts, opts...) }
+}
+
+// WithOtelPgxOptions configures the OTel pgx tracer that
+// [WithOtel] auto-attaches to the DB pool. Forwards options to
+// [otelkit.NewPgxTracer]: WithPgxTracerName, WithPgxSpanNamer,
+// WithoutPgxSQL, WithPgxMaxSQLLength.
+//
+//	service.WithOtel("orders-api"),
+//	service.WithOtelPgxOptions(
+//	    otelkit.WithoutPgxSQL(), // PII in WHERE clauses
+//	),
+//
+// No-op without [WithOtel] or when [WithoutOtelPgxTracer] is also
+// passed.
+func WithOtelPgxOptions(opts ...otelkit.PgxTracerOption) Option {
+	return func(o *options) { o.otelPgxOpts = append(o.otelPgxOpts, opts...) }
+}
+
+// WithoutOtelPgxTracer suppresses the auto-wired OTel pgx tracer
+// that [WithOtel] otherwise installs. Tracing on the HTTP path
+// (otelfiber, otelhttp) stays on; only DB query spans are
+// disabled. Use when DB tracing is provided by a different layer
+// (proxy/sidecar) or when span volume from per-query traces would
+// blow the export budget.
+func WithoutOtelPgxTracer() Option {
+	return func(o *options) { o.skipOtelPgxTracer = true }
 }
 
 // WithoutSecurityHeaders suppresses the auto-installed OWASP

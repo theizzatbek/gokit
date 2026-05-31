@@ -24,6 +24,7 @@ import (
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/db/outbox"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/appctx"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/config"
 	"github.com/theizzatbek/gokit/examples/urlshort/internal/enrich"
@@ -105,6 +106,24 @@ func run() error {
 			return err
 		}
 	}
+	if _, err := svc.DB.Exec(ctx, outbox.Schema()); err != nil {
+		return fmt.Errorf("urlshort: apply outbox schema: %w", err)
+	}
+
+	// Outbox worker: drains the `outbox` table the Create transaction
+	// writes to. Publishes raw JSON bytes onto the LinkCreated subject
+	// via natsmap.PublishRaw — bypasses the typed codec because the
+	// bytes are already JSON-encoded and re-encoding would re-order keys.
+	w, err := outbox.NewWorker(svc.DB, func(ctx context.Context, e outbox.Event) error {
+		return natsmap.PublishRaw(ctx, svc.NATSMap, e.EventType, e.Payload, e.Headers)
+	}, outbox.WithLogger(svc.Logger()))
+	if err != nil {
+		return err
+	}
+	if err := w.Start(ctx); err != nil {
+		return err
+	}
+	svc.OnShutdown(w.Stop)
 
 	linkCache := cache.For[links.CachedLink](svc.Redis, "urlshort:link:")
 

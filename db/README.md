@@ -121,6 +121,7 @@ To override per-environment, set `DB_APP_NAME=custom-name`.
 | `WithLogger(*slog.Logger)` | silent | Logs errors + slow queries (when threshold set). nil = silent. |
 | `WithSlowQueryThreshold(d)` | 0 (off) | Queries exceeding `d` are logged at WARN with full SQL + duration |
 | `WithMetrics(prometheus.Registerer)` | no metrics | Registers `db_query_duration_seconds{outcome}` (histogram), `db_pool_size_total{pool,state}` (gauge), `db_tx_total{kind,outcome}` (counter), `db_tx_duration_seconds{kind,outcome}` (histogram), `db_slow_query_total` (counter; populated only when `WithSlowQueryThreshold > 0`). `pool=primary\|standby` distinguishes the read-replica gauges; `kind=tx\|savepoint` and `outcome=commit\|rollback\|panic` cover top-level vs nested. |
+| `WithTracer(pgx.QueryTracer)` | none | Plugs an external pgx tracer alongside the kit's internal logger/metrics tracer. The kit composes multiple tracers via an internal multi-tracer so the logger and the external one (e.g. `otelkit.NewPgxTracer()`) coexist. `service.WithOtel` auto-wires the OTel pgx tracer when DB is also configured; reach for `WithTracer` directly only when plugging a non-OTel tracing backend. |
 
 ## Common patterns
 
@@ -290,6 +291,7 @@ For per-test isolation, create a schema and `SET search_path` inside the test.
 ## See also
 
 - [`db/sqb`](sqb/README.md) — opt-in squirrel wrapper with `$N` placeholders preconfigured
+- [`db/outbox`](outbox/README.md) — transactional-outbox pattern over Postgres for at-least-once event publish
 - [`errs`](../errs/README.md) — the error contract `db` returns
 - [`auth/refreshpg`](../auth/refreshpg/README.md) — refresh-token store backed by `db.Querier`
 - [`examples/urlshort`](../examples/urlshort/README.md) — full integration with migrations + handlers

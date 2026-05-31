@@ -36,6 +36,7 @@ type publishShim struct {
 	staticHdrs  map[string][]string
 	payloadType reflect.Type
 	publish     func(ctx context.Context, payload any, hdrs map[string][]string) error
+	publishRaw  func(ctx context.Context, body []byte, hdrs map[string][]string) error
 }
 
 // Drain stops every subscription gracefully (sub.Drain on each).
@@ -59,6 +60,44 @@ func (r *Runtime) SubscriberNames() []string {
 	copy(out, r.subscriberNames)
 	sort.Strings(out)
 	return out
+}
+
+// PublishRaw publishes pre-encoded bytes through the named
+// publisher's subject + static headers WITHOUT running the bytes
+// through the codec. Use for outbox-style flows where the payload
+// was already encoded inside a transaction and the bytes must hit
+// the wire unchanged.
+//
+// Unlike [Publish] / [PublishWithHeaders], PublishRaw does NOT
+// type-check against the publisher's registered Go type — by design.
+// The caller is responsible for encoding bytes that downstream
+// subscribers can decode. Static headers from the YAML publisher
+// merge over the per-call ones (per-call wins on key collision),
+// and X-Request-ID auto-injects from ctx the same way as the typed
+// path.
+//
+// Returns *errs.Error{Code: "natsmap_unknown_publisher"} for an
+// unknown name.
+func PublishRaw(ctx context.Context, r *Runtime, name string, payload []byte, headers map[string][]string) error {
+	shim, ok := r.publishers[name]
+	if !ok {
+		return xerrs.NotFoundf(CodeUnknownPublisher,
+			"natsmap: unknown publisher %q", name)
+	}
+	if id := reqctx.RequestIDFromContext(ctx); id != "" {
+		if _, explicit := headers[reqctx.HeaderRequestID]; !explicit {
+			if headers == nil {
+				headers = map[string][]string{}
+			}
+			headers[reqctx.HeaderRequestID] = []string{id}
+		}
+	}
+	merged := mergeHeaders(shim.staticHdrs, headers)
+	if err := shim.publishRaw(ctx, payload, merged); err != nil {
+		return xerrs.Wrap(err, xerrs.KindUnavailable, CodePublishFailed,
+			"natsmap: publish "+name)
+	}
+	return nil
 }
 
 // PublisherNames returns the registered publisher names, sorted.

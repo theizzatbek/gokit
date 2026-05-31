@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -14,6 +15,7 @@ type options struct {
 	logger        *slog.Logger
 	slowThreshold time.Duration
 	metrics       *metricsCollector
+	extraTracers  []pgx.QueryTracer
 }
 
 // WithLogger wires a slog.Logger into the pgx QueryTracer. Without this
@@ -58,4 +60,24 @@ func WithSlowQueryThreshold(d time.Duration) Option {
 // Without this option, no collectors are created (zero Prometheus footprint).
 func WithMetrics(reg prometheus.Registerer) Option {
 	return func(o *options) { o.metrics = newMetricsCollector(reg) }
+}
+
+// WithTracer attaches an external pgx.QueryTracer that runs alongside
+// the kit's internal logger/metrics tracer. Use to plug OpenTelemetry
+// (via [otelkit.NewPgxTracer]) or any other tracer that follows pgx's
+// QueryTracer contract — TraceQueryStart returns a derived context;
+// TraceQueryEnd reads it. The kit composes multiple tracers
+// internally so calling WithTracer more than once stacks them in
+// registration order, and the kit's own tracer always fires first.
+//
+// service.WithOtel auto-applies an OTel pgx tracer when both DB and
+// OTel are configured — callers usually never need this option
+// directly. Reach for it when wiring a non-OTel tracing backend
+// (Datadog tracing, custom audit trail, etc.).
+func WithTracer(t pgx.QueryTracer) Option {
+	return func(o *options) {
+		if t != nil {
+			o.extraTracers = append(o.extraTracers, t)
+		}
+	}
 }

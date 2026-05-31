@@ -11,6 +11,14 @@ import (
 	"github.com/theizzatbek/gokit/clients/natsmap"
 )
 
+// Publisher / subscriber names used across the urlshort sample.
+// Centralised here so handler/main/outbox-worker bindings can't
+// drift from one another by a typo.
+const (
+	SubjectLinkCreated = "urlshort.link.created"
+	SubjectLinkVisited = "urlshort.link.visited"
+)
+
 // LinkCreated payload published on urlshort.link.created.
 type LinkCreated struct {
 	LinkID    string    `json:"link_id"`
@@ -46,21 +54,12 @@ func NewPublisher(rt *natsmap.Runtime, log *slog.Logger) *Publisher {
 	return &Publisher{rt: rt, log: log}
 }
 
-// LinkCreated publishes e on urlshort.link.created. Nil-receiver safe.
-func (p *Publisher) LinkCreated(ctx context.Context, e LinkCreated) {
-	if p == nil {
-		return
-	}
-	log := p.log
-	if log == nil {
-		log = slog.Default()
-	}
-	if err := natsmap.Publish[LinkCreated](ctx, p.rt, "urlshort.link.created", e); err != nil {
-		log.Warn("urlshort events: publish created failed", "code", e.Code, "err", err.Error())
-	}
-}
-
 // LinkVisited publishes e on urlshort.link.visited. Nil-receiver safe.
+// LinkCreated has moved to the transactional outbox path — see
+// links.Service.Create. The visit publish stays on the direct path
+// because LinkVisited is fire-and-forget analytics: bounded loss on
+// a node crash is acceptable, and the outbox storage cost (one INSERT
+// per click) would dominate the redirect hot path's latency budget.
 func (p *Publisher) LinkVisited(ctx context.Context, e LinkVisited) {
 	if p == nil {
 		return
@@ -69,7 +68,7 @@ func (p *Publisher) LinkVisited(ctx context.Context, e LinkVisited) {
 	if log == nil {
 		log = slog.Default()
 	}
-	if err := natsmap.Publish[LinkVisited](ctx, p.rt, "urlshort.link.visited", e); err != nil {
+	if err := natsmap.Publish[LinkVisited](ctx, p.rt, SubjectLinkVisited, e); err != nil {
 		log.Warn("urlshort events: publish visited failed", "code", e.Code, "err", err.Error())
 	}
 }

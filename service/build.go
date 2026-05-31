@@ -142,7 +142,8 @@ func (s *Service[T, C]) buildDB(ctx context.Context) error {
 		&s.cfg.DB.ConnectMaxRetries,
 		&s.cfg.DB.ConnectBackoffBase,
 		&s.cfg.DB.ConnectBackoffMax)
-	d, err := db.Connect(ctx, s.cfg.DB, db.WithLogger(s.logger))
+	dbOpts := append([]db.Option{db.WithLogger(s.logger)}, s.opts.dbOpts...)
+	d, err := db.Connect(ctx, s.cfg.DB, dbOpts...)
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeDBConnectFailed, "service: db connect failed")
 	}
