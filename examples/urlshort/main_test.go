@@ -98,9 +98,9 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		service.WithNATSMapRegistration(func(e *natsmap.Engine) {
 			natsmap.RegisterPublisher[events.LinkCreated](e, "urlshort.link.created")
 			natsmap.RegisterPublisher[events.LinkVisited](e, "urlshort.link.visited")
-			natsmap.RegisterHandler[events.LinkVisited](e, "link_visit_counter",
-				func(ctx context.Context, m natsclient.Msg[events.LinkVisited]) error {
-					return visitCounter.Handle(ctx, m)
+			natsmap.RegisterBatchedHandler[events.LinkVisited](e, "link_visit_counter",
+				func(ctx context.Context, batch []natsclient.Msg[events.LinkVisited]) error {
+					return visitCounter.Handle(ctx, batch)
 				})
 		}),
 	)
@@ -108,7 +108,6 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Fatalf("service.New: %v", err)
 	}
 	visitCounter = links.NewVisitCounter(svc.DB, svc.Logger())
-	svc.OnShutdown(visitCounter.Close)
 	t.Cleanup(svc.Close)
 
 	// Apply migrations + ensure stream — same as production main.go.

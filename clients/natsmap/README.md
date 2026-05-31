@@ -111,7 +111,47 @@ subscribers:
       max: <duration>              # optional; defaults to base*32 for exponential, ignored for fixed
     start_from: <policy>           # optional; see "start_from shapes" below
     filter_subject: <string>       # optional; override subject filter on the JetStream consumer
+    batch_size: <int>              # optional; > 0 switches to batched mode (see below)
+    batch_interval: <duration>     # optional; max wait between batches; defaults to 1s when batch_size > 0
 ```
+
+#### Batched subscribers
+
+Set `batch_size: N` to opt the subscriber into JetStream Pull mode:
+the kit fetches up to N messages with a deadline of
+`batch_interval` (default 1s) and hands them to a batched handler
+registered via `natsmap.RegisterBatchedHandler[T]`:
+
+```go
+natsmap.RegisterBatchedHandler[OrderCreated](e, "invoice_sender",
+    func(ctx context.Context, batch []natsclient.Msg[OrderCreated]) error {
+        return persistAll(ctx, batch) // one transaction
+    })
+```
+
+The handler's return drives **all-or-nothing** ack semantics:
+
+- `return nil` → kit Acks every message in the batch (Postgres-style
+  `COMMIT` analog).
+- `return err` → kit Naks every message → JetStream redelivers the
+  whole batch on the next fetch (a `ROLLBACK`).
+
+Mode mismatches are caught at `Build`:
+
+| Code | Cause |
+|---|---|
+| `natsmap_batch_handler_required` | YAML has `batch_size > 0` but `RegisterHandler[T]` was called. |
+| `natsmap_regular_handler_required` | YAML has no `batch_size` but `RegisterBatchedHandler[T]` was called. |
+
+Implementation lives in `clients/natsmap/batched.go`: a per-
+subscriber goroutine loops `nats.Subscription.Fetch(batch_size,
+MaxWait=batch_interval)`, decodes payloads through the registered
+codec, calls the typed batched handler, then walks the message
+slice acking or naking based on the return.
+
+Decode failures Term the offending message (poison-pill suppression)
+and remove it from the live batch; the remaining successfully-
+decoded messages still proceed through the handler.
 
 ### `publishers.yaml`
 

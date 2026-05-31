@@ -31,6 +31,20 @@ type rawSubscriber struct {
 	Backoff       *rawBackoff   `yaml:"backoff,omitempty"`
 	StartFrom     string        `yaml:"start_from,omitempty"`
 	FilterSubject string        `yaml:"filter_subject,omitempty"`
+
+	// BatchSize opts into the batched-dispatch mode. > 0 → the
+	// subscriber pulls up to BatchSize messages at a time, hands them
+	// to the registered batched handler as one slice, and Acks all
+	// (on nil return) or Naks all (on error). A regular
+	// RegisterHandler against a batched-mode subscriber errors at
+	// Build with CodeBatchHandlerRequired. 0 (default) preserves the
+	// classic per-message push-subscribe + auto-ack path.
+	BatchSize int `yaml:"batch_size,omitempty"`
+
+	// BatchInterval bounds how long the batched subscriber waits
+	// for BatchSize before flushing whatever's accumulated. Only
+	// meaningful when BatchSize > 0. Defaults to 1s when zero.
+	BatchInterval time.Duration `yaml:"batch_interval,omitempty"`
 }
 
 // rawPublisher is one declared publisher.
@@ -125,6 +139,14 @@ func (c *rawConfig) validate(handlerNames, publisherNames map[string]struct{}) e
 		if s.AckWait < 0 {
 			errsAcc = append(errsAcc, xerrs.Validationf(CodeInvalidAckWait,
 				"natsmap: subscriber %q ack_wait must be >= 0", s.Name))
+		}
+		if s.BatchSize < 0 {
+			errsAcc = append(errsAcc, xerrs.Validationf(CodeInvalidBatchSize,
+				"natsmap: subscriber %q batch_size must be >= 0 (got %d)", s.Name, s.BatchSize))
+		}
+		if s.BatchInterval < 0 {
+			errsAcc = append(errsAcc, xerrs.Validationf(CodeInvalidBatchInterval,
+				"natsmap: subscriber %q batch_interval must be >= 0", s.Name))
 		}
 		if s.Backoff != nil {
 			t := strings.ToLower(s.Backoff.Type)

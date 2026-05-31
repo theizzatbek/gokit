@@ -5,10 +5,13 @@ streams: auto
 # clients/natsmap/engine.go) — no need to repeat them here. queue_group
 # fans out across replicas so horizontal scaling does not double-count.
 subscribers:
-  # Persists visit counts asynchronously. The Redirect handler
-  # publishes urlshort.link.visited and returns; this subscriber
-  # buffers events and flushes batched UPDATE … FROM (VALUES …)
-  # writes to Postgres at most every second OR every 1000 events.
+  # Persists visit counts via the kit's batched subscriber pattern:
+  # natsmap pulls up to batch_size messages with a deadline of
+  # batch_interval, hands them to RegisterBatchedHandler as one
+  # slice, then Acks all (on nil) or Naks all (on err). The handler
+  # aggregates events per code and runs ONE UPDATE … FROM (VALUES …)
+  # against Postgres — fully transactional, all-or-nothing semantics.
   - name: link_visit_counter
     subject: urlshort.link.visited
-    max_in_flight: 256
+    batch_size: 1000
+    batch_interval: 1s

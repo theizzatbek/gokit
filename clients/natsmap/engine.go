@@ -29,6 +29,15 @@ type Engine struct {
 	// JetStream metadata Task 5's reflection bridge populates.
 	handlerFns map[string]func(ctx context.Context, ptr any, meta msgMeta) error
 
+	// batchedHandlerFns wraps a typed *batched* user handler — the
+	// one whose signature is func(ctx, []natsclient.Msg[T]) error.
+	// Each entry receives a slice of decoded *T pointers paired with
+	// their metas; the shim assembles the []Msg[T] and dispatches.
+	// Registered via RegisterBatchedHandler. Subscribers in
+	// batched-mode (s.BatchSize > 0) MUST have a batched handler;
+	// regular-mode subscribers MUST have a handlerFns entry.
+	batchedHandlerFns map[string]func(ctx context.Context, ptrs []any, metas []msgMeta) error
+
 	// publisherTypes maps publisher name → reflect.Type of the registered T.
 	publisherTypes map[string]reflect.Type
 
@@ -79,9 +88,10 @@ func WithServerGroup(group string) EngineOption {
 // New returns an empty Engine.
 func New(opts ...EngineOption) *Engine {
 	e := &Engine{
-		handlerTypes:   map[string]reflect.Type{},
-		handlerFns:     map[string]func(ctx context.Context, ptr any, meta msgMeta) error{},
-		publisherTypes: map[string]reflect.Type{},
+		handlerTypes:      map[string]reflect.Type{},
+		handlerFns:        map[string]func(ctx context.Context, ptr any, meta msgMeta) error{},
+		batchedHandlerFns: map[string]func(ctx context.Context, ptrs []any, metas []msgMeta) error{},
+		publisherTypes:    map[string]reflect.Type{},
 	}
 	for _, fn := range opts {
 		fn(e)
@@ -165,6 +175,54 @@ func RegisterHandler[T any](e *Engine, name string,
 	}
 }
 
+// RegisterBatchedHandler records a batched handler whose signature
+// is `func(ctx, []natsclient.Msg[T]) error`. Targets subscribers
+// declared with `batch_size: N` in the YAML — at Build the kit
+// switches them onto JetStream Pull subscription, fetches up to N
+// messages with a deadline of batch_interval, hands them to the
+// handler as one slice, then Acks all (on nil) or Naks all (on err)
+// atomically.
+//
+// Pairs by name with the YAML subscriber entry; mismatched modes
+// (regular handler against batched subscriber, or vice versa) fail
+// at Build with CodeBatchHandlerRequired / CodeRegularHandlerRequired.
+//
+// Panics with *errs.Error on duplicate or post-Build registration.
+func RegisterBatchedHandler[T any](e *Engine, name string,
+	h func(ctx context.Context, batch []natsclient.Msg[T]) error) {
+	if e.built {
+		panic(xerrs.Validationf(CodeAlreadyBuilt,
+			"natsmap: cannot register batched handler for %q after Build", name))
+	}
+	if _, exists := e.handlerTypes[name]; exists {
+		panic(xerrs.Validationf(CodeDuplicateSubscriber,
+			"natsmap: duplicate handler registration for %q", name))
+	}
+	t := reflect.TypeOf((*T)(nil)).Elem()
+	e.handlerTypes[name] = t
+	e.batchedHandlerFns[name] = func(ctx context.Context, ptrs []any, metas []msgMeta) error {
+		msgs := make([]natsclient.Msg[T], len(ptrs))
+		for i, ptr := range ptrs {
+			data, ok := ptr.(*T)
+			if !ok {
+				return xerrs.Internalf(CodePublisherTypeMismatch,
+					"natsmap: batched handler %q got wrong payload type %T at index %d", name, ptr, i)
+			}
+			meta := metas[i]
+			msgs[i] = natsclient.Msg[T]{
+				Data:         *data,
+				Subject:      meta.Subject,
+				Headers:      meta.Headers,
+				Sequence:     meta.Sequence,
+				Redeliveries: meta.Redeliveries,
+				Reply:        meta.Reply,
+				Timestamp:    meta.Timestamp,
+			}
+		}
+		return h(ctx, msgs)
+	}
+}
+
 // RegisterPublisher records the Go type used by natsmap.Publish[T] for
 // the named publisher. Panics on duplicate or post-Build registration.
 func RegisterPublisher[T any](e *Engine, name string) {
@@ -242,9 +300,45 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 	var buildErrs []error
 	for i := range e.subscribers {
 		s := &e.subscribers[i]
-		handlerFn := e.handlerFns[s.Name]
 		handlerType := e.handlerTypes[s.Name]
+		_, hasRegular := e.handlerFns[s.Name]
+		batchedFn, hasBatched := e.batchedHandlerFns[s.Name]
 		durable, queueGroup := resolveDurableQueueGroup(s, e.serverGroup)
+
+		// Mode cross-check: YAML batch_size declares the subscriber's
+		// mode. A regular handler against a batched subscriber (or
+		// vice versa) is a programmer error caught at Build.
+		if s.BatchSize > 0 && !hasBatched {
+			buildErrs = append(buildErrs, xerrs.Validationf(CodeBatchHandlerRequired,
+				"natsmap: subscriber %q has batch_size=%d but no batched handler "+
+					"(call RegisterBatchedHandler[T] instead of RegisterHandler[T])",
+				s.Name, s.BatchSize))
+			continue
+		}
+		if s.BatchSize == 0 && hasBatched {
+			buildErrs = append(buildErrs, xerrs.Validationf(CodeRegularHandlerRequired,
+				"natsmap: subscriber %q has no batch_size but a batched handler was registered "+
+					"(set batch_size > 0 in YAML or call RegisterHandler[T])",
+				s.Name))
+			continue
+		}
+
+		if s.BatchSize > 0 {
+			// Batched mode: JetStream Pull subscription + manual ack
+			// per batch via the batchedHandlerFns shim.
+			sub, err := openBatchedSubscriber(ctx, c, s, durable, handlerType, codec, batchedFn)
+			if err != nil {
+				buildErrs = append(buildErrs, err)
+				continue
+			}
+			rt.subs = append(rt.subs, sub)
+			rt.subscriberNames = append(rt.subscriberNames, s.Name)
+			continue
+		}
+
+		// Regular mode: existing push-subscribe + auto-ack path.
+		_ = hasRegular
+		handlerFn := e.handlerFns[s.Name]
 		subOpts, sferr := buildSubscribeOptions(s, durable, queueGroup)
 		if sferr != nil {
 			buildErrs = append(buildErrs, sferr)
