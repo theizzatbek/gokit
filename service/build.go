@@ -91,6 +91,10 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 	if err := s.buildDB(ctx); err != nil {
 		return nil, err
 	}
+	if err := s.runMigrations(ctx); err != nil {
+		s.Close()
+		return nil, err
+	}
 	if err := s.buildAuth(); err != nil {
 		s.Close()
 		return nil, err
@@ -134,6 +138,10 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 	// pipeline shuts down.
 	s.registerSentryShutdown()
 	s.startRefreshGC()
+	if err := s.buildCron(ctx); err != nil {
+		s.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

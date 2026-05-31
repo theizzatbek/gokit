@@ -47,6 +47,11 @@ func (h *Handler) Create(c *fibermap.Context[appctx.AppCtx], body CreateRequest)
 	if err != nil {
 		return err
 	}
+	// Request-scoped logger automatically carries method, path,
+	// request_id, user_id, and route — handler only adds the new
+	// attrs it cares about.
+	fibermap.LoggerFrom(c.Ctx).Info("link created",
+		"code", l.Code, "original_url", l.OriginalURL)
 	return c.Status(201).JSON(CreateResponse{
 		Code:        l.Code,
 		ShortURL:    h.shortURLBase + "/" + l.Code,

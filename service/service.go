@@ -58,6 +58,9 @@ type Service[T any, C any] struct {
 	// pending Sentry events during Close.
 	sentryShutdown func(context.Context) error
 
+	// scheduler is non-nil iff WithCron jobs were registered.
+	scheduler *scheduler
+
 	closed bool
 }
 
