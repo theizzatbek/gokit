@@ -189,6 +189,9 @@ groups:
 
 func startSmokePostgres(t *testing.T, ctx context.Context) db.Config {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("requires Postgres testcontainer; rerun without -short")
+	}
 	c, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("smoke"),
 		tcpg.WithUsername("smoke"),

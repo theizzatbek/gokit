@@ -29,8 +29,15 @@ func TestMain(m *testing.M) {
 
 // startTestDB spins (lazily, once per test binary) a Postgres container and
 // returns a *db.DB bound to a fresh, randomly-named schema for isolation.
+//
+// Skips the calling test under `go test -short` so unit tests in this
+// package (config / tracer / errors / metrics — none of which call
+// startTestDB) still run while integration tests are bypassed.
 func startTestDB(t *testing.T, opts ...db.Option) *db.DB {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("requires Postgres testcontainer; rerun without -short")
+	}
 	pgOnce.Do(initPostgresContainer)
 	if pgErr != nil {
 		t.Fatalf("postgres container: %v", pgErr)

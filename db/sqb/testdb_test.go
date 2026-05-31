@@ -23,6 +23,9 @@ var (
 
 func startTestSqbDB(t *testing.T) *db.DB {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("requires Postgres testcontainer; rerun without -short")
+	}
 	pgOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
