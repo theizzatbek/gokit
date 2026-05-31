@@ -255,6 +255,32 @@ Use `fibermap.ErrorHandler(logger)` as the `fiber.Config.ErrorHandler` to wire `
 
 Pass a `*slog.Logger` to `WithRecover`, `WithRequestLogger`. nil = `slog.Default()`.
 
+## Idempotency-Key
+
+`fibermap.IdempotencyKey(store, opts...)` returns Stripe-style idempotency middleware: for unsafe methods (POST/PUT/PATCH/DELETE) the first response keyed by `X-Idempotency-Key` is captured into a pluggable `IdempotencyStore` and replayed verbatim on subsequent requests with the same key. Replays carry `X-Idempotent-Replay: true` so clients (and APM traces) can distinguish them.
+
+```go
+store := cache.NewIdempotencyStore(svc.Redis, "idem:payments:")
+app.Post("/payments",
+    fibermap.IdempotencyKey(store,
+        fibermap.WithIdempotencyTTL(48*time.Hour),
+        fibermap.WithIdempotencyRequired(),
+    ), createPayment)
+```
+
+| Option | Default | Notes |
+|---|---|---|
+| `WithIdempotencyHeader(name)` | `X-Idempotency-Key` | Custom inbound header. |
+| `WithIdempotencyTTL(d)` | 24h | How long replays remain available. |
+| `WithIdempotencyMethods(...)` | POST/PUT/PATCH/DELETE | Restrict / widen the cached method set. |
+| `WithIdempotencyMaxBodySize(n)` | 1 MiB | Oversize responses pass through uncached. |
+| `WithIdempotencyRequired()` | off | Missing header returns 400 with `idempotency_key_missing`. |
+| `WithIdempotencySkipStatus(...)` | 5xx | Status codes that should NOT be cached. |
+
+The default cache backend is `clients/cache.NewIdempotencyStore(svc.Redis, prefix)`. YAML routes wire the factory via `auth/fibermount.MountIdempotencyKeyFactory(eng, store)` and use `idempotency_key: ["1h", "required"]` in `routes.yaml`.
+
+Concurrency note: two simultaneous requests with the same key may BOTH run the handler — the middleware does not lock around the store. Downstream systems must be idempotent themselves (transactional outbox + DB unique constraints is the canonical pattern); this middleware suppresses duplicate work across NON-overlapping requests only.
+
 ## Security headers
 
 `fibermap.SecurityHeaders(opts...)` returns a Fiber middleware that adds the OWASP baseline response headers — `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and an API-friendly `Content-Security-Policy`. Mount at the App level so `/metrics`, `/healthz`, `/readyz` carry the headers too:

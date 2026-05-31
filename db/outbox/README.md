@@ -66,6 +66,12 @@ _ = w.Start(ctx)
 svc.OnShutdown(w.Stop)
 ```
 
+## Trace context
+
+`Enqueue` snapshots the current OTel `TraceContext` (W3C `traceparent` / `tracestate`) into `Event.Headers` so the Worker's later publish preserves the originating trace across the async boundary. The kit's `natsclient.PublishRaw` inject path treats a pre-existing `traceparent` in headers as authoritative — the worker's (usually trace-less) ctx never overwrites the snapshot. Result: HTTP → Tx → outbox row → Worker → consumer all share one trace ID in the APM waterfall.
+
+No setup required — propagation activates automatically once a `TextMapPropagator` is installed globally (`otel.SetTextMapPropagator(propagation.TraceContext{})`, which `service.WithOtel` does).
+
 ## Schema
 
 `schema.sql` defines a single `outbox` table with a partial index over

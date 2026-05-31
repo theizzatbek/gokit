@@ -31,4 +31,15 @@ type Config struct {
 	AccessTTL  time.Duration
 	RefreshTTL time.Duration
 	Leeway     time.Duration // 0 = use default (1 minute)
+
+	// APIKeyHashSecret is the kit-side secret used by the APIKey
+	// middleware to HMAC-SHA256 inbound API keys before lookup. A
+	// DB dump alone won't reveal raw keys without this secret.
+	//
+	// Required iff the APIKey middleware is used; safe to omit when
+	// only JWT (Bearer) is wired. Rotating the secret invalidates
+	// every stored key hash — treat it like a long-lived signing
+	// key, not an ephemeral session secret. 32 random bytes is the
+	// recommended size.
+	APIKeyHashSecret []byte
 }

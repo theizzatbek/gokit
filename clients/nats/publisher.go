@@ -129,9 +129,24 @@ func PublishViaCodec(ctx context.Context, c *Client, subject string, payload any
 // publishBytes is the shared wire-up shared by PublishViaCodec
 // (encodes first) and PublishRaw (already encoded). Owns the header
 // defaults, JS-vs-core routing decision, and metric accounting.
+//
+// Trace context propagation: when the caller's ctx carries an active
+// OTel span, W3C traceparent + tracestate headers are injected onto
+// the msg so consumers extract them on the subscribe side and the
+// async boundary stays trace-connected. No-op when no propagator is
+// installed.
 func publishBytes(ctx context.Context, c *Client, subject string, body []byte, headers map[string][]string) error {
-	m := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
+	// Mutate (or build) a copy of the headers map so the caller's slice
+	// doesn't get traceparent stamped onto it across multiple Publish
+	// calls. Otherwise a single shared headers map would accumulate
+	// stale trace IDs between unrelated calls.
+	merged := make(map[string][]string, len(headers)+2)
 	for k, v := range headers {
+		merged[k] = v
+	}
+	InjectTraceContext(ctx, merged)
+	m := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
+	for k, v := range merged {
 		m.Header[k] = v
 	}
 	if m.Header.Get("Content-Type") == "" {

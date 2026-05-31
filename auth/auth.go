@@ -17,17 +17,18 @@ import (
 // One Auth[C] per claim type per service. Two distinct *Auth values can coexist
 // if a service needs separate auth domains.
 type Auth[C any] struct {
-	eng            *engine[C]
-	store          RefreshStore
-	logger         *slog.Logger
-	securityLogger *slog.Logger
-	metrics        *authMetrics
-	cookieDomain   string
-	cookiePath     string
-	cookieSecure   bool
-	accessTTL      time.Duration
-	refreshTTL     time.Duration
-	now            func() time.Time
+	eng              *engine[C]
+	store            RefreshStore
+	logger           *slog.Logger
+	securityLogger   *slog.Logger
+	metrics          *authMetrics
+	cookieDomain     string
+	cookiePath       string
+	cookieSecure     bool
+	accessTTL        time.Duration
+	refreshTTL       time.Duration
+	now              func() time.Time
+	apiKeyHashSecret []byte
 
 	refresher ClaimsRefresher[C]
 }
@@ -87,16 +88,17 @@ func New[C any](cfg Config, opts ...Option) (*Auth[C], error) {
 			Keys: cfg.Keys, Issuer: cfg.Issuer, Audience: cfg.Audience,
 			Leeway: leeway, Now: now,
 		}),
-		store:          o.refreshStore,
-		logger:         o.logger,
-		securityLogger: o.securityLogger,
-		metrics:        m,
-		cookieDomain:   o.cookieDomain,
-		cookiePath:     o.cookiePath,
-		cookieSecure:   secure,
-		accessTTL:      cfg.AccessTTL,
-		refreshTTL:     cfg.RefreshTTL,
-		now:            now,
+		store:            o.refreshStore,
+		logger:           o.logger,
+		securityLogger:   o.securityLogger,
+		metrics:          m,
+		cookieDomain:     o.cookieDomain,
+		cookiePath:       o.cookiePath,
+		cookieSecure:     secure,
+		accessTTL:        cfg.AccessTTL,
+		refreshTTL:       cfg.RefreshTTL,
+		now:              now,
+		apiKeyHashSecret: cfg.APIKeyHashSecret,
 	}
 	return a, nil
 }

@@ -323,8 +323,13 @@ func dispatchRaw(
 		msg.Redeliveries = int(md.NumDelivered) - 1
 		msg.Timestamp = md.Timestamp
 	}
+	// Extract W3C TraceContext (traceparent / tracestate) from the msg
+	// headers so the handler's ctx already knows about the upstream
+	// span. Without this, every consumer span becomes a fresh root and
+	// the trace looks broken at the publish→subscribe seam.
+	dispatchCtx := ExtractTraceContext(ctx, msg.Headers)
 	start := time.Now()
-	err := handler(ctx, msg)
+	err := handler(dispatchCtx, msg)
 	if err == nil {
 		if metrics != nil {
 			metrics.IncHandlerSuccess(rawMsg.Subject)

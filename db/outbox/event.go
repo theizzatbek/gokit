@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/errs"
 )
@@ -115,6 +116,14 @@ func Enqueue(ctx context.Context, q db.Querier, e Event) error {
 	if e.EventType == "" {
 		return errs.Validation(CodeMissingFields, "outbox: Event.EventType is required")
 	}
+	// Snapshot the current OTel TraceContext into the row so the
+	// downstream Worker dispatch preserves the originating trace
+	// across the async boundary. The headers (now carrying
+	// traceparent / tracestate when a span is active in ctx) are
+	// persisted as JSONB and replayed verbatim on publish — see
+	// publishBytes's InjectTraceContext "skip if already present"
+	// branch in clients/nats/propagation.go.
+	e.Headers = natsclient.InjectTraceContext(ctx, e.Headers)
 	var headersJSON []byte
 	if len(e.Headers) > 0 {
 		var err error
