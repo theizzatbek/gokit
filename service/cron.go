@@ -30,6 +30,11 @@ type CronJob struct {
 
 	// Fn is invoked on every tick that the schedule fires.
 	Fn JobFn
+
+	// Singleton enables pg_try_advisory_lock-based leader election
+	// so only one replica runs the job per tick. See
+	// [WithSingletonCron] for the full contract.
+	Singleton bool
 }
 
 type cronConfig struct {
@@ -178,6 +183,14 @@ func (s *Service[T, C]) buildCron(ctx context.Context) error {
 	useSentry := s.opts.sentryDSN != ""
 	for _, job := range s.opts.cronJobs {
 		j := job // capture
+		if j.Singleton && s.DB == nil {
+			return xerrs.Validationf(CodeSingletonCronNeedsDB,
+				"service: singleton cron %q requires DB to be configured", j.Name)
+		}
+		jobFn := j.Fn
+		if j.Singleton {
+			jobFn = s.wrapSingleton(j.Name, j.Fn)
+		}
 		slug := s.cronSlug(j.Name)
 		wrapped := func() {
 			if err := ctx.Err(); err != nil {
@@ -187,7 +200,7 @@ func (s *Service[T, C]) buildCron(ctx context.Context) error {
 			defer sched.wg.Done()
 
 			jobCtx := ctx
-			run := func(rctx context.Context) error { return j.Fn(rctx) }
+			run := func(rctx context.Context) error { return jobFn(rctx) }
 			var err error
 			if useSentry {
 				err = sentrykit.MonitorCron(jobCtx, slug, run)

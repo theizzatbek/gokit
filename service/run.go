@@ -9,6 +9,7 @@ import (
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	"github.com/theizzatbek/gokit/db"
+	"github.com/theizzatbek/gokit/db/outbox"
 	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/fibermap"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
@@ -143,7 +144,7 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 // skipped so a misconfigured probe never reports "redis_not_ready"
 // on a service that never wired Redis to begin with.
 func (s *Service[T, C]) readinessCheckers() []fibermap.Checker {
-	checkers := make([]fibermap.Checker, 0, 3+len(s.opts.readinessExtraCheckers))
+	checkers := make([]fibermap.Checker, 0, 4+len(s.opts.readinessExtraCheckers))
 	if s.DB != nil {
 		checkers = append(checkers, db.NewChecker(s.DB, ""))
 	}
@@ -152,6 +153,12 @@ func (s *Service[T, C]) readinessCheckers() []fibermap.Checker {
 	}
 	if s.Redis != nil {
 		checkers = append(checkers, redisclient.NewChecker(s.Redis, ""))
+	}
+	// Outbox backlog auto-included when WithOutbox wired the worker.
+	// service.WithOutboxReadinessOpts(...) lets callers tune the
+	// defaults; opt out entirely via WithoutOutboxReadiness.
+	if s.Outbox != nil && !s.opts.skipOutboxReadiness {
+		checkers = append(checkers, outbox.NewChecker(s.DB, s.opts.outboxCheckerOpts...))
 	}
 	checkers = append(checkers, s.opts.readinessExtraCheckers...)
 	return checkers

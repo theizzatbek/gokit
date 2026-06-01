@@ -2,4 +2,5 @@
 docs/superpowers/
 /quickstart
 /tasks
+/kit
 */.env

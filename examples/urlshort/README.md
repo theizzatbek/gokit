@@ -79,7 +79,8 @@ curl -H "authorization: Bearer $TOKEN" http://localhost:3000/links/<code>/stats
 | `gokit/clients/nats` | JetStream publish of `urlshort.link.{created,visited}` on stream `URLSHORT` |
 | `gokit/db/outbox` | v2 outbox: `LinkCreated` enqueued via `outbox.EnqueueTyped` INSIDE the Create transaction; `service.WithOutbox` auto-wires the worker; `pg_notify` wakes the dispatcher within ~ms of commit; 7-day retention sweeps published rows. |
 | `gokit/db/migrate` | `service.WithMigrations(embed.FS)` runs `0001_init.sql` + `0002_idempotent_links.sql` automatically before any subsystem reads schema — no more manual `os.ReadFile`/`db.Exec` loop in `main.go`. |
-| `gokit/service.WithCron` | `daily-stats` job logs link + visit totals at 03:00 UTC. Auto-wraps with Sentry Crons check-ins when `WithSentry` is set; one line in `main.go` is all it takes. |
+| `gokit/service.WithCron` / `AddSingletonCron` | `daily-stats` job logs link + visit totals at 03:00 UTC via `pg_try_advisory_lock`-backed singleton — only ONE replica fires the job per tick in a multi-replica deployment. |
+| `gokit/cmd/kit` | Operator CLI: `kit migrate up/down/status`, `kit auth keygen`, `kit auth apikey new`, `kit outbox status`. Pre-deployment migrations + post-incident outbox inspection without writing one-off Go binaries. |
 | `gokit/fibermap.LoggerInjector` | Auto-installed by `service.New`. `links.Create` calls `fibermap.LoggerFrom(c).Info(...)` to emit logs that already carry method, path, request_id, user_id, and route — no manual attribute-threading. |
 
 ## Architecture

@@ -148,11 +148,10 @@ func run() error {
 	defer svc.Close()
 
 	// Daily housekeeping cron: log link + visit totals so dashboards
-	// can graph creation cadence. Registered post-build because the
-	// job closes over svc.DB / svc.Logger — built inside service.New.
-	// Real workloads would aggregate per-user or feed a downstream
-	// analytics pipeline; this is the shape of cron wiring.
-	if err := svc.AddCron("daily-stats", "0 3 * * *", linksStatsJob(svc)); err != nil {
+	// can graph creation cadence. Singleton variant — only ONE
+	// replica runs the job per tick via pg_try_advisory_lock so the
+	// log line doesn't multiply in multi-replica deployments.
+	if err := svc.AddSingletonCron("daily-stats", "0 3 * * *", linksStatsJob(svc)); err != nil {
 		return err
 	}
 
