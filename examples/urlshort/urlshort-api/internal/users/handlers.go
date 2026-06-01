@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/theizzatbek/gokit/auth"
-	"github.com/theizzatbek/gokit/examples/urlshort/internal/appctx"
+	"github.com/theizzatbek/gokit/examples/urlshort/urlshort-api/internal/appctx"
 	"github.com/theizzatbek/gokit/fibermap"
 )
 

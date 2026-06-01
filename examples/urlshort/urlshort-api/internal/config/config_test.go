@@ -14,7 +14,6 @@ func TestValidate_Matrix(t *testing.T) {
 		wantErr string
 	}{
 		{"all set", func(c *Config) {}, ""},
-		{"missing MICROLINK_BASE_URL", func(c *Config) { c.MicrolinkBaseURL = "" }, "urlshort_missing_microlink_base_url"},
 		{"missing SHORT_URL_BASE", func(c *Config) { c.ShortURLBase = "" }, "urlshort_missing_short_url_base"},
 	}
 	for _, tt := range tests {
@@ -37,9 +36,5 @@ func TestValidate_Matrix(t *testing.T) {
 }
 
 func validBase() Config {
-	c := Config{
-		MicrolinkBaseURL: "https://x",
-		ShortURLBase:     "http://localhost:3000",
-	}
-	return c
+	return Config{ShortURLBase: "http://localhost:3000"}
 }

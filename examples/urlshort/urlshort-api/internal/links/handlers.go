@@ -2,7 +2,7 @@ package links
 
 import (
 	xerrs "github.com/theizzatbek/gokit/errs"
-	"github.com/theizzatbek/gokit/examples/urlshort/internal/appctx"
+	"github.com/theizzatbek/gokit/examples/urlshort/urlshort-api/internal/appctx"
 	"github.com/theizzatbek/gokit/fibermap"
 )
 
