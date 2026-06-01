@@ -36,34 +36,32 @@ func classify(statusCode int) attemptOutcome {
 }
 
 // BackoffConfig controls per-delivery retry timing.
-// Initial and Max are in seconds (plain numeric values).
-// E.g. Initial: 1 means 1 second, Max: 3600 means 1 hour.
 type BackoffConfig struct {
-	Initial    float64 // seconds; default 1
-	Max        float64 // seconds; default 3600
-	Multiplier float64
-	Jitter     float64
+	Initial    time.Duration // first failure waits this long; default 1s
+	Max        time.Duration // cap on per-attempt delay; default 1h
+	Multiplier float64       // exponent base; default 2.0
+	Jitter     float64       // 0..1, ratio of randomness added; default 0
 }
 
 func (b BackoffConfig) attemptDelay(attempt int) time.Duration {
 	if b.Initial == 0 {
-		b.Initial = 1
+		b.Initial = time.Second
 	}
 	if b.Max == 0 {
-		b.Max = 3600
+		b.Max = time.Hour
 	}
 	if b.Multiplier == 0 {
 		b.Multiplier = 2.0
 	}
-	d := b.Initial * math.Pow(b.Multiplier, float64(attempt-1))
-	if d > b.Max {
-		d = b.Max
+	d := float64(b.Initial) * math.Pow(b.Multiplier, float64(attempt-1))
+	if d > float64(b.Max) {
+		d = float64(b.Max)
 	}
 	if b.Jitter > 0 {
 		spread := b.Jitter * d
 		d = d - spread + rand.Float64()*spread
 	}
-	return time.Duration(d * float64(time.Second))
+	return time.Duration(d)
 }
 
 // WorkerConfig wires DeliveryWorker dependencies.

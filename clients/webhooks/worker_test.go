@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"testing"
+	"time"
 )
 
 func TestClassify_2xx(t *testing.T) {
@@ -30,7 +31,12 @@ func TestClassify_FatalClient(t *testing.T) {
 }
 
 func TestBackoff_Sequence(t *testing.T) {
-	b := BackoffConfig{Initial: 1, Max: 100, Multiplier: 2.0, Jitter: 0}
+	b := BackoffConfig{
+		Initial:    time.Second,
+		Max:        100 * time.Second,
+		Multiplier: 2.0,
+		Jitter:     0,
+	}
 	want := []int{1, 2, 4, 8, 16, 32, 64, 100, 100}
 	for i, w := range want {
 		got := int(b.attemptDelay(i + 1).Seconds())
