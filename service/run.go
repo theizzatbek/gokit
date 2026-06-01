@@ -111,6 +111,9 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 			app.Get(path, handler)
 		}))
 	}
+	if s.opts.natsgwEnable {
+		out = append(out, s.mountNATSMapGateway())
+	}
 	if s.opts.bodyLimit > 0 {
 		out = append(out, fibermap.WithFiberConfig(fiber.Config{
 			BodyLimit:    s.opts.bodyLimit,

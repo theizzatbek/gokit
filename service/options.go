@@ -15,6 +15,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/httpc"
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
+	"github.com/theizzatbek/gokit/clients/natsmap/natsgw"
 	"github.com/theizzatbek/gokit/clients/ratelimit"
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	s3client "github.com/theizzatbek/gokit/clients/s3"
@@ -98,6 +99,9 @@ type options struct {
 	devEnable                  bool
 	devPrefix                  string
 	devConfigOpts              []dev.ConfigOption
+	natsgwEnable               bool
+	natsgwPath                 string
+	natsgwOpts                 []natsgw.Option
 }
 
 // WithLogger overrides the auto-built slog.Logger.

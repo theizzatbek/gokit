@@ -339,6 +339,7 @@ last-write-wins (код override'ит). `Servers` / `SecuritySchemes` /
 | `WithPreflightEndpoint(path)` | Mounts `/preflight` (path override-able) returning JSON `{status, checks[]}`. 200 на success, 503 на любой failure. Используется `kit doctor` CLI'ём для CI-gating'а + on-call-smoke-checks. Сами checks — те же что run'ятся `/readyz` plus opt-in custom-чекеры через `WithReadinessChecker`. |
 | `WithPreflightTimeout(d)` | Cap на time-budget'е всего preflight-run'а. Default 10s — accommodates slow one-shot validations (S3 HEAD, schema-version SELECT). |
 | `WithDevMode(prefix, dev.ConfigOption...)` | Auto-mount dev-tools: HTML-error-pages + `/_dev/routes` route-inspector + `/_dev/config` env-inspector (с redaction). **No-op когда `Config.Service.Env != "dev"`** + warn-log. См. [`fibermap/dev`](../fibermap/dev/README.md). |
+| `WithNATSMapGateway(base, natsgw.Option...)` | Mount kit-овский HTTP→NATS gateway: `POST <base>/:subject` (default `/publish`). Body forwarded verbatim в `natsmap.PublishRaw`. Требует `WithNATSMap` (иначе warn-log + no-op). Allowlist обязателен для public-facing — иначе любой registered-publisher subject доступен. См. [`clients/natsmap/natsgw`](../clients/natsmap/natsgw/README.md). |
 
 ## Common patterns
 
