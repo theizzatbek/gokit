@@ -1,30 +1,30 @@
 # db/outbox
 
-Transactional-outbox pattern for Postgres-backed kit services. Events get
-written to an `outbox` table inside the same transaction as the business
-state; a background `Worker` dispatches them to the real bus (NATS / Kafka)
-with at-least-once delivery.
+Паттерн transactional-outbox для Postgres-backed kit-сервисов. События
+пишутся в таблицу `outbox` внутри той же транзакции, что и бизнес-состояние;
+фоновый `Worker` диспатчит их на реальную шину (NATS / Kafka)
+с at-least-once доставкой.
 
-## Why use it
+## Зачем это нужно
 
-Without an outbox, services that "commit then publish" have a crash
-window between the two. The DB row is durable; the event isn't. A
-restart between commit and publish means downstream consumers miss the
-event forever. The outbox closes this window by making the publish step
-part of a different, retryable transaction.
+Без outbox'а сервисы, которые делают "commit then publish", имеют
+крэш-окно между двумя. DB-строка durable; событие — нет. Перезапуск
+между commit и publish означает, что downstream-consumer'ы пропустят
+событие навсегда. outbox закрывает это окно, делая publish-шаг
+частью отдельной retryable-транзакции.
 
-Use this package when you need any of:
+Используйте этот пакет, когда нужно одно из:
 
-- Linking DB state changes to downstream pub/sub events without losing
-  either one to a crash.
-- At-least-once delivery on top of any pub/sub system (the package is
-  publish-agnostic — caller supplies the `PublishFn`).
+- Связать DB state changes с downstream pub/sub событиями, не теряя
+  ни одно из них от крэша.
+- At-least-once доставка поверх любой pub/sub-системы (пакет
+  publish-agnostic — caller предоставляет `PublishFn`).
 - Multi-replica safe drainer (`SELECT ... FOR UPDATE SKIP LOCKED`
-  baked into the worker query).
+  встроен в worker-запрос).
 
 ## Quickstart
 
-The shortest path — let `service.New` wire everything:
+Кратчайший путь — пусть `service.New` подключит всё:
 
 ```go
 svc, _ := service.New[Ctx, Claims](ctx, cfg,
@@ -32,12 +32,12 @@ svc, _ := service.New[Ctx, Claims](ctx, cfg,
     service.WithOutbox(
         outbox.WithRetention(7*24*time.Hour),
     ),
-    service.WithOutboxAutoSchema(), // applies schema.sql idempotently
+    service.WithOutboxAutoSchema(), // идемпотентно применяет schema.sql
 )
 ```
 
-In the domain service, enqueue inside the surrounding transaction
-via the typed sugar:
+В domain-сервисе enqueue'те внутри окружающей транзакции через
+typed-обёртку:
 
 ```go
 err := svc.DB.Tx(ctx, func(tx *db.Tx) error {
@@ -50,10 +50,10 @@ err := svc.DB.Tx(ctx, func(tx *db.Tx) error {
 })
 ```
 
-For non-`service.New` callers, use the building blocks directly:
+Для не-`service.New` caller'ов используйте building block'и напрямую:
 
 ```go
-_, _ = svc.DB.Exec(ctx, outbox.Schema())            // apply DDL
+_, _ = svc.DB.Exec(ctx, outbox.Schema())            // применить DDL
 w, _ := outbox.NewWorker(svc.DB,
     func(ctx context.Context, e outbox.Event) error {
         return natsmap.PublishRaw(ctx, svc.NATSMap,
@@ -67,107 +67,106 @@ _ = w.Start(ctx)
 svc.OnShutdown(w.Stop)
 ```
 
-## Readiness check
+## Readiness-проверка
 
-`outbox.NewChecker(d, opts...)` is the [`fibermap.Checker`](../../fibermap/README.md) implementation that surfaces outbox backlog on `/readyz`. `service.WithOutbox` auto-adds it; tune via `service.WithOutboxReadinessOpts(...)` or disable via `service.WithoutOutboxReadiness()`.
+`outbox.NewChecker(d, opts...)` — это реализация [`fibermap.Checker`](../../fibermap/README.md), которая поднимает outbox-backlog на `/readyz`. `service.WithOutbox` авто-добавляет её; тюньте через `service.WithOutboxReadinessOpts(...)` или отключите через `service.WithoutOutboxReadiness()`.
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `WithMaxDepth(n)` | 10000 | Pending row count above this → 503 + `outbox_backlog` code. |
-| `WithMaxLag(d)` | 10m | Oldest pending row's age above this → 503 + `outbox_backlog` code. |
-| `WithCheckerName(name)` | "outbox" | Name surfaced under `checks: {…}` in the 503 body. |
+| `WithMaxDepth(n)` | 10000 | Pending-row count выше этого → 503 + `outbox_backlog` code. |
+| `WithMaxLag(d)` | 10m | Возраст самой старой pending-строки выше этого → 503 + `outbox_backlog` code. |
+| `WithCheckerName(name)` | "outbox" | Имя, появляющееся под `checks: {…}` в 503 body. |
 
-The check runs `SELECT count(*), MIN(created_at)` against the partial index the worker already uses — no extra index required.
+Проверка выполняет `SELECT count(*), MIN(created_at)` по partial-индексу, который worker и так использует — не нужен extra-индекс.
 
 ## Trace context
 
-`Enqueue` snapshots the current OTel `TraceContext` (W3C `traceparent` / `tracestate`) into `Event.Headers` so the Worker's later publish preserves the originating trace across the async boundary. The kit's `natsclient.PublishRaw` inject path treats a pre-existing `traceparent` in headers as authoritative — the worker's (usually trace-less) ctx never overwrites the snapshot. Result: HTTP → Tx → outbox row → Worker → consumer all share one trace ID in the APM waterfall.
+`Enqueue` снапшотит текущий OTel `TraceContext` (W3C `traceparent` / `tracestate`) в `Event.Headers`, чтобы более поздний publish Worker'а сохранял originating-трассу через async-границу. inject-путь kit'ового `natsclient.PublishRaw` рассматривает pre-existing `traceparent` в headers как authoritative — обычно-trace-less ctx worker'а никогда не перезаписывает snapshot. Результат: HTTP → Tx → outbox-строка → Worker → consumer все шарят один trace ID в APM-водопаде.
 
-No setup required — propagation activates automatically once a `TextMapPropagator` is installed globally (`otel.SetTextMapPropagator(propagation.TraceContext{})`, which `service.WithOtel` does).
+Setup не нужен — propagation активируется автоматически, как только `TextMapPropagator` установлен глобально (`otel.SetTextMapPropagator(propagation.TraceContext{})`, что `service.WithOtel` делает).
 
-## Schema (v2)
+## Схема (v2)
 
-`schema.sql` is **idempotent** for both fresh installs and v1 → v2
-upgrades. Columns:
+`schema.sql` **идемпотентен** и для fresh-инсталляций, и для v1 → v2
+апгрейдов. Колонки:
 
-| Column | Notes |
+| Колонка | Заметки |
 |---|---|
-| `id uuid PRIMARY KEY` | DB-generated UUID — surfaces in `Event.ID`. |
-| `aggregate_type, aggregate_id text` | Optional aggregate-shape labels. |
-| `event_type text NOT NULL` | Bus subject the Worker dispatches to. |
-| `payload bytea NOT NULL` | Opaque wire bytes — JSON, protobuf, anything. |
-| `headers jsonb` | Per-event metadata (W3C traceparent, etc). |
-| `created_at, published_at timestamptz` | Lifecycle stamps. |
-| `attempts integer, last_error text` | Retry bookkeeping. |
+| `id uuid PRIMARY KEY` | DB-generated UUID — появляется в `Event.ID`. |
+| `aggregate_type, aggregate_id text` | Опциональные aggregate-shape labels. |
+| `event_type text NOT NULL` | Bus subject, на который Worker диспатчит. |
+| `payload bytea NOT NULL` | Opaque wire-bytes — JSON, protobuf, что угодно. |
+| `headers jsonb` | Per-event metadata (W3C traceparent, и т.д.). |
+| `created_at, published_at timestamptz` | Lifecycle штампы. |
+| `attempts integer, last_error text` | Retry-bookkeeping. |
 | `next_retry_at timestamptz NOT NULL DEFAULT NOW()` | **v2** — per-row backoff "ready at". |
 
-Indexes:
+Индексы:
 
-- `outbox_pending_idx (next_retry_at, created_at) WHERE published_at IS NULL` — the polling SELECT touches only rows whose retry window has arrived.
-- `outbox_aggregate_idx (aggregate_type, aggregate_id)` — for replay tooling.
+- `outbox_pending_idx (next_retry_at, created_at) WHERE published_at IS NULL` — polling SELECT касается только строк, чьё retry-окно наступило.
+- `outbox_aggregate_idx (aggregate_type, aggregate_id)` — для replay-тулзов.
 
-Use `outbox.Schema()` once at boot (or fold into your migration tool); `service.WithOutboxAutoSchema()` does this automatically.
+Используйте `outbox.Schema()` один раз на boot (или впихните в свой migration-тул); `service.WithOutboxAutoSchema()` делает это автоматически.
 
-## Worker semantics
+## Семантика Worker'а
 
-- **Polling**: `SELECT ... WHERE published_at IS NULL AND next_retry_at <= NOW() ORDER BY next_retry_at, created_at LIMIT $batch_size FOR UPDATE SKIP LOCKED`. Multi-replica safe — two workers draining the same table don't collide.
-- **LISTEN/NOTIFY fast path** (v2, default-on): a dedicated pool connection LISTENs on `outbox_new`; Enqueue runs `pg_notify('outbox_new', '')` after INSERT, so commit-to-publish latency is ~ms instead of waiting for the next polling tick. Polling stays as the fallback for crash recovery / dropped NOTIFY. Disable via `WithoutListen()` when running behind a connection pooler that breaks NOTIFY (PgBouncer transaction mode).
-- **Per-row exponential backoff** (v2): on failure, `next_retry_at = NOW() + base * 2^(attempts-1)` capped at max. Defaults: base 1s, max 1h. Stops failed events from hammering the bus every poll tick.
-- **Per-event dispatch**: `PublishFn(ctx, Event) error`. Returning nil
-  marks the row published; returning an error bumps `attempts` and
-  records the message in `last_error`.
-- **Retries**: unbounded by default — failed events stay in the
-  unpublished set and the worker retries them on the next tick. Cap
-  with `WithMaxAttempts(n)`.
-- **Dead-lettering**: rows whose `attempts >= max_attempts` stay in
-  the table but are filtered out of the SELECT. Operators decide the
-  disposition (delete, replay, archive).
-- **At-least-once contract**: a crash AFTER `PublishFn` succeeds but
-  BEFORE the row's UPDATE will redeliver. Downstream consumers must
-  dedupe — set the bus's `Nats-Msg-Id` (or equivalent) to `Event.ID`.
+- **Polling**: `SELECT ... WHERE published_at IS NULL AND next_retry_at <= NOW() ORDER BY next_retry_at, created_at LIMIT $batch_size FOR UPDATE SKIP LOCKED`. Multi-replica safe — два worker'а, дренящих одну таблицу, не сталкиваются.
+- **LISTEN/NOTIFY fast path** (v2, default-on): выделенное pool-соединение LISTEN'ит на `outbox_new`; Enqueue запускает `pg_notify('outbox_new', '')` после INSERT, так что commit-to-publish latency ~ms, а не ждёт следующего polling-tick'а. Polling остаётся как fallback для crash-recovery / dropped NOTIFY. Отключите через `WithoutListen()` при работе за connection pooler'ом, который ломает NOTIFY (PgBouncer transaction mode).
+- **Per-row exponential backoff** (v2): на failure'е `next_retry_at = NOW() + base * 2^(attempts-1)` capped at max. Defaults: base 1s, max 1h. Останавливает failed-события от молотьбы по шине каждый polling-tick.
+- **Per-event dispatch**: `PublishFn(ctx, Event) error`. Возврат nil
+  маркирует строку published; возврат ошибки бампит `attempts` и
+  записывает сообщение в `last_error`.
+- **Retries**: unbounded по умолчанию — failed-события остаются в
+  unpublished-set'е, и worker ретраит их на следующем tick'е.
+  Cap'ните через `WithMaxAttempts(n)`.
+- **Dead-lettering**: строки с `attempts >= max_attempts` остаются в
+  таблице, но фильтруются из SELECT. Операторы решают disposition
+  (delete, replay, archive).
+- **At-least-once контракт**: крэш ПОСЛЕ успеха `PublishFn`, но ДО
+  UPDATE строки приведёт к redelivery. Downstream-consumer'ы должны
+  dedupe — установите шинный `Nats-Msg-Id` (или эквивалент) в
+  `Event.ID`.
 
-## Options
+## Опции
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `WithInterval(d)` | 5s | Polling cadence (LISTEN/NOTIFY usually wakes the worker first; this is the fallback). |
-| `WithBatchSize(n)` | 100 | Max events fetched per tick. |
-| `WithMaxAttempts(n)` | 0 (no cap) | Dead-letter rows whose attempt count reaches n. |
-| `WithBackoff(base, max)` | 1s, 1h | Per-row exponential retry timing. Pass `(0, 0)` to disable. |
-| `WithoutListen()` | listen on | Disable LISTEN/NOTIFY. Polling-only mode. |
-| `WithRetention(d)` | off | GC published rows older than d. |
-| `WithGCInterval(d)` | 1h | Retention sweep cadence (no-op without `WithRetention`). |
-| `WithLogger(*slog.Logger)` | silent | Debug / Warn / Error per lifecycle event. |
-| `WithMetrics(prometheus.Registerer)` | off | Register `outbox_events_total{outcome}` (counter), `outbox_publish_duration_seconds` (histogram), `outbox_pending_count` (gauge), `outbox_gc_deleted_total` (counter), `outbox_listen_wakes_total` (counter). |
+| `WithInterval(d)` | 5s | Polling-cadence (LISTEN/NOTIFY обычно будит worker раньше; это fallback). |
+| `WithBatchSize(n)` | 100 | Максимум событий, забранных за tick. |
+| `WithMaxAttempts(n)` | 0 (без cap) | Dead-letter строк, у которых attempt-count достигает n. |
+| `WithBackoff(base, max)` | 1s, 1h | Per-row exponential retry timing. Передайте `(0, 0)`, чтобы отключить. |
+| `WithoutListen()` | listen on | Отключить LISTEN/NOTIFY. Polling-only режим. |
+| `WithRetention(d)` | off | GC published-строк старше d. |
+| `WithGCInterval(d)` | 1h | Cadence retention-sweep'а (no-op без `WithRetention`). |
+| `WithLogger(*slog.Logger)` | silent | Debug / Warn / Error на каждый lifecycle-event. |
+| `WithMetrics(prometheus.Registerer)` | off | Регистрирует `outbox_events_total{outcome}` (counter), `outbox_publish_duration_seconds` (histogram), `outbox_pending_count` (gauge), `outbox_gc_deleted_total` (counter), `outbox_listen_wakes_total` (counter). |
 
 ## Error codes
 
-| Code | Returned by | Meaning |
+| Code | Возвращается из | Смысл |
 |---|---|---|
-| `outbox_enqueue_failed` | `Enqueue` | Underlying INSERT failed. Surrounding transaction MUST roll back. |
-| `outbox_missing_fields` | `Enqueue` | `Event.EventType` is empty. |
-| `outbox_marshal_headers` | `Enqueue` | Headers map could not be JSON-encoded (cyclic / NaN). |
+| `outbox_enqueue_failed` | `Enqueue` | INSERT под капотом зафейлился. Окружающая транзакция ОБЯЗАНА откатиться. |
+| `outbox_missing_fields` | `Enqueue` | `Event.EventType` пустой. |
+| `outbox_marshal_headers` | `Enqueue` | Headers-map не получилось JSON-кодировать (cyclic / NaN). |
 | `outbox_worker_nil_db` | `NewWorker` | `NewWorker(nil, fn)`. |
 | `outbox_worker_nil_publish_fn` | `NewWorker` | `NewWorker(db, nil)`. |
-| `outbox_worker_started` | `Start` | Second `Start` call — worker is single-use. |
+| `outbox_worker_started` | `Start` | Второй вызов `Start` — worker single-use. |
 
-## Testing
+## Тестирование
 
-`outbox_test.go` runs against testcontainers Postgres. Covered scenarios:
+`outbox_test.go` запускается против testcontainers Postgres. Покрытые сценарии:
 
-- `Enqueue` inserts the expected row.
-- `Enqueue` inside a rolled-back transaction does NOT persist (the
-  consistency guarantee).
-- Worker drains a backlog under a tight poll interval.
-- Worker retries failed publishes; the row's `attempts` bumps and the
-  worker eventually succeeds when the function returns nil.
-- `WithMaxAttempts` caps retries — the row stays in the table but no
-  longer dispatches.
-- `Start` is single-use — the second call returns an error.
+- `Enqueue` вставляет ожидаемую строку.
+- `Enqueue` внутри откаченной транзакции НЕ persist'ится (consistency guarantee).
+- Worker дренит backlog при tight polling-interval.
+- Worker ретраит failed-publish'и; `attempts` строки бампится, и worker в итоге успешен, когда функция возвращает nil.
+- `WithMaxAttempts` cap'ит retries — строка остаётся в таблице, но больше не диспатчится.
+- `Start` single-use — второй вызов возвращает ошибку.
 
-Run with `go test ./db/outbox/...` (skips under `-short`).
+Запускайте `go test ./db/outbox/...` (пропускается под `-short`).
 
-## See also
+## См. также
 
-- [`db`](../README.md) — the underlying pool wrapper
-- [`clients/natsmap`](../../clients/natsmap/README.md) — typed NATS publish surface; pair with `natsmap.PublishRaw` for outbox-style flows
+- [`db`](../README.md) — обёртка пула под капотом
+- [`clients/natsmap`](../../clients/natsmap/README.md) — типизированный NATS-publish surface; сочетайте с `natsmap.PublishRaw` для outbox-style flow'ов
+</content>

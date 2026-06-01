@@ -1,13 +1,13 @@
 # cache
 
-Typed Redis-backed read-through cache. Generic over the value type
-T; supplies positive/negative caching with TTL knobs, prefix
-namespacing, JSON encoding, and best-effort error handling so
-callers never have to defend against transient Redis failures.
+Типизированный Redis-backed read-through кеш. Generic над типом
+значения T; даёт positive/negative caching с TTL knob'ами, prefix
+namespacing, JSON-кодирование и best-effort обработку ошибок, чтобы
+caller'ам никогда не приходилось защищаться от транзиентных Redis-сбоев.
 
-**Import:** `github.com/theizzatbek/gokit/clients/cache`
-**Depends on:** `github.com/redis/go-redis/v9` (raw client supplied
-by the caller — typically from `redisclient.Client.Redis()`)
+**Импорт:** `github.com/theizzatbek/gokit/clients/cache`
+**Зависит от:** `github.com/redis/go-redis/v9` (сырой клиент
+предоставляется caller'ом — обычно из `redisclient.Client.Redis()`)
 
 ## Quickstart
 
@@ -17,14 +17,14 @@ type User struct {
     Name string `json:"name"`
 }
 
-// One-liner via cache.For — auto-wires the logger from the
-// kit's *redisclient.Client, returns nil when svc.Redis is nil
-// (cache methods are nil-receiver-safe), panics with *errs.Error
-// on an empty KeyPrefix (programmer error, fail-fast at startup).
+// Однострочник через cache.For — авто-подключает логгер из китового
+// *redisclient.Client, возвращает nil когда svc.Redis nil
+// (методы кеша nil-receiver-safe), паникует с *errs.Error при
+// пустом KeyPrefix (программерская ошибка, fail-fast на старте).
 c := cache.For[User](svc.Redis, "session:user:")
 ```
 
-Or with full control over TTLs / custom logger / a raw
+Или с полным контролем над TTL / кастомным логгером / сырым
 `*redis.Client`:
 
 ```go
@@ -66,57 +66,56 @@ func (c *Redis[T]) SetNotFound(ctx, key)
 func (c *Redis[T]) Invalidate(ctx, key)
 ```
 
-`Lookup` is tri-state:
+`Lookup` — tri-state:
 
-| `Value` | `NotFound` | Meaning |
+| `Value` | `NotFound` | Смысл |
 |---|---|---|
-| non-nil | false | positive hit; use Value |
-| nil | true | negative hit; treat as not-found without touching the source |
-| nil | false | miss; query the source |
+| non-nil | false | positive hit; используйте Value |
+| nil | true | negative hit; считайте not-found без обращения к источнику |
+| nil | false | miss; query источник |
 
 ## Config
 
-| Field | Default | Notes |
+| Поле | По умолчанию | Заметки |
 |---|---|---|
-| `KeyPrefix` | — | Required. Stored keys are `KeyPrefix + key`. Namespace per value type AND per service when sharing a Redis instance. |
-| `PositiveTTL` | 1h | Positive entries expire after this. |
-| `NegativeTTL` | 60s | Negative-cache sentinel TTL. 0 → default 60s; set explicitly to a very small value to effectively disable. |
-| `Logger` | nil (silent) | Receives Warn entries on Redis transport or encode/decode failures. |
+| `KeyPrefix` | — | Обязательно. Хранимые ключи — `KeyPrefix + key`. Namespace per value type И per service при шаринге Redis-инстанса. |
+| `PositiveTTL` | 1h | Positive-записи протухают через это время. |
+| `NegativeTTL` | 60s | TTL negative-cache sentinel'а. 0 → default 60s; явно установите очень малое значение, чтобы эффективно отключить. |
+| `Logger` | nil (silent) | Получает Warn-записи на Redis-transport или encode/decode failures. |
 
-## Best-effort error policy
+## Политика best-effort ошибок
 
-Every Redis-side error is **logged + swallowed**:
+Каждая Redis-side ошибка **логируется + проглатывается**:
 
-- `Get` on transport error → miss. Caller falls through to the source.
-- `Set` / `SetNotFound` / `Invalidate` on transport error → log + return. Source of truth is unchanged.
-- JSON encode/decode failures → log + miss (Get) or noop (Set).
+- `Get` на transport error → miss. Caller проваливается к источнику.
+- `Set` / `SetNotFound` / `Invalidate` на transport error → log + return. Source of truth не меняется.
+- JSON encode/decode failures → log + miss (Get) или noop (Set).
 
-This is intentional. A cache that propagates errors forces every
-call site into a defensive double-path; treating a transient Redis
-hiccup as a miss keeps callers' code linear.
+Это намеренно. Кеш, который пропагирует ошибки, заставляет каждое
+вызывающее место уходить в defensive double-path; обработка
+транзиентного Redis-hiccup как miss держит код caller'ов линейным.
 
 ## Negative caching
 
-`SetNotFound(ctx, key)` stores a tiny sentinel under the key so the
-next `Get` returns `Lookup{NotFound: true}` without checking the
-source of truth. Killer feature for 404-absorbing scanner traffic
-on public endpoints — pair with route-level rate limiting and a
-short `NegativeTTL` (60s default) so a later `Create` takes effect
-within the window.
+`SetNotFound(ctx, key)` сохраняет крошечный sentinel под ключом, так что
+следующий `Get` возвращает `Lookup{NotFound: true}` без проверки источника
+правды. Killer-фича для 404-поглощения scanner-трафика на публичных
+эндпоинтах — сочетайте с route-level rate limiting и коротким
+`NegativeTTL` (60s default), чтобы более поздний `Create` сработал
+внутри окна.
 
 ## nil-receiver safety
 
-A `(*Redis[T])(nil)` is safe on every method:
+`(*Redis[T])(nil)` безопасен на каждом методе:
 
-- `Get` returns a zero `Lookup{}` (miss).
-- `Set` / `SetNotFound` / `Invalidate` no-op.
+- `Get` возвращает zero `Lookup{}` (miss).
+- `Set` / `SetNotFound` / `Invalidate` — no-op.
 
-Lets you thread a cache reference through services unconditionally;
-the "cache off" path is "don't construct one and pass nil".
+Позволяет пробрасывать cache-reference через сервисы безусловно;
+путь "cache off" — это "не конструируйте и передайте nil".
 
-## See also
+## См. также
 
-- [`clients/redis`](../redis/README.md) — kit-thin Redis client
-  wrapper that produces the `*redis.Client` this package consumes.
-- [`service`](../../service/README.md) — `service.Config.Redis` +
-  `svc.Redis` auto-wiring.
+- [`clients/redis`](../redis/README.md) — kit-thin Redis-клиент обёртка, которая производит `*redis.Client`, потребляемый этим пакетом.
+- [`service`](../../service/README.md) — `service.Config.Redis` + `svc.Redis` авто-проводка.
+</content>

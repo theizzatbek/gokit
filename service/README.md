@@ -1,15 +1,15 @@
 # service
 
-All-in-one service helper. One `service.New(ctx, cfg)` builds the bundled runtime — `*db.DB`, `*auth.Auth[C]`, `*natsclient.Client`, `*natsmap.Runtime`, `*http.Client`, `*apimap.Client`, `*fibermap.Engine[T]` — with auto-detect optionality (subsystems with empty config stay nil). Auto-installs `auth.Bearer(BearerOptional)` at fiber.App level via `WithUse` so `ContextBuilder` reads JWT subject correctly (fixes a real gotcha) and wires the `bearer:` middleware factory onto the engine; `/auth/login` `/auth/refresh` `/auth/logout` are NOT auto-mounted — declare your own login handler and call `svc.Auth.IssueLogin / IssueRefresh / Logout`. `Run()` blocks with the production-ops bundle. Service is additive over the existing subpackages — go straight to `svc.DB.Tx(...)` / `svc.Auth.Sign(...)` for anything Service doesn't shortcut.
+All-in-one service-хелпер. Один `service.New(ctx, cfg)` собирает bundled runtime — `*db.DB`, `*auth.Auth[C]`, `*natsclient.Client`, `*natsmap.Runtime`, `*http.Client`, `*apimap.Client`, `*fibermap.Engine[T]` — с auto-detect optionality (подсистемы с пустым config'ом остаются nil). Авто-устанавливает `auth.Bearer(BearerOptional)` на уровне fiber.App через `WithUse`, так что `ContextBuilder` правильно читает JWT subject (фиксит реальную gotcha) и подключает factory-middleware `bearer:` на engine; `/auth/login` `/auth/refresh` `/auth/logout` НЕ авто-монтируются — объявите свой login-handler и зовите `svc.Auth.IssueLogin / IssueRefresh / Logout`. `Run()` блокирует production-ops бандлом. Service additive над существующими подпакетами — обращайтесь напрямую к `svc.DB.Tx(...)` / `svc.Auth.Sign(...)` для всего, что Service не shortcut'ит.
 
-**Import:** `github.com/theizzatbek/gokit/service`
-**Depends on:** every other `gokit/*` subpackage
+**Импорт:** `github.com/theizzatbek/gokit/service`
+**Зависит от:** каждого другого `gokit/*` подпакета
 
-## Why use it
+## Зачем это нужно
 
-Wiring a kit-based service hand-rolls ~200 lines: `KeySet` from PEM, `auth.New` + `refreshpg.New` plumbing, `httpc.New`, `apimap.New + LoadFile + Build` (with the `${MICROLINK_BASE_URL}` env trick), `natsclient.Connect`, `fibermap.Default + SetValidator`, `fibermount.MountMiddlewareFactories`, install `Bearer(BearerOptional)` at fiber.App level via `WithUse` (or quietly hit the "AppCtx.UserID is empty in handlers" trap), assemble `RunOption`s, manage graceful shutdown, set up `slog`. `service` is that bundle. Your service still registers its own auth handlers (login body shape, credential check, custom auth schemes) — typically a few lines that delegate to `svc.Auth.IssueLogin` / `IssueRefresh` / `Logout`.
+Hand-rolled проводка kit-based сервиса — это ~200 строк: `KeySet` из PEM, plumbing `auth.New` + `refreshpg.New`, `httpc.New`, `apimap.New + LoadFile + Build` (с `${MICROLINK_BASE_URL}` env-трюком), `natsclient.Connect`, `fibermap.Default + SetValidator`, `fibermount.MountMiddlewareFactories`, установка `Bearer(BearerOptional)` на уровне fiber.App через `WithUse` (или молча попасться в ловушку "AppCtx.UserID пустой в хендлерах"), сборка `RunOption`'ов, управление graceful shutdown, настройка `slog`. `service` — это такой бандл. Ваш сервис всё ещё регистрирует свои auth-хендлеры (login body shape, проверка credential, кастомные auth-схемы) — обычно несколько строк, делегирующих в `svc.Auth.IssueLogin` / `IssueRefresh` / `Logout`.
 
-The `examples/urlshort` `main.go` shrinks from ~270 → ~80 lines after switching to Service.
+`main.go` примера `examples/urlshort` сжимается с ~270 → ~80 строк после переключения на Service.
 
 ## Quickstart
 
@@ -50,7 +50,7 @@ func main() {
         return AppCtx{UserID: svc.Auth.Subject(c)}, nil
     })
 
-    // Custom login handler — service owns body shape and verification.
+    // Кастомный login-handler — service владеет body-shape'ом и верификацией.
     type LoginRequest struct {
         Login    string `json:"login"    validate:"required"`
         Password string `json:"password" validate:"required,min=1"`
@@ -76,115 +76,114 @@ func main() {
 }
 ```
 
-## Configuration
+## Конфигурация
 
-Env-driven via `caarlos0/env/v11`. Compose into your own app config via embedding to add app-specific fields.
+Env-driven через `caarlos0/env/v11`. Композируйте в собственный app-config через embedding, чтобы добавить app-specific поля.
 
-### K8s boot resilience
+### K8s boot-resilience
 
-Service initializes DB and NATS with bounded retry (5 attempts,
-1s→16s exponential backoff) by default — accommodates the common
-pattern where postgres/nats containers Ready a few seconds after
-the service container starts. Opt out via `WithoutConnectRetry()`
-or set the per-subsystem env sentinel `_CONNECT_MAX_RETRIES=-1`.
+Service инициализирует DB и NATS с bounded retry (5 попыток,
+1s→16s экспоненциальный backoff) по умолчанию — учитывает обычный
+паттерн, где postgres/nats контейнеры Ready на несколько секунд после
+старта service-контейнера. Opt out через `WithoutConnectRetry()`
+или установите per-subsystem env-sentinel `_CONNECT_MAX_RETRIES=-1`.
 
 ### Top-level `service.Config`
 
-| Section | Prefix | Trigger | Notes |
+| Раздел | Префикс | Триггер | Заметки |
 |---|---|---|---|
-| `Service` | (none) | always | `ADDR`, `LOG_LEVEL`, `LOG_FORMAT` |
-| `DB` | `DB_` | `DB_USER` set | When omitted, `svc.DB == nil` |
-| `Auth` | `AUTH_` | `AUTH_PRIVATE_KEY_PEM` set | Requires DB (refreshpg store) |
-| `NATS` | `NATS_` | `NATS_URL` set | Independent |
-| `NATSMap` | `NATSMAP_` | `NATSMAP_ENABLED=true` or path set | Requires NATS |
-| `HTTPC` | `HTTPC_` | always | Zero-value → sensible defaults |
-| `APIMap` | `APIMAP_` | `APIMAP_ENABLED=true` or `APIMAP_PATH` set | Clients YAML |
-| `Routes` | `ROUTES_` | `ROUTES_ENABLED=true` or `ROUTES_PATH` set | Routes YAML |
+| `Service` | (нет) | всегда | `ADDR`, `LOG_LEVEL`, `LOG_FORMAT` |
+| `DB` | `DB_` | `DB_USER` установлен | Когда пропущен, `svc.DB == nil` |
+| `Auth` | `AUTH_` | `AUTH_PRIVATE_KEY_PEM` установлен | Требует DB (refreshpg store) |
+| `NATS` | `NATS_` | `NATS_URL` установлен | Независимо |
+| `NATSMap` | `NATSMAP_` | `NATSMAP_ENABLED=true` или path установлен | Требует NATS |
+| `HTTPC` | `HTTPC_` | всегда | Zero-value → разумные defaults |
+| `APIMap` | `APIMAP_` | `APIMAP_ENABLED=true` или `APIMAP_PATH` установлен | Clients YAML |
+| `Routes` | `ROUTES_` | `ROUTES_ENABLED=true` или `ROUTES_PATH` установлен | Routes YAML |
 
 ### `ServiceConfig`
 
-| Field | Env | Default |
+| Поле | Env | По умолчанию |
 |---|---|---|
 | `Addr` | `ADDR` | `:3000` |
 | `LogLevel` | `LOG_LEVEL` | `info` |
-| `LogFormat` | `LOG_FORMAT` | `json` (also: `text`) |
-| `NodeName` | `SERVICE_NODE_NAME` | `os.Hostname()` if unset. Flows to `natsclient.Config.Name` (when `NATS.Name` is not explicit) and to default slog attrs (`node=...`). |
-| `ServerGroup` | `SERVICE_SERVER_GROUP` | Empty by default. When set, passed to `natsmap.WithServerGroup(...)` — auto-derived subscriber queue groups suffix with `-<ServerGroup>` for cross-region isolation. See [natsmap multi-node](../clients/natsmap/README.md#multi-node-behaviour). |
-| `ConfigsDir` | `CONFIGS_DIR` | Empty = current CWD-based lookup (`routes.yaml`, `clients.yaml`, …). When set (e.g. `configs`), every default-named YAML resolves to `<ConfigsDir>/<name>.yaml`. Per-subsystem `Path` overrides (`ROUTES_PATH`, `APIMAP_PATH`, `NATSMAP_*_PATH`) bypass the prefix — operator-typed paths are honoured literally. See [Default paths convention](#default-paths-convention). |
+| `LogFormat` | `LOG_FORMAT` | `json` (также: `text`) |
+| `NodeName` | `SERVICE_NODE_NAME` | `os.Hostname()` если не установлен. Идёт в `natsclient.Config.Name` (когда `NATS.Name` не explicit) и в default slog-attr'ы (`node=...`). |
+| `ServerGroup` | `SERVICE_SERVER_GROUP` | Пусто по умолчанию. Когда установлен, передаётся в `natsmap.WithServerGroup(...)` — авто-выведенные subscriber queue-groups суффиксят `-<ServerGroup>` для cross-region изоляции. См. [natsmap multi-node](../clients/natsmap/README.md#multi-node-behaviour). |
+| `ConfigsDir` | `CONFIGS_DIR` | Пусто = текущий CWD-based lookup (`routes.yaml`, `clients.yaml`, …). Когда установлен (например, `configs`), каждый default-named YAML резолвится в `<ConfigsDir>/<name>.yaml`. Per-subsystem `Path`-override'ы (`ROUTES_PATH`, `APIMAP_PATH`, `NATSMAP_*_PATH`) обходят prefix — operator-typed пути уважаются literal. См. [Default paths convention](#конвенция-default-путей). |
 
 ### `DBConfig`
 
-Full field list lives in [db/README](../db/README.md#configuration). The
-multi-node-relevant env vars surfaced through service:
+Полный список полей живёт в [db/README](../db/README.md#конфигурация). Multi-node-relevant env vars, выставленные через service:
 
-| Field | Env | Notes |
+| Поле | Env | Заметки |
 |---|---|---|
-| `URL` | `DB_URL` | full postgres connection string (overrides `DB_HOST`/`DB_PORT`/…). Supports comma-separated multi-host URLs for primary failover. |
-| `AppName` | `DB_APP_NAME` | `application_name` sent to Postgres; auto-set from `SERVICE_NODE_NAME` when empty. |
-| `HasReadReplica` | `DB_HAS_READ_REPLICA` | opt into the standby pool; `svc.DB.ReadQuery(...)` then targets a standby. Requires PG 14+. |
+| `URL` | `DB_URL` | полная postgres connection-строка (override'ит `DB_HOST`/`DB_PORT`/…). Поддерживает comma-separated multi-host URL для primary-failover. |
+| `AppName` | `DB_APP_NAME` | `application_name`, отправляемое в Postgres; авто-установлено из `SERVICE_NODE_NAME` при пустом. |
+| `HasReadReplica` | `DB_HAS_READ_REPLICA` | opt в standby-пул; `svc.DB.ReadQuery(...)` тогда таргетит standby. Требует PG 14+. |
 
 ### `AuthConfig`
 
-| Field | Env | Default |
+| Поле | Env | По умолчанию |
 |---|---|---|
 | `PrivateKeyPEM` | `AUTH_PRIVATE_KEY_PEM` | (opt-in trigger) |
 | `KID` | `AUTH_KID` | `k1` |
 | `Issuer` | `AUTH_ISSUER` | `gokit` |
 | `AccessTTL` | `AUTH_ACCESS_TTL` | `15m` |
-| `RefreshTTL` | `AUTH_REFRESH_TTL` | `720h` (30 days) |
+| `RefreshTTL` | `AUTH_REFRESH_TTL` | `720h` (30 дней) |
 
 ### `NATSConfig`
 
-| Field | Env |
+| Поле | Env |
 |---|---|
 | `URL` | `NATS_URL` |
 | `Name` | `NATS_NAME` |
 
 ### `RedisConfig`
 
-| Field | Env |
+| Поле | Env |
 |---|---|
 | `URL` | `REDIS_URL` |
 | `ConnectMaxRetries` | `REDIS_CONNECT_MAX_RETRIES` |
 | `ConnectBackoffBase` | `REDIS_CONNECT_BACKOFF_BASE` |
 | `ConnectBackoffMax` | `REDIS_CONNECT_BACKOFF_MAX` |
 
-`URL` is the opt-in trigger. When set, `service.New` calls
-`redisclient.Connect` (with the standard retry budget), exposes
-the result as `svc.Redis`, and tears it down in `Close`. Layer a
-typed cache on top with [`clients/cache`](../clients/cache/README.md).
+`URL` — opt-in trigger. Когда установлен, `service.New` зовёт
+`redisclient.Connect` (со стандартным retry-budget'ом), exposes
+результат как `svc.Redis` и tears down его в `Close`. Layer'ните
+типизированный cache сверху через [`clients/cache`](../clients/cache/README.md).
 
 ### `APIMapConfig`
 
-| Field | Env |
+| Поле | Env |
 |---|---|
 | `Enabled` | `APIMAP_ENABLED` |
 | `Path` | `APIMAP_PATH` |
 
 ### `NATSMapConfig`
 
-| Field | Env |
+| Поле | Env |
 |---|---|
 | `Enabled` | `NATSMAP_ENABLED` |
 | `SubscribersPath` | `NATSMAP_SUBSCRIBERS_PATH` |
 | `PublishersPath` | `NATSMAP_PUBLISHERS_PATH` |
 
-Either path (or `Enabled=true`) triggers auto-build via `clients/natsmap`. Both paths may point at the same combined YAML. Requires `NATS` to be configured (`service_natsmap_needs_nats` otherwise).
+Любой path (или `Enabled=true`) триггерит auto-build через `clients/natsmap`. Оба path могут указывать на тот же combined-YAML. Требует `NATS` сконфигурированным (`service_natsmap_needs_nats` иначе).
 
 ### `RoutesConfig`
 
-| Field | Env |
+| Поле | Env |
 |---|---|
 | `Enabled` | `ROUTES_ENABLED` |
 | `Path` | `ROUTES_PATH` |
 
-When `Enabled=true` or `Path` is set, routes YAML is loaded and mounted at `svc.Run()` time. If `Path` is empty and `Enabled=true`, uses `service.DefaultRoutesPath` (`routes.yaml`).
+Когда `Enabled=true` или `Path` установлен, routes YAML загружается и монтируется на `svc.Run()`-time. Если `Path` пуст и `Enabled=true`, используется `service.DefaultRoutesPath` (`routes.yaml`).
 
-## Default paths convention
+## Конвенция default путей
 
-Each YAML-driven subsystem exposes an `Enabled` flag plus an optional `Path` override. When `Enabled=true` and no `Path` is set, service uses the canonical default filename — drop the file in your binary's working directory and you're done.
+Каждая YAML-driven подсистема выставляет `Enabled`-флаг плюс опциональный `Path`-override. Когда `Enabled=true` и нет установленного `Path`, service использует канонический default filename — кидаете файл в working-directory вашего бинаря, и всё.
 
-**Folder layout via `CONFIGS_DIR`.** Set `ServiceConfig.ConfigsDir` (env `CONFIGS_DIR`) to keep all four YAMLs under one folder:
+**Folder layout через `CONFIGS_DIR`.** Установите `ServiceConfig.ConfigsDir` (env `CONFIGS_DIR`), чтобы держать все четыре YAML'а под одной папкой:
 
 ```
 my-service/
@@ -197,28 +196,28 @@ my-service/
     └── publishers.yaml
 ```
 
-With `CONFIGS_DIR=configs` every default-named lookup resolves to `configs/<name>.yaml`. Per-subsystem `Path` overrides bypass the prefix — `ROUTES_PATH=/etc/foo.yaml` stays `/etc/foo.yaml`, so operators tuning a single file via env still get the literal path they typed.
+С `CONFIGS_DIR=configs` каждый default-named lookup резолвится в `configs/<name>.yaml`. Per-subsystem `Path`-override'ы обходят prefix — `ROUTES_PATH=/etc/foo.yaml` остаётся `/etc/foo.yaml`, так что операторы, тюнящие один файл через env, всё ещё получают literal-путь, который ввели.
 
-| Subsystem | Enabled env | Default filename | Path override env |
+| Подсистема | Enabled env | Default filename | Path override env |
 |---|---|---|---|
 | apimap | `APIMAP_ENABLED` | `service.DefaultAPIMapPath` (`clients.yaml`) | `APIMAP_PATH` |
 | natsmap subscribers | `NATSMAP_ENABLED` | `service.DefaultNATSMapSubscribersPath` (`subscribers.yaml`) | `NATSMAP_SUBSCRIBERS_PATH` |
 | natsmap publishers | `NATSMAP_ENABLED` | `service.DefaultNATSMapPublishersPath` (`publishers.yaml`) | `NATSMAP_PUBLISHERS_PATH` |
 | routes | `ROUTES_ENABLED` | `service.DefaultRoutesPath` (`routes.yaml`) | `ROUTES_PATH` |
 
-**Trigger logic** (same for every subsystem):
-- Build the subsystem if `Enabled=true` **OR** the matching `Path` field is set.
-- If `Path` is empty and `Enabled=true`, use the default const.
-- Override `Path` always wins.
+**Trigger-логика** (та же для каждой подсистемы):
+- Построить подсистему, если `Enabled=true` **ИЛИ** matching `Path`-поле установлено.
+- Если `Path` пуст и `Enabled=true`, использовать default-const.
+- Override `Path` всегда побеждает.
 
-**Missing files:**
-- Explicit `Path` overrides are strict — a missing file produces `service_*_yaml_not_found`.
-- Default paths (via `Enabled=true`) are strict for apimap and routes (single file).
-- NATSMap default paths are silent-skip on miss — supports publish-only and subscribe-only services that only drop one of the two files. If both default files are missing, returns `service_natsmap_yaml_not_found`.
+**Missing-файлы:**
+- Explicit `Path`-override'ы strict — missing-файл производит `service_*_yaml_not_found`.
+- Default-пути (через `Enabled=true`) strict для apimap и routes (единственный файл).
+- NATSMap default-пути silent-skip на miss — поддерживает publish-only и subscribe-only сервисы, которые drop'ают только один из двух файлов. Если оба default-файла отсутствуют, возвращает `service_natsmap_yaml_not_found`.
 
-## OpenAPI from routes.yaml
+## OpenAPI из routes.yaml
 
-Declare the OpenAPI document metadata next to your routes:
+Объявите OpenAPI-метаданные документа рядом с вашими роутами:
 
 ```yaml
 groups:
@@ -245,10 +244,10 @@ openapi:
     auth: [BearerAuth]
 ```
 
-When this block is present, `service` mounts `/openapi.json` and `/docs`
-automatically. Call `service.WithOpenAPI()` to opt in explicitly without
-a YAML block (uses openapi package defaults), or pass openapi options to
-override or augment YAML values:
+Когда этот блок присутствует, `service` монтирует `/openapi.json` и `/docs`
+автоматически. Зовите `service.WithOpenAPI()`, чтобы opt in explicitly без
+YAML-блока (использует openapi-package defaults), или передавайте openapi-опции,
+чтобы override'нуть или augment YAML-значения:
 
 ```go
 service.WithOpenAPI(
@@ -257,85 +256,85 @@ service.WithOpenAPI(
 )
 ```
 
-**Precedence:** YAML applies first. Then user opts. `Info`: last-write-wins
-(code overrides). `Servers` / `SecuritySchemes` / `MiddlewareSecurity`:
-accumulating append.
+**Приоритет:** YAML применяется первым. Потом user-opts. `Info`:
+last-write-wins (код override'ит). `Servers` / `SecuritySchemes` /
+`MiddlewareSecurity`: accumulating append.
 
-**Out of scope for YAML:** `WithDefaultResponse(status, model)` and the
-typed-schema builders (`gen.OnHandler(...).Body(...).Response(...)`) need
-Go types — pass them via the option chain.
+**Вне scope'а для YAML:** `WithDefaultResponse(status, model)` и
+типизированные schema-builder'ы (`gen.OnHandler(...).Body(...).Response(...)`)
+нуждаются в Go-типах — передавайте их через option-chain.
 
 ### Code-driven vs env-driven enable
 
-Two equivalent ways to opt in:
+Два эквивалентных способа opt in'нуть:
 
-- **Code:** pass `service.WithAPIMap()` / `WithNATSMap()` / `WithRoutes()` to `service.New`. Best when `main.go` already chains other `With*` options.
-- **Env:** set `APIMAP_ENABLED=true` / `NATSMAP_ENABLED=true` / `ROUTES_ENABLED=true`. Best for env-driven deployments where Go-side flags would be awkward.
+- **Code:** передайте `service.WithAPIMap()` / `WithNATSMap()` / `WithRoutes()` в `service.New`. Лучше всего, когда `main.go` уже цепляет другие `With*`-опции.
+- **Env:** установите `APIMAP_ENABLED=true` / `NATSMAP_ENABLED=true` / `ROUTES_ENABLED=true`. Лучше всего для env-driven деплоев, где Go-side флаги были бы неудобны.
 
-Both flip the same internal flag; pass either or both — both setting `Enabled = true` is idempotent.
+Оба flip'ают тот же internal-флаг; передавайте любой или оба — оба, устанавливающие `Enabled = true`, идемпотентны.
 
-## Options
+## Опции
 
-| Option | Notes |
+| Опция | Заметки |
 |---|---|
-| `WithOpenAPI(opts ...openapi.Option)` | Enable OpenAPI mounting. With no args, Info/Servers/SecuritySchemes/MiddlewareSecurity come from `routes.yaml`'s top-level `openapi:` block. Pass `openapi.WithInfo(...)` / `WithServer(...)` / `WithSecurity(...)` / `WithDefaultResponse(...)` to override or augment. Auto-mounts even without this call when the YAML block is present. |
-| `WithLogger(*slog.Logger)` | Override the auto-built logger |
-| `WithMetrics(prometheus.Registerer)` | Override the default `prometheus.NewRegistry()` |
-| `WithoutRuntimeMetrics()` | Skip auto-registration of `go_*` runtime + `process_*` collectors on the service registry. Use when the caller already registered them, or to keep the scrape output kit-only. |
-| `WithValidator(bind.Validator)` | Override the default `validator.New(validator.WithRequiredStructEnabled())`. Use to register custom validators (`v.RegisterValidation("safe_url", …)`) or swap implementations entirely. |
-| `WithFiberMiddleware(handlers...)` | Insert fiber-level middleware before engine (helmet, otelfiber, …) |
-| `WithCORS(origins...)` | Shortcut for `fiber/v2/middleware/cors` with kit defaults: REST methods, common headers, `X-Request-ID` exposed, MaxAge 24h. Credentials on for explicit origins; auto-off when `"*"` is listed (CORS spec). |
-| `WithCORSConfig(cors.Config)` | Full-control CORS — `cfg` is passed straight to `cors.New`. |
-| `WithoutBearerOptionalLayer()` | Skip the auto `Bearer(BearerOptional)` install |
-| `WithRefreshGC(interval)` | Schedule periodic `RefreshStore.GarbageCollect` against the auth refresh store so expired tokens get pruned. INFO log per non-zero sweep; WARN on failure. Bound to `OnShutdown` for clean stop. Interval ≤ 0 = disabled. No-op when Auth isn't configured. |
-| `WithOtel(serviceName, otelkit.Option...)` | Enables OpenTelemetry tracing AND metrics. Tracing: initializes a TracerProvider via OTLP/HTTP (`otelkit.Setup`), prepends `otelfiber` middleware (inbound spans), wraps httpc's base transport in `otelhttp` (outbound spans + W3C propagation). Metrics: bridges the service registry onto OTLP/HTTP via `otelkit.SetupMetrics` whenever the registry is a `prometheus.Gatherer`. Both register shutdown via `OnShutdown`. Configure exporter via standard `OTEL_EXPORTER_OTLP_*` env vars. See [otelkit](../otelkit/README.md). |
-| `WithSentry(dsn, sentrykit.Option...)` | Enables Sentry error tracking. Calls `sentrykit.Setup` (validates DSN, applies environment/release/tags/sample-rate/BeforeSend hooks), appends `sentrykit.FiberMiddleware` (per-request hub clone + panic auto-capture that re-panics so `fibermap.Recover` still writes 500), registers shutdown via `OnShutdown` (flushes BEFORE OTel during Close so events keep their trace_id). Auto-wraps the kit-built logger with `sentrykit.SlogHandler` so every subsystem log record becomes a breadcrumb on the request hub (user-supplied loggers via `WithLogger` are NOT wrapped — pass `sentrykit.SlogHandler(yourHandler)` yourself). 5xx auto-capture is opt-in — wrap your custom error handler with `sentrykit.WrapErrorHandler`. See [sentrykit](../sentrykit/README.md). |
-| `WithSentryBreadcrumbs(sentrykit.HandlerOption...)` | Configures the slog→breadcrumb bridge auto-installed by `WithSentry`. Forwards options to `sentrykit.SlogHandler`: `WithDebugBreadcrumbs`, `WithAttrFilter`, `WithCategoryAttr`, `WithMaxBreadcrumbValueLen`, `WithCaptureDedupeWindow`, `WithCaptureErrorAttrKeys`. No-op without `WithSentry`. |
-| `WithSentryErrorCapture(slog.Level)` | Enables Sentry event auto-capture for log records ≥ level (typically `slog.LevelError`). Records carrying an `err`/`error`/`cause` attr of type `error` ship as Sentry Exceptions (stack frames); otherwise as Message events. Dedupes by `(level, category, message)` within 60s by default — override via `WithSentryBreadcrumbs(sentrykit.WithCaptureDedupeWindow(d))`. No-op without `WithSentry`. |
-| `WithoutSentryUserScope()` | Skip auto-tagging Sentry events with `sentry.User{ID: principal.Subject}`. Default behaviour: when both `WithSentry` and Auth are configured, every event captured during an authenticated request carries the JWT subject as the "Affected User" in Sentry. Disable when Subject is PII in your deployment (e.g. it's the user's email) — handlers can still set User scope manually with hashed/redacted values via `sentrykit.HubFromContext(c).Scope().SetUser(...)`. |
-| `WithSentryRefreshGCSlug(slug)` | Override the default `"kit-refresh-gc"` Sentry monitor slug used by the refresh-token GC ticker. Useful when multiple kit-based services share one Sentry project (e.g. `"orders-refresh-gc"`). No effect unless `WithSentry` and `WithRefreshGC` are both set. |
-| `WithoutSentryRefreshGCMonitor()` | Disable Sentry Crons check-ins for the refresh-GC ticker (tracing / breadcrumbs / error capture stay on). Use in multi-replica deployments where every replica's tick would emit the same slug — Sentry doesn't deduplicate, so one configured monitor would receive one heartbeat per replica per tick. |
-| `WithOtelMetricsOptions(otelkit.MetricsOption...)` | Configure the OTel metrics pipeline auto-enabled by `WithOtel` (interval, exporter options, resource attributes). No-op without `WithOtel`. |
-| `WithoutOtelMetrics()` | Suppress the Prometheus→OTel metrics bridge that `WithOtel` otherwise auto-enables. Tracing still runs. Use when the deployment already scrapes `/metrics` directly and doesn't want a parallel push pipeline. |
-| `WithoutConnectRetry()` | Disables the auto-injected K8s-friendly retry defaults for DB and NATS Connect. Without this, service defaults to 5 retries with 1s→16s exponential backoff (~31s budget). See db/README and clients/nats/README. |
-| `WithHTTPCOptions(opts...)` | Extra httpc options (logger + metrics already auto-applied) |
-| `WithAPIMapOptions(opts...)` | Extra apimap options |
-| `WithAPIMap()` | Equivalent to `Config.APIMap.Enabled = true`. Apimap auto-builds from `service.DefaultAPIMapPath` (`clients.yaml`) when no `Path` override is set. Missing file → `service_apimap_yaml_not_found`. |
-| `WithAPIMapRegistration(fn)` | Register typed Request/Response models BEFORE `apimap.Build` seals the engine |
-| `WithAPIMapEnv(m map[string]string)` | Explicit `${VAR}` values for apimap's clients.yaml. Map consulted before `os.LookupEnv`. |
-| `WithNATSMap()` | Equivalent to `Config.NATSMap.Enabled = true`. Natsmap auto-builds from default subscribers/publishers paths. Requires NATS. |
-| `WithNATSMapRegistration(fn)` | Register typed subscriber handlers + publishers via `natsmap.RegisterHandler[T]` / `natsmap.RegisterPublisher[T]` BEFORE `natsmap.Build` opens subscriptions. Required when `NATSMap.*Path` is set. |
-| `WithNATSMapEnv(m map[string]string)` | Explicit `${VAR}` values for natsmap's subscribers/publishers YAML. Map consulted before `os.LookupEnv`. |
-| `WithRoutes()` | Equivalent to `Config.Routes.Enabled = true`. Routes auto-load in `svc.Run()` from `service.DefaultRoutesPath` (`routes.yaml`). |
-| `WithNATSOptions(opts...)` | Extra natsclient options |
-| `WithRedisOptions(opts...)` | Extra redisclient options (logger + metrics auto-applied); use `redisclient.WithRedisOptions(fn)` to set `redis.Options` fields like `PoolSize` or `TLSConfig`. |
-| `WithRunOptions(opts...)` | Append `fibermap.RunOption`s to the default production-ops bundle |
-| `WithoutReadiness()` | Suppress the auto-mounted `/readyz` probe. Liveness (`/healthz`) stays on. |
-| `WithReadinessPath(path)` | Override the default `/readyz` mount point. |
-| `WithReadinessTimeout(d)` | Per-probe deadline for the full checker set; forwarded to `fibermap.WithReadinessOpts`. 0 → fibermap's built-in default (5s). |
-| `WithReadinessChecker(c...)` | Append app-level checkers (migrate gate, cache warmup, external API ping) to the auto-wired DB / NATS / Redis set. |
-| `WithoutSecurityHeaders()` | Suppress the auto-installed OWASP security headers (HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, CSP). Use when the headers are handled upstream (CDN, reverse proxy). |
-| `WithSecurityHeaders(fibermap.SecurityHeadersOption...)` | Customise the auto-installed security headers — forwards `fibermap.WithHSTSIncludeSubdomains`, `WithCSP`, `WithoutHSTS`, etc. Middleware still installs; pass `WithoutSecurityHeaders` to suppress. |
-| `WithBodyLimit(bytes)` | Cap inbound request bodies (Fiber returns 413 above the limit). 0 → Fiber default (4 MiB). Loses to caller-supplied `fibermap.WithFiberConfig` via `WithRunOptions`. |
-| `WithDBOptions(opts...)` | Extra `db.Option`s applied to the kit-built `*db.DB`. Logger is already wired; reach for this to add `db.WithMetrics`, `db.WithSlowQueryThreshold`, additional `db.WithTracer` (audit / custom backends), etc. |
-| `WithOtelPgxOptions(opts...)` | Configure the OTel pgx tracer auto-attached by `WithOtel`. Forwards `otelkit.WithPgxTracerName`, `WithPgxSpanNamer`, `WithoutPgxSQL`, `WithPgxMaxSQLLength`. No-op without `WithOtel`. |
-| `WithoutOtelPgxTracer()` | Suppress the auto-wired OTel pgx tracer. HTTP-path tracing (otelfiber / otelhttp) stays on. Use when DB tracing is provided by a sidecar or when per-query span volume would blow the export budget. |
-| `WithMigrations(fsys fs.FS)` | Apply `embed.FS` migrations via [`db/migrate.Up`](../db/migrate/README.md) after buildDB and before any subsystem reading schema (auth.refreshpg, outbox, apikeypg). |
-| `WithCron(name, schedule, fn)` | Register a recurring job at config time. 5-field cron format (override via `WithCronParser`). Auto-wraps with `sentrykit.MonitorCron` when `WithSentry` is wired. |
-| `WithCronSlug(jobName, slug)` | Override the auto-derived Sentry Crons monitor slug. |
-| `WithCronParser(parser)` | Custom cron parser (e.g. 6-field with seconds for sub-minute jobs). |
-| `WithoutLoggerInjector()` | Skip the auto-installed [`fibermap.LoggerInjector`](../fibermap/README.md#request-scoped-logger) middleware. |
-| `WithSingletonCron(name, schedule, fn)` | Like `WithCron` but wraps `fn` in `pg_try_advisory_lock(hash(name))` so only ONE replica per multi-replica deployment runs the job per tick. Requires DB. |
-| `svc.AddSingletonCron(name, schedule, fn)` | Post-build counterpart for jobs whose closure needs `svc.DB`. Same lock semantics. |
-| `WithOutboxReadinessOpts(outbox.CheckerOption...)` | Tune the auto-installed outbox backlog check on `/readyz`. Defaults `WithMaxDepth(10000)`, `WithMaxLag(10*time.Minute)`. |
-| `WithoutOutboxReadiness()` | Disable the auto-installed outbox readiness check. |
-| `WithOutbox(outbox.WorkerOption...)` | Enable the transactional outbox worker. Requires DB + (NATSMap OR `WithOutboxDispatcher`). Auto-wires logger + metrics, registers `OnShutdown(Stop)`. Default PublishFn = `natsmap.PublishRaw(ctx, rt, e.EventType, e.Payload, e.Headers)`. |
-| `WithOutboxDispatcher(fn)` | Override the default outbox PublishFn (e.g. fan out to multiple subjects, wrap with audit log, dispatch to a non-natsmap bus). |
-| `WithOutboxAutoSchema()` | Apply `outbox.Schema()` at boot. Off by default — most deployments fold the DDL into their migration tool. |
+| `WithOpenAPI(opts ...openapi.Option)` | Включает OpenAPI mounting. Без args Info/Servers/SecuritySchemes/MiddlewareSecurity приходят из top-level блока `openapi:` в `routes.yaml`. Передавайте `openapi.WithInfo(...)` / `WithServer(...)` / `WithSecurity(...)` / `WithDefaultResponse(...)`, чтобы override'нуть или augment. Авто-монтируется даже без этого вызова, когда YAML-блок присутствует. |
+| `WithLogger(*slog.Logger)` | Override авто-built логгера |
+| `WithMetrics(prometheus.Registerer)` | Override дефолтного `prometheus.NewRegistry()` |
+| `WithoutRuntimeMetrics()` | Пропустить авто-регистрацию `go_*` runtime + `process_*` коллекторов на service-registry. Используйте, когда caller уже их зарегистрировал, или чтобы держать scrape-вывод kit-only. |
+| `WithValidator(bind.Validator)` | Override default `validator.New(validator.WithRequiredStructEnabled())`. Используйте, чтобы зарегистрировать кастомные валидаторы (`v.RegisterValidation("safe_url", …)`) или поменять реализации целиком. |
+| `WithFiberMiddleware(handlers...)` | Вставить fiber-level middleware перед engine (helmet, otelfiber, …) |
+| `WithCORS(origins...)` | Shortcut для `fiber/v2/middleware/cors` с kit-defaults: REST-методы, common-headers, `X-Request-ID` exposed, MaxAge 24h. Credentials on для explicit-origins; auto-off, когда `"*"` listed (CORS-спек). |
+| `WithCORSConfig(cors.Config)` | Full-control CORS — `cfg` передаётся прямиком в `cors.New`. |
+| `WithoutBearerOptionalLayer()` | Пропустить авто `Bearer(BearerOptional)`-установку |
+| `WithRefreshGC(interval)` | Schedule periodic `RefreshStore.GarbageCollect` против auth refresh-store, так что expired-токены prune'ятся. INFO-лог per non-zero sweep; WARN на failure. Bound к `OnShutdown` для clean-stop. Interval ≤ 0 = disabled. No-op, когда Auth не сконфигурирован. |
+| `WithOtel(serviceName, otelkit.Option...)` | Включает OpenTelemetry tracing И metrics. Tracing: инициализирует TracerProvider через OTLP/HTTP (`otelkit.Setup`), prepend'ит `otelfiber`-middleware (inbound-span'ы), оборачивает httpc base-transport в `otelhttp` (outbound-span'ы + W3C propagation). Metrics: мостит service-registry на OTLP/HTTP через `otelkit.SetupMetrics`, когда registry — это `prometheus.Gatherer`. Оба регистрируют shutdown через `OnShutdown`. Конфигурируйте exporter через стандартные env vars `OTEL_EXPORTER_OTLP_*`. См. [otelkit](../otelkit/README.md). |
+| `WithSentry(dsn, sentrykit.Option...)` | Включает Sentry error-tracking. Зовёт `sentrykit.Setup` (валидирует DSN, применяет environment/release/tags/sample-rate/BeforeSend хуки), append'ит `sentrykit.FiberMiddleware` (per-request hub clone + panic auto-capture, который re-panic'ит, так что `fibermap.Recover` всё ещё пишет 500), регистрирует shutdown через `OnShutdown` (flush'ит ДО OTel во время Close, так что события держат свой trace_id). Auto-wrap'ит kit-built логгер с `sentrykit.SlogHandler`, так что каждая subsystem log-запись становится breadcrumb'ом на request-hub'е (user-supplied логгеры через `WithLogger` НЕ оборачиваются — передавайте `sentrykit.SlogHandler(yourHandler)` сами). 5xx auto-capture opt-in — оборачивайте свой error-handler с `sentrykit.WrapErrorHandler`. См. [sentrykit](../sentrykit/README.md). |
+| `WithSentryBreadcrumbs(sentrykit.HandlerOption...)` | Конфигурирует slog→breadcrumb-мост, авто-установленный `WithSentry`. Форвардит опции в `sentrykit.SlogHandler`: `WithDebugBreadcrumbs`, `WithAttrFilter`, `WithCategoryAttr`, `WithMaxBreadcrumbValueLen`, `WithCaptureDedupeWindow`, `WithCaptureErrorAttrKeys`. No-op без `WithSentry`. |
+| `WithSentryErrorCapture(slog.Level)` | Включает Sentry event auto-capture для log-записей ≥ level (типично `slog.LevelError`). Записи, несущие `err`/`error`/`cause`-attr типа `error`, ship'ятся как Sentry-Exception'ы (stack-frames); иначе как Message-события. Dedup'ит по `(level, category, message)` внутри 60s по умолчанию — override через `WithSentryBreadcrumbs(sentrykit.WithCaptureDedupeWindow(d))`. No-op без `WithSentry`. |
+| `WithoutSentryUserScope()` | Пропустить auto-tagging Sentry-событий с `sentry.User{ID: principal.Subject}`. Default-поведение: когда и `WithSentry`, и Auth сконфигурированы, каждое событие, captured во время аутентифицированного запроса, несёт JWT subject как "Affected User" в Sentry. Отключите, когда Subject PII в вашем деплое (например, это email пользователя) — handlers всё ещё могут установить User-scope руками с хешированными/redacted значениями через `sentrykit.HubFromContext(c).Scope().SetUser(...)`. |
+| `WithSentryRefreshGCSlug(slug)` | Override default `"kit-refresh-gc"` Sentry monitor-slug, используемого refresh-token GC-ticker'ом. Полезно, когда несколько kit-based сервисов шарят один Sentry-проект (например, `"orders-refresh-gc"`). Без эффекта, если `WithSentry` и `WithRefreshGC` оба не установлены. |
+| `WithoutSentryRefreshGCMonitor()` | Отключает Sentry Crons check-in'ы для refresh-GC ticker'а (tracing / breadcrumbs / error-capture остаются on). Используйте в multi-replica деплоях, где каждая реплика tick'а эмитила бы тот же slug — Sentry не deduplicate'ит, так что один сконфигурированный monitor получал бы один heartbeat per replica per tick. |
+| `WithOtelMetricsOptions(otelkit.MetricsOption...)` | Конфигурирует OTel metrics-пайплайн, авто-включённый `WithOtel`'ом (interval, exporter-опции, resource-атрибуты). No-op без `WithOtel`. |
+| `WithoutOtelMetrics()` | Подавить Prometheus→OTel metrics-мост, который `WithOtel` иначе auto-включает. Tracing всё ещё запускается. Используйте, когда деплой уже скрейпит `/metrics` напрямую и не хочет параллельной push-пайплайн. |
+| `WithoutConnectRetry()` | Отключает auto-injected K8s-friendly retry-defaults для DB и NATS Connect. Без этого, service defaults к 5 retries с 1s→16s экспоненциальным backoff'ом (~31s budget). См. db/README и clients/nats/README. |
+| `WithHTTPCOptions(opts...)` | Extra httpc-опции (logger + metrics уже авто-применены) |
+| `WithAPIMapOptions(opts...)` | Extra apimap-опции |
+| `WithAPIMap()` | Эквивалентно `Config.APIMap.Enabled = true`. Apimap auto-build'ится из `service.DefaultAPIMapPath` (`clients.yaml`), когда `Path`-override не установлен. Missing-файл → `service_apimap_yaml_not_found`. |
+| `WithAPIMapRegistration(fn)` | Зарегистрировать типизированные Request/Response модели ДО того, как `apimap.Build` запечатывает engine |
+| `WithAPIMapEnv(m map[string]string)` | Explicit `${VAR}`-значения для apimap'ового clients.yaml. Map consult'ируется перед `os.LookupEnv`. |
+| `WithNATSMap()` | Эквивалентно `Config.NATSMap.Enabled = true`. Natsmap auto-build'ится из дефолтных subscribers/publishers путей. Требует NATS. |
+| `WithNATSMapRegistration(fn)` | Зарегистрировать типизированные subscriber-handler'ы + publishers через `natsmap.RegisterHandler[T]` / `natsmap.RegisterPublisher[T]` ДО того, как `natsmap.Build` открывает subscriptions. Обязательно, когда `NATSMap.*Path` установлен. |
+| `WithNATSMapEnv(m map[string]string)` | Explicit `${VAR}`-значения для natsmap'овых subscribers/publishers YAML. Map consult'ируется перед `os.LookupEnv`. |
+| `WithRoutes()` | Эквивалентно `Config.Routes.Enabled = true`. Routes auto-load'ятся в `svc.Run()` из `service.DefaultRoutesPath` (`routes.yaml`). |
+| `WithNATSOptions(opts...)` | Extra natsclient-опции |
+| `WithRedisOptions(opts...)` | Extra redisclient-опции (logger + metrics авто-применены); используйте `redisclient.WithRedisOptions(fn)`, чтобы установить поля `redis.Options` вроде `PoolSize` или `TLSConfig`. |
+| `WithRunOptions(opts...)` | Append `fibermap.RunOption`'ов к дефолтному production-ops бандлу |
+| `WithoutReadiness()` | Подавить авто-смонтированный `/readyz` probe. Liveness (`/healthz`) остаётся on. |
+| `WithReadinessPath(path)` | Override дефолтной `/readyz` mount-точки. |
+| `WithReadinessTimeout(d)` | Per-probe deadline для full checker-set; форвардится в `fibermap.WithReadinessOpts`. 0 → встроенный дефолт fibermap'а (5s). |
+| `WithReadinessChecker(c...)` | Append app-level checkers (migrate-gate, cache-warmup, external API-ping) к авто-проводимому DB / NATS / Redis сету. |
+| `WithoutSecurityHeaders()` | Подавить авто-установленные OWASP security-headers (HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, CSP). Используйте, когда headers обрабатываются upstream (CDN, reverse-proxy). |
+| `WithSecurityHeaders(fibermap.SecurityHeadersOption...)` | Кастомизировать авто-установленные security-headers — форвардит `fibermap.WithHSTSIncludeSubdomains`, `WithCSP`, `WithoutHSTS` и т.д. Middleware всё равно устанавливается; передайте `WithoutSecurityHeaders`, чтобы подавить. |
+| `WithBodyLimit(bytes)` | Cap inbound request-body (Fiber возвращает 413 над limit'ом). 0 → Fiber-default (4 MiB). Теряет caller-supplied `fibermap.WithFiberConfig` через `WithRunOptions`. |
+| `WithDBOptions(opts...)` | Extra `db.Option`'ы, применяемые к kit-built `*db.DB`. Logger уже подключён; reach for this, чтобы добавить `db.WithMetrics`, `db.WithSlowQueryThreshold`, дополнительные `db.WithTracer` (audit / кастомные backends) и т.д. |
+| `WithOtelPgxOptions(opts...)` | Конфигурирует OTel pgx-tracer, авто-attach'енный `WithOtel`'ом. Форвардит `otelkit.WithPgxTracerName`, `WithPgxSpanNamer`, `WithoutPgxSQL`, `WithPgxMaxSQLLength`. No-op без `WithOtel`. |
+| `WithoutOtelPgxTracer()` | Подавить авто-проводимый OTel pgx-tracer. HTTP-path tracing (otelfiber / otelhttp) остаётся on. Используйте, когда DB tracing предоставляется sidecar'ом, или когда per-query span-volume взорвал бы export-budget. |
+| `WithMigrations(fsys fs.FS)` | Применить `embed.FS`-миграции через [`db/migrate.Up`](../db/migrate/README.md) после buildDB и до любой подсистемы, читающей schema (auth.refreshpg, outbox, apikeypg). |
+| `WithCron(name, schedule, fn)` | Зарегистрировать recurring-job на config-time. 5-field cron-формат (override через `WithCronParser`). Auto-wrap'ит с `sentrykit.MonitorCron`, когда `WithSentry` подключён. |
+| `WithCronSlug(jobName, slug)` | Override авто-derived Sentry Crons monitor-slug. |
+| `WithCronParser(parser)` | Кастомный cron-parser (например, 6-field с секундами для sub-minute job'ов). |
+| `WithoutLoggerInjector()` | Пропустить авто-установленный [`fibermap.LoggerInjector`](../fibermap/README.md#request-scoped-logger) middleware. |
+| `WithSingletonCron(name, schedule, fn)` | Как `WithCron`, но оборачивает `fn` в `pg_try_advisory_lock(hash(name))`, так что только ОДНА реплика per multi-replica деплой запускает job per tick. Требует DB. |
+| `svc.AddSingletonCron(name, schedule, fn)` | Post-build counterpart для job'ов, чьё closure нуждается в `svc.DB`. Та же lock-семантика. |
+| `WithOutboxReadinessOpts(outbox.CheckerOption...)` | Тюнить авто-установленный outbox backlog-check на `/readyz`. Defaults `WithMaxDepth(10000)`, `WithMaxLag(10*time.Minute)`. |
+| `WithoutOutboxReadiness()` | Отключить авто-установленный outbox readiness-check. |
+| `WithOutbox(outbox.WorkerOption...)` | Включить transactional outbox-worker. Требует DB + (NATSMap ИЛИ `WithOutboxDispatcher`). Auto-wires logger + metrics, регистрирует `OnShutdown(Stop)`. Default PublishFn = `natsmap.PublishRaw(ctx, rt, e.EventType, e.Payload, e.Headers)`. |
+| `WithOutboxDispatcher(fn)` | Override default outbox PublishFn (например, fan out в несколько subjects, оборачивать audit-логом, диспатчить на не-natsmap шину). |
+| `WithOutboxAutoSchema()` | Применить `outbox.Schema()` на boot'е. Off по умолчанию — большинство деплоев впихивают DDL в свой migration-tool. |
 
 ## Common patterns
 
-### Composing your own app config
+### Композирование собственного app-config'а
 
 ```go
 type Config struct {
@@ -348,7 +347,7 @@ _ = env.Parse(&cfg)
 svc, _ := service.New[AppCtx, Claims](ctx, cfg.Config)
 ```
 
-### Registering typed apimap response models
+### Регистрация типизированных apimap response-моделей
 
 ```go
 svc, _ := service.New[AppCtx, Claims](ctx, cfg,
@@ -360,9 +359,9 @@ svc, _ := service.New[AppCtx, Claims](ctx, cfg,
 )
 ```
 
-Without this, `apimap.Decode[User]` returns generic JSON. After `Build` runs (inside `service.New`), the engine is sealed — registrations must happen via this option.
+Без этого `apimap.Decode[User]` возвращает generic JSON. После того, как `Build` запускается (внутри `service.New`), engine sealed — регистрации должны происходить через эту опцию.
 
-### Injecting otelhttp / helmet
+### Инъекция otelhttp / helmet
 
 ```go
 svc, _ := service.New[AppCtx, Claims](ctx, cfg,
@@ -373,11 +372,11 @@ svc, _ := service.New[AppCtx, Claims](ctx, cfg,
 )
 ```
 
-The fiber-level middlewares run BEFORE the engine's contextInit, alongside the auto-installed `Bearer(BearerOptional)` layer.
+Fiber-level middleware запускается ДО engine'овского contextInit, рядом с авто-установленным `Bearer(BearerOptional)`-слоем.
 
-### Custom cleanup via `OnShutdown`
+### Кастомный cleanup через `OnShutdown`
 
-`svc.Close()` only tears down what Service built. For app-specific resources (workers, third-party clients, Sentry / metrics pushers, scheduled jobs) register a callback:
+`svc.Close()` tears down только то, что Service построил. Для app-specific ресурсов (workers, third-party clients, Sentry / metrics pushers, scheduled jobs) зарегистрируйте callback:
 
 ```go
 svc, _ := service.New[AppCtx, Claims](ctx, cfg)
@@ -390,21 +389,21 @@ scheduler := startScheduler()
 svc.OnShutdown(scheduler.Shutdown)
 ```
 
-Callbacks run on `Close()`:
-1. **First**, registered callbacks fire in LIFO order. Kit subsystems (DB, NATS, …) are still alive so callbacks can flush in-flight state.
-2. Then `NATSMap.Drain()` (in-flight handlers finish).
-3. Then `NATS.Close()`.
-4. Finally `DB.Close()`.
+Callback'и запускаются на `Close()`:
+1. **Сначала**, зарегистрированные callback'и срабатывают в LIFO-порядке. Kit-подсистемы (DB, NATS, …) всё ещё живы, так что callback'и могут flush'ить in-flight state.
+2. Потом `NATSMap.Drain()` (in-flight handlers заканчивают).
+3. Потом `NATS.Close()`.
+4. Наконец `DB.Close()`.
 
-Errors returned by a callback are logged via `svc.Logger()` and do NOT abort subsequent callbacks or subsystem teardown. `OnShutdown` is thread-safe; calling it after `Close` is a no-op.
+Ошибки, возвращённые callback'ом, логируются через `svc.Logger()` и НЕ abort'ят последующие callback'и или subsystem-teardown. `OnShutdown` thread-safe; вызов его после `Close` — это no-op.
 
-### Going around Service for one operation
+### Обход Service для одной операции
 
-Service exposes all deps as public fields — drop down whenever you need fine control:
+Service выставляет все deps как публичные поля — drop down всегда, когда нужен fine-control:
 
 ```go
 err := svc.DB.Tx(ctx, func(tx *db.Tx) error {
-    // multi-statement transaction
+    // multi-statement транзакция
     return nil
 })
 
@@ -414,56 +413,57 @@ pub.Publish(ctx, "my.event", MyEvent{...})
 resp, _ := svc.HTTPC.Get("https://example.com")
 ```
 
-## Error model
+## Error-модель
 
-`service.New` returns `*errs.Error` with `Kind`/`Code`:
+`service.New` возвращает `*errs.Error` с `Kind`/`Code`:
 
-| Code | Kind | When |
+| Code | Kind | Когда |
 |---|---|---|
-| `service_auth_needs_db` | Validation | Auth configured but DB not |
-| `service_auth_invalid_key` | Validation | PEM unparseable or wrong algorithm |
-| `service_db_connect_failed` | Unavailable | `db.Connect` failed (wrapped) |
-| `service_apimap_load_failed` | Validation | apimap LoadFile / Build failed (wrapped) |
-| `service_nats_connect_failed` | Unavailable | `natsclient.Connect` failed (wrapped) |
-| `service_natsmap_needs_nats` | Validation | NATSMap configured but NATS not |
-| `service_natsmap_load_failed` | Validation | natsmap LoadFile / Build failed (wrapped) |
-| `service_httpc_new_failed` | Validation | `httpc.New` validation failed (wrapped) |
-| `service_openapi_mount_failed` | Internal | OpenAPI Mount failed |
+| `service_auth_needs_db` | Validation | Auth сконфигурирован, но DB нет |
+| `service_auth_invalid_key` | Validation | PEM unparseable или wrong-алгоритм |
+| `service_db_connect_failed` | Unavailable | `db.Connect` зафейлился (wrapped) |
+| `service_apimap_load_failed` | Validation | apimap LoadFile / Build зафейлились (wrapped) |
+| `service_nats_connect_failed` | Unavailable | `natsclient.Connect` зафейлился (wrapped) |
+| `service_natsmap_needs_nats` | Validation | NATSMap сконфигурирован, но NATS нет |
+| `service_natsmap_load_failed` | Validation | natsmap LoadFile / Build зафейлились (wrapped) |
+| `service_httpc_new_failed` | Validation | `httpc.New` валидация зафейлилась (wrapped) |
+| `service_openapi_mount_failed` | Internal | OpenAPI Mount зафейлился |
 
-Subsystem-specific errors propagate as `Cause` — use `errors.As` to extract.
+Subsystem-specific ошибки пропагируют как `Cause` — используйте `errors.As`, чтобы extract'ить.
 
 ## Observability
 
-- `svc.Logger()` returns the `*slog.Logger` every subsystem was given.
-- `svc.Metrics()` returns the `prometheus.Registerer` every subsystem registers into.
-- All subsystems' `WithLogger`/`WithMetrics` options are auto-applied; you don't pass them per call.
-- **Unified `/metrics` scrape.** `svc.Run()` routes the `/metrics` endpoint through the same registry, so a single scrape exposes `fibermap_http_*` (router), `db_*`, `httpc_*`, `nats_*`, `natsmap_*` together. The `go_*` (heap, GC, goroutines) and `process_*` (FDs, RSS, CPU seconds) runtime collectors are auto-registered on the same registry — disable with `service.WithoutRuntimeMetrics()`.
-- **apimap metrics** ship under their own `apimap_*` namespace (`apimap_requests_total`, `apimap_request_duration_seconds`) with `client`+`endpoint`+`status` labels, so per-upstream visibility lands on the shared registry without colliding with the kit's `httpc_*` collectors. apimap no longer forwards the registry to its internal httpc clients; if you need both apimap-level and per-attempt httpc views, build a dedicated httpc with a separate registry outside apimap.
+- `svc.Logger()` возвращает `*slog.Logger`, который получила каждая подсистема.
+- `svc.Metrics()` возвращает `prometheus.Registerer`, в который каждая подсистема регистрируется.
+- Все `WithLogger`/`WithMetrics`-опции подсистем авто-применяются; вы не передаёте их per call.
+- **Унифицированный `/metrics`-scrape.** `svc.Run()` routes `/metrics`-эндпоинт через тот же registry, так что один scrape экспонирует `fibermap_http_*` (router), `db_*`, `httpc_*`, `nats_*`, `natsmap_*` вместе. `go_*` (heap, GC, goroutines) и `process_*` (FDs, RSS, CPU-секунды) runtime-коллекторы авто-зарегистрированы на тот же registry — отключите через `service.WithoutRuntimeMetrics()`.
+- **apimap-метрики** shipping'ятся под собственным `apimap_*`-namespace'ом (`apimap_requests_total`, `apimap_request_duration_seconds`) с label'ами `client`+`endpoint`+`status`, так что per-upstream visibility приземляется на shared-registry без коллизий с kit'овыми `httpc_*`-коллекторами. apimap больше не форвардит registry в свои внутренние httpc-клиенты; если нужны и apimap-level, и per-attempt httpc-вьюхи, постройте dedicated httpc с отдельным registry вне apimap.
 
-## Shutdown order
+## Порядок shutdown
 
-`svc.Close()` drains `NATSMap` (so in-flight subscriber handlers finish) **before** tearing down the `NATS` connection. Downstream subsystems (`DB`, `Auth`) close last. Always `defer svc.Close()` after `service.New`.
+`svc.Close()` дренит `NATSMap` (так что in-flight subscriber-handler'ы заканчивают) **до** того, как tears down `NATS`-соединение. Downstream-подсистемы (`DB`, `Auth`) закрываются последними. Всегда `defer svc.Close()` после `service.New`.
 
-## Testing
+## Тестирование
 
-For unit tests, the empty-config path builds a Service with only Engine + HTTPC:
+Для unit-тестов empty-config-путь строит Service только с Engine + HTTPC:
 
 ```go
 svc, _ := service.New[AppCtx, Claims](ctx, service.Config{})
 ```
 
-For integration tests, mirror `examples/urlshort/main_test.go` — use testcontainers (Postgres + NATS), build a Service with full config, mount Engine on a `*fiber.App`, drive via `app.Test`.
+Для integration-тестов отзеркальте `examples/urlshort/main_test.go` — используйте testcontainers (Postgres + NATS), постройте Service с full-config'ом, mount'ните Engine на `*fiber.App`, драйвите через `app.Test`.
 
-## Limitations
+## Ограничения
 
-- **`refreshpg` only.** No `refreshredis` selector — services that want Redis bypass Service for the auth ladder.
-- **No migrations.** Apply your own SQL (`db.Exec(string(fileBytes))`) before registering handlers.
-- **No background job runner.** Out of kit scope.
-- **`New` is not concurrency-safe.** Construct once per process.
-- **Service does not mirror every subpkg method.** Access subsystems via the public fields: `svc.DB.Tx(...)`, `svc.Auth.Sign(...)`, etc.
-- **apimap metrics off by default** (see Observability above).
+- **Только `refreshpg`.** Никакого `refreshredis`-селектора — сервисы, которые хотят Redis, обходят Service для auth-лестницы.
+- **Никаких миграций.** Применяйте свой SQL (`db.Exec(string(fileBytes))`) перед регистрацией хендлеров.
+- **Нет background-job runner'а.** Out of kit scope.
+- **`New` не concurrency-safe.** Конструируйте один раз на процесс.
+- **Service не зеркалит каждый subpkg-метод.** Доступ к подсистемам через публичные поля: `svc.DB.Tx(...)`, `svc.Auth.Sign(...)` и т.д.
+- **apimap-метрики off по умолчанию** (см. Observability выше).
 
-## See also
+## См. также
 
 - [`fibermap`](../fibermap/README.md), [`errs`](../errs/README.md), [`db`](../db/README.md), [`auth`](../auth/README.md), [`clients/httpc`](../clients/httpc/README.md), [`clients/apimap`](../clients/apimap/README.md), [`clients/nats`](../clients/nats/README.md), [`clients/natsmap`](../clients/natsmap/README.md), [`fibermap/openapi`](../fibermap/openapi/README.md)
-- [`examples/urlshort`](../examples/urlshort/README.md) — Service used end-to-end
+- [`examples/urlshort`](../examples/urlshort/README.md) — Service, используемый end-to-end
+</content>

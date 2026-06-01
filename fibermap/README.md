@@ -1,17 +1,17 @@
 # fibermap
 
-YAML-declarative router and middleware composer for [Fiber v2](https://github.com/gofiber/fiber). Describe routes in YAML, register handlers and middleware by name (no reflection), get a typed per-request context, and ship a service with `Run()` that bundles recover + request-id + slog + Prometheus + healthz out of the box.
+YAML-декларативный роутер и middleware-композер для [Fiber v2](https://github.com/gofiber/fiber). Описываете роуты в YAML, регистрируете хендлеры и middleware по имени (никакой рефлексии), получаете типизированный per-request контекст и отгружаете сервис через `Run()`, который в коробке содержит recover + request-id + slog + Prometheus + healthz.
 
-**Import:** `github.com/theizzatbek/gokit/fibermap`
-**Depends on:** `gofiber/fiber/v2`, `gopkg.in/yaml.v3`, `prometheus/client_golang`, `github.com/theizzatbek/gokit/errs`, `github.com/theizzatbek/gokit/fibermap/bind`
+**Импорт:** `github.com/theizzatbek/gokit/fibermap`
+**Зависит от:** `gofiber/fiber/v2`, `gopkg.in/yaml.v3`, `prometheus/client_golang`, `github.com/theizzatbek/gokit/errs`, `github.com/theizzatbek/gokit/fibermap/bind`
 
-## Why use it
+## Зачем это нужно
 
-Hand-rolling Fiber bootstrap means re-deciding routes-vs-code coupling, middleware ordering, OpenAPI integration, panic recovery, metrics, healthchecks, and graceful shutdown on every service. fibermap moves all of that into one declarative file (routes.yaml) + a build-once-mount-once `Engine[T]` configurator. Three things span the package:
+Hand-rolled Fiber-bootstrap означает заново-решать routes-vs-code-coupling, middleware-ordering, OpenAPI-интеграцию, panic-recovery, метрики, healthcheck'и и graceful shutdown на каждом сервисе. fibermap переносит всё это в один декларативный файл (routes.yaml) + build-once-mount-once `Engine[T]` configurator. Три вещи пронизывают пакет:
 
-1. **The lifecycle is enforced.** `New[T]() → SetContextBuilder → Register* → LoadFile → Run` (or `Mount`). `Mount` validates everything together and returns `errors.Join` of all problems; nothing installs partially.
-2. **Per-request `Context[T]` is built once and propagated.** Handlers see `*Context[T]` where `T` is your `AppCtx` carrying request-scoped data (user_id, request_id, logger). One ContextBuilder, then every handler reads typed state.
-3. **Middleware chains are resolved declaratively.** `middleware_set` groups + per-route `middleware:` lists. Plain (`bearer`) and factory (`require_role: [admin]`) forms; sets recursively expand; duplicates deduped by `(name, args)`.
+1. **Lifecycle enforced.** `New[T]() → SetContextBuilder → Register* → LoadFile → Run` (или `Mount`). `Mount` валидирует всё вместе и возвращает `errors.Join` всех проблем; ничто не устанавливается частично.
+2. **Per-request `Context[T]` строится один раз и пропагируется.** Хендлеры видят `*Context[T]`, где `T` — это ваш `AppCtx`, несущий request-scoped data (user_id, request_id, logger). Один ContextBuilder, потом каждый хендлер читает типизированный state.
+3. **Middleware-цепочки резолвятся декларативно.** Группы `middleware_set` + per-route `middleware:`-списки. Plain (`bearer`) и factory (`require_role: [admin]`) формы; sets рекурсивно расширяются; дубликаты deduped'ятся по `(name, args)`.
 
 ## Quickstart
 
@@ -57,76 +57,76 @@ func main() {
 }
 ```
 
-That's it. The `Run` bundle gives you `/healthz`, `/metrics`, request-id, structured access logs, and panic recovery for free. Use `fibermap.Default[T]()` instead of `New[T]()` to also embed the ops bundle into the engine itself (auto-applied even in tests via `Mount`).
+Вот и всё. Бандл `Run` даёт вам `/healthz`, `/metrics`, request-id, структурированные access-логи и panic-recovery бесплатно. Используйте `fibermap.Default[T]()` вместо `New[T]()`, чтобы также встроить ops-бандл в сам engine (авто-применяется даже в тестах через `Mount`).
 
-## Configuration
+## Конфигурация
 
-### Engine construction
+### Сборка engine'а
 
-| Function | What it gives |
+| Функция | Что даёт |
 |---|---|
-| `New[T]() *Engine[T]` | bare engine; you opt in to every feature |
-| `Default[T]() *Engine[T]` | engine with `WithRecover` + `WithRequestLogger` + `WithMetrics` + `WithHealthCheck` defaults pre-applied to Run |
+| `New[T]() *Engine[T]` | bare-engine; вы opt in'ите в каждую фичу |
+| `Default[T]() *Engine[T]` | engine с `WithRecover` + `WithRequestLogger` + `WithMetrics` + `WithHealthCheck` defaults pre-applied к Run |
 
-### Engine setup methods
+### Методы setup engine'а
 
-| Method | When you call it |
+| Метод | Когда вызывать |
 |---|---|
-| `SetContextBuilder(fn ContextBuilder[T])` | Required. Build per-request `Context[T].Data` from `*fiber.Ctx` (read Bearer locals, request-id, etc.) |
-| `SetValidator(v bind.Validator)` | Optional. Used by `RegisterHandlerWithBody/Query/Params/Headers` to validate decoded structs |
-| `SetCacheDefaults(d CacheDefaults[T])` | Optional. KeyBy / Headers / Control defaults for the YAML `cache:` block |
-| `SetBindErrorHandler(fn BindErrorFunc[T])` | Optional. Custom error mapping for bind failures (default: `errs.Validation`) |
+| `SetContextBuilder(fn ContextBuilder[T])` | Обязательно. Строит per-request `Context[T].Data` из `*fiber.Ctx` (читать Bearer-locals, request-id и т.д.) |
+| `SetValidator(v bind.Validator)` | Опционально. Используется `RegisterHandlerWithBody/Query/Params/Headers` для валидации декодированных struct'ов |
+| `SetCacheDefaults(d CacheDefaults[T])` | Опционально. KeyBy / Headers / Control defaults для YAML-блока `cache:` |
+| `SetBindErrorHandler(fn BindErrorFunc[T])` | Опционально. Кастомный error-mapping для bind-failures (по умолчанию: `errs.Validation`) |
 
-### `Run` options (RunOption)
+### Опции `Run` (RunOption)
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `WithAddr(":3000")` | from `$PORT` env, else `:3000` | TCP listen address |
-| `WithRoutesPath("routes.yaml")` | `routes.yaml` | Path passed to internal `LoadFile` if you skipped manual `LoadFile` |
-| `WithRoutesFS(fs.FS)` | none | `embed.FS` source — bundle routes.yaml into the binary |
-| `WithFiberConfig(fiber.Config)` | minimal | Custom `*fiber.App` config (override `ErrorHandler`, `BodyLimit`, etc.) |
-| `WithUse(handlers ...fiber.Handler)` | `[RequestID]` | Fiber-level middleware installed BEFORE the engine's contextInit |
-| `WithConfigureApp(fn func(*fiber.App))` | none | Hook to manipulate the `*fiber.App` after Mount |
-| `WithShutdownTimeout(d)` | 10s | Graceful shutdown deadline on SIGINT/SIGTERM |
-| `WithoutSignalHandling()` | — | Skip the built-in signal handler (caller manages shutdown) |
-| `WithRecover(logger)` / `WithoutRecover()` | on (slog.Default) | Panic recovery with stack trace |
-| `WithoutRequestID()` | request-id on | Inject `X-Request-ID` |
-| `WithRequestLogger(logger, skipPaths...)` / `WithoutRequestLogger()` | on (skip `/healthz`,`/metrics`) | Structured access log |
-| `WithMetrics(path)` / `WithoutMetrics()` | `/metrics` (only via `Default[T]`) | Prometheus endpoint |
-| `WithMetricsRegistry(reg)` | private registry | Route middleware + scrape through caller-provided registry — unifies `fibermap_http_*` with the app's own collectors. |
-| `WithHealthCheck(path)` / `WithoutHealthCheck()` | `/healthz` | Always-200 health endpoint, bypasses ContextBuilder |
-| `WithReadiness(path, checkers...)` | off | Auto-probed readiness endpoint — runs every `Checker` in parallel, 200 `{"status":"ok"}` or 503 `{"status":"degraded","checks":{…}}`. Bypasses ContextBuilder. |
-| `WithReadinessOpts(opts...)` | none | Forwards `[]ReadinessOption` (e.g. `WithReadinessTimeout(d)`) to the auto-installed readiness handler. |
+| `WithAddr(":3000")` | из env `$PORT`, иначе `:3000` | TCP listen-адрес |
+| `WithRoutesPath("routes.yaml")` | `routes.yaml` | Путь, передаваемый во внутренний `LoadFile`, если вы пропустили ручной `LoadFile` |
+| `WithRoutesFS(fs.FS)` | none | `embed.FS` источник — встраивает routes.yaml в бинарь |
+| `WithFiberConfig(fiber.Config)` | минимальный | Кастомный `*fiber.App` config (override `ErrorHandler`, `BodyLimit` и т.д.) |
+| `WithUse(handlers ...fiber.Handler)` | `[RequestID]` | Fiber-level middleware, устанавливаемый ДО engine'овского contextInit |
+| `WithConfigureApp(fn func(*fiber.App))` | none | Хук для манипуляции `*fiber.App` после Mount |
+| `WithShutdownTimeout(d)` | 10s | Graceful shutdown deadline на SIGINT/SIGTERM |
+| `WithoutSignalHandling()` | — | Пропустить built-in signal-handler (caller управляет shutdown'ом) |
+| `WithRecover(logger)` / `WithoutRecover()` | on (slog.Default) | Panic-recovery со стек-трейсом |
+| `WithoutRequestID()` | request-id on | Инжектит `X-Request-ID` |
+| `WithRequestLogger(logger, skipPaths...)` / `WithoutRequestLogger()` | on (пропускает `/healthz`,`/metrics`) | Структурированный access-лог |
+| `WithMetrics(path)` / `WithoutMetrics()` | `/metrics` (только через `Default[T]`) | Prometheus endpoint |
+| `WithMetricsRegistry(reg)` | приватный registry | Route middleware + scrape через caller-provided registry — унифицирует `fibermap_http_*` с собственными коллекторами app'а. |
+| `WithHealthCheck(path)` / `WithoutHealthCheck()` | `/healthz` | Always-200 health endpoint, обходит ContextBuilder |
+| `WithReadiness(path, checkers...)` | off | Авто-probed readiness endpoint — запускает каждый `Checker` параллельно, 200 `{"status":"ok"}` или 503 `{"status":"degraded","checks":{…}}`. Обходит ContextBuilder. |
+| `WithReadinessOpts(opts...)` | none | Прокидывает `[]ReadinessOption` (например, `WithReadinessTimeout(d)`) в авто-установленный readiness handler. |
 
 ## Common patterns
 
-### YAML schema for a complete route
+### YAML-схема полного роута
 
 ```yaml
 groups:
   - prefix: /api/v1
-    middleware:                       # group-level: applied to every nested route + sub-group
-      - bearer: []                    # factory middleware: map form even with empty args
-    groups:                           # nested groups inherit middleware
+    middleware:                       # group-level: применяется к каждому вложенному роуту + sub-group
+      - bearer: []                    # factory middleware: map-форма даже с пустыми args
+    groups:                           # вложенные группы наследуют middleware
       - prefix: /tasks
         routes:
           - method: GET
-            path: ""                  # empty = group prefix itself
-            handler: tasks.list       # name registered via RegisterHandler
-            name: tasks.list          # required: stable name for OpenAPI / Routes()
-            tags: [tasks]             # optional: openapi tag(s)
+            path: ""                  # пусто = сам group-prefix
+            handler: tasks.list       # имя, зарегистрированное через RegisterHandler
+            name: tasks.list          # обязательно: стабильное имя для OpenAPI / Routes()
+            tags: [tasks]             # опционально: openapi tag(s)
             summary: List tasks
             description: List the caller's tasks
-            middleware:               # route-level: appended AFTER group middleware
+            middleware:               # route-level: добавляется ПОСЛЕ group-middleware
               - require_role: [admin]
-            timeout: 5s               # optional: per-route timeout
-            cache:                    # optional: response cache
+            timeout: 5s               # опционально: per-route timeout
+            cache:                    # опционально: response-cache
               ttl: 10s
-              control: true           # respect Cache-Control: no-store
-              headers: true           # cache + replay response headers
+              control: true           # уважать Cache-Control: no-store
+              headers: true           # cache + replay response-headers
 ```
 
-### Typed body-bound handler
+### Типизированный body-bound хендлер
 
 ```go
 type CreateTaskRequest struct {
@@ -143,19 +143,19 @@ fibermap.RegisterHandlerWithBody(eng, "tasks.create",
         t := svc.Create(c.Data.UserID, req.Title)
         return c.Status(201).JSON(t)
     },
-    fibermap.WithResponse(201, Task{}),     // for OpenAPI
+    fibermap.WithResponse(201, Task{}),     // для OpenAPI
     fibermap.WithResponse(400, errs.Response{}),
 )
 ```
 
-Sibling helpers: `RegisterHandlerWithQuery`, `RegisterHandlerWithParams`, `RegisterHandlerWithHeaders`. All run `eng.validator` against the decoded struct before invoking the handler. Bind failures bubble up as `*errs.Error{Kind: Validation}` mapped to 400.
+Sibling-хелперы: `RegisterHandlerWithQuery`, `RegisterHandlerWithParams`, `RegisterHandlerWithHeaders`. Все прогоняют `eng.validator` против декодированного struct'а перед вызовом хендлера. Bind-failures всплывают как `*errs.Error{Kind: Validation}`, маппящееся в 400.
 
-### Combined binders — `RegisterHandlerWithInput`
+### Комбинированные binder'ы — `RegisterHandlerWithInput`
 
-When one endpoint needs more than one of `{body, params, query, headers}`
-typed together — e.g. PATCH /things/:id with body, path id, and a query
-filter — use `RegisterHandlerWithInput`. The Input struct declares any
-combination of fields named exactly `Body`, `Params`, `Query`, `Headers`:
+Когда один эндпоинт нуждается более чем в одном из `{body, params, query, headers}`
+типизированных вместе — например, PATCH /things/:id с body, path id и query
+filter — используйте `RegisterHandlerWithInput`. Input-struct объявляет любую
+комбинацию полей именами строго `Body`, `Params`, `Query`, `Headers`:
 
 ```go
 type UpdateThingInput struct {
@@ -170,30 +170,30 @@ type UpdateThingInput struct {
 
 fibermap.RegisterHandlerWithInput(eng, "things.update",
     func(c *fibermap.Context[AppCtx], in UpdateThingInput) error {
-        // in.Body, in.Params, in.Query already parsed + validated.
+        // in.Body, in.Params, in.Query уже распарсены + валидированы.
         return c.JSON(svc.Update(in.Params.ID, in.Body, in.Notify))
     })
 ```
 
-The kit reflects on Input **once at registration**, builds the binder list,
-and re-uses it per request — no reflection cost in the hot path beyond a
-field index lookup per recognised field. Fields with names outside the
-reserved set are ignored.
+Кит рефлектит Input **один раз на регистрации**, строит binder-список и
+переиспользует его per request — никакого cost'а рефлексии на hot path'е
+сверх field-index lookup'а на каждое recognised-поле. Поля с именами вне
+зарезервированного набора игнорируются.
 
-Each recognised field auto-attaches its matching `With*` option, so OpenAPI
-generation sees the full set of schemas without the caller threading any
-opts. Validation flows through `eng.validator` exactly as for the
-single-source variants.
+Каждое recognised-поле авто-прикрепляет своё matching `With*`-опцию, так
+что генерация OpenAPI видит полный набор схем без того, чтобы caller
+пробрасывал какие-либо opts. Валидация проходит через `eng.validator`
+точно так же, как для single-source вариантов.
 
-**Misuse panics at registration:**
-- `Input` is not a struct.
-- No recognised field (use plain `RegisterHandler` instead).
-- A recognised field whose type is not a struct.
+**Misuse panic'ит на регистрации:**
+- `Input` не struct.
+- Нет recognised-поля (используйте plain `RegisterHandler`).
+- recognised-поле, тип которого не struct.
 
-### Factory middleware (parameterised)
+### Factory middleware (параметризуемые)
 
 ```go
-// At registration time
+// На registration-time
 fibermap.RegisterMiddlewareFactory(eng, "require_role",
     func(args []string) (fibermap.MiddlewareFunc[AppCtx], error) {
         roles := args
@@ -205,59 +205,59 @@ fibermap.RegisterMiddlewareFactory(eng, "require_role",
         }, nil
     })
 
-// In routes.yaml
+// В routes.yaml
 middleware:
   - require_role: [admin]
-  - require_role: [editor, owner]   # different args = separate handler in dedup cache
+  - require_role: [editor, owner]   # разные args = отдельный handler в dedup-кеше
 ```
 
-### Mounting on an existing *fiber.App (tests + composability)
+### Mount на существующий *fiber.App (тесты + композируемость)
 
 ```go
 app := fiber.New(fiber.Config{
-    ErrorHandler: fibermap.ErrorHandler(logger),  // wires errs.HTTP into Fiber
+    ErrorHandler: fibermap.ErrorHandler(logger),  // подключает errs.HTTP в Fiber
 })
-app.Use(authObj.Bearer(auth.BearerOptional))      // pre-engine middlewares
+app.Use(authObj.Bearer(auth.BearerOptional))      // pre-engine middleware
 if err := eng.Mount(app); err != nil {
     return err
 }
 resp, _ := app.Test(httptest.NewRequest("GET", "/v1/ping", nil), -1)
 ```
 
-`Mount` is the only way to use the engine without `Run` — needed for in-process tests with `app.Test`.
+`Mount` — это единственный способ использовать engine без `Run` — нужен для in-process тестов с `app.Test`.
 
-### Programmatic routes (raw Fiber handlers)
+### Программные роуты (сырые Fiber-хендлеры)
 
 ```go
 eng.Add("POST", "/auth/refresh", "auth.refresh",
     func(c *fibermap.Context[AppCtx]) error {
-        return authObj.IssueRefresh(c.Ctx)  // wrap a raw *fiber.Ctx handler
+        return authObj.IssueRefresh(c.Ctx)  // оборачивает сырой *fiber.Ctx хендлер
     })
 ```
 
-Programmatic routes participate in OpenAPI generation and the engine's ContextBuilder + middleware chain. They cannot carry YAML middleware (use `WithUse` or wrap manually).
+Программные роуты участвуют в генерации OpenAPI и engine-овой цепочке ContextBuilder + middleware. Они не могут нести YAML-middleware (используйте `WithUse` или wrap руками).
 
-## Error model
+## Error-модель
 
-Every error returned by the library is `*fibermap.Error` (an alias around the package's own typed error type) with `Stage` (`parse` / `mount` / `register`) and a `Code*` constant. New error conditions add a `Code*` constant. Mount-stage errors are accumulated into one `errors.Join` so all problems surface in a single call.
+Каждая ошибка, возвращаемая библиотекой — `*fibermap.Error` (alias вокруг собственного типизированного error-типа пакета) со `Stage` (`parse` / `mount` / `register`) и `Code*`-константой. Новые error-условия добавляют `Code*`-константу. Mount-stage ошибки аккумулируются в один `errors.Join`, так что все проблемы всплывают в одном вызове.
 
-Use `fibermap.ErrorHandler(logger)` as the `fiber.Config.ErrorHandler` to wire `errs.HTTP` for handler errors and fall back to `*fiber.Error`'s own code for router-level (404/405) errors. Auto-logs 5xx via the passed logger; 4xx is silent by default.
+Используйте `fibermap.ErrorHandler(logger)` как `fiber.Config.ErrorHandler`, чтобы подключить `errs.HTTP` для handler-ошибок и fallback'нуться на собственный код `*fiber.Error` для router-level (404/405) ошибок. Авто-логирует 5xx через переданный логгер; 4xx silent по умолчанию.
 
 ## Observability
 
-`fibermap.Default[T]()` (or `Run` with the matching options) ships:
+`fibermap.Default[T]()` (или `Run` с matching-опциями) shipping'ит:
 
-- **slog access log** with method, path, status, duration_ms, request_id, response_size
-- **Prometheus metrics** at `/metrics` — `http_requests_total{method,path,status}`, `http_request_duration_seconds`, in-flight gauge
-- **Health endpoint** at `/healthz` — bypasses ContextBuilder so it works even when auth/db is down
-- **Readiness endpoint** (opt-in via `WithReadiness`) — runs supplied `Checker`s in parallel under a shared deadline; 200 `{"status":"ok"}` when every check passes, 503 `{"status":"degraded","checks":{name:err}}` otherwise. `db`, `clients/nats`, `clients/redis` ship `NewChecker(client, name)` adapters.
-- **Request ID** propagated as `X-Request-ID` header + stored in `c.Locals(fibermap.LocalsRequestID)`
+- **slog access-лог** с method, path, status, duration_ms, request_id, response_size
+- **Prometheus метрики** на `/metrics` — `http_requests_total{method,path,status}`, `http_request_duration_seconds`, in-flight gauge
+- **Health endpoint** на `/healthz` — обходит ContextBuilder, так что работает, даже когда auth/db лежит
+- **Readiness endpoint** (опционально через `WithReadiness`) — запускает переданные `Checker`'ы параллельно под shared deadline'ом; 200 `{"status":"ok"}` когда каждая проверка проходит, 503 `{"status":"degraded","checks":{name:err}}` иначе. `db`, `clients/nats`, `clients/redis` shipping'ят `NewChecker(client, name)` адаптеры.
+- **Request ID** пропагируется как `X-Request-ID` header + хранится в `c.Locals(fibermap.LocalsRequestID)`
 
-Pass a `*slog.Logger` to `WithRecover`, `WithRequestLogger`. nil = `slog.Default()`.
+Передайте `*slog.Logger` в `WithRecover`, `WithRequestLogger`. nil = `slog.Default()`.
 
 ## Idempotency-Key
 
-`fibermap.IdempotencyKey(store, opts...)` returns Stripe-style idempotency middleware: for unsafe methods (POST/PUT/PATCH/DELETE) the first response keyed by `X-Idempotency-Key` is captured into a pluggable `IdempotencyStore` and replayed verbatim on subsequent requests with the same key. Replays carry `X-Idempotent-Replay: true` so clients (and APM traces) can distinguish them.
+`fibermap.IdempotencyKey(store, opts...)` возвращает Stripe-style idempotency-middleware: для unsafe-методов (POST/PUT/PATCH/DELETE) первый ответ, keyed by `X-Idempotency-Key`, capture'ится в pluggable `IdempotencyStore` и replay'ится дословно на последующие запросы с тем же ключом. Replay'и несут `X-Idempotent-Replay: true`, чтобы клиенты (и APM-трассы) могли их отличать.
 
 ```go
 store := cache.NewIdempotencyStore(svc.Redis, "idem:payments:")
@@ -268,28 +268,28 @@ app.Post("/payments",
     ), createPayment)
 ```
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `WithIdempotencyHeader(name)` | `X-Idempotency-Key` | Custom inbound header. |
-| `WithIdempotencyTTL(d)` | 24h | How long replays remain available. |
-| `WithIdempotencyMethods(...)` | POST/PUT/PATCH/DELETE | Restrict / widen the cached method set. |
-| `WithIdempotencyMaxBodySize(n)` | 1 MiB | Oversize responses pass through uncached. |
-| `WithIdempotencyRequired()` | off | Missing header returns 400 with `idempotency_key_missing`. |
-| `WithIdempotencySkipStatus(...)` | 5xx | Status codes that should NOT be cached. |
+| `WithIdempotencyHeader(name)` | `X-Idempotency-Key` | Кастомный inbound-header. |
+| `WithIdempotencyTTL(d)` | 24h | Сколько replay'и остаются доступными. |
+| `WithIdempotencyMethods(...)` | POST/PUT/PATCH/DELETE | Сузить / расширить кешируемый method-set. |
+| `WithIdempotencyMaxBodySize(n)` | 1 MiB | Oversize-ответы проходят без кеширования. |
+| `WithIdempotencyRequired()` | off | Missing header возвращает 400 с `idempotency_key_missing`. |
+| `WithIdempotencySkipStatus(...)` | 5xx | Status-коды, которые НЕ должны кешироваться. |
 
-The default cache backend is `clients/cache.NewIdempotencyStore(svc.Redis, prefix)`. YAML routes wire the factory via `auth/fibermount.MountIdempotencyKeyFactory(eng, store)` and use `idempotency_key: ["1h", "required"]` in `routes.yaml`.
+Default cache-backend — `clients/cache.NewIdempotencyStore(svc.Redis, prefix)`. YAML-роуты подключают factory через `auth/fibermount.MountIdempotencyKeyFactory(eng, store)` и используют `idempotency_key: ["1h", "required"]` в `routes.yaml`.
 
-Concurrency note: two simultaneous requests with the same key may BOTH run the handler — the middleware does not lock around the store. Downstream systems must be idempotent themselves (transactional outbox + DB unique constraints is the canonical pattern); this middleware suppresses duplicate work across NON-overlapping requests only.
+Заметка по конкурентности: два одновременных запроса с тем же ключом могут ОБА запустить хендлер — middleware не лочит вокруг store. Downstream-системы должны быть идемпотентны сами (transactional outbox + DB unique constraints — это канонический паттерн); этот middleware подавляет duplicate-work только через НЕ-перекрывающиеся запросы.
 
 ## Request-scoped logger
 
-`fibermap.LoggerInjector(base)` is a Fiber middleware that derives a per-request `*slog.Logger` from `base` and stores it under `LocalsLogger`. Handlers read it back via `fibermap.LoggerFrom(c)` and get a logger pre-bound with:
+`fibermap.LoggerInjector(base)` — это Fiber-middleware, который выводит per-request `*slog.Logger` из `base` и хранит его под `LocalsLogger`. Хендлеры читают его обратно через `fibermap.LoggerFrom(c)` и получают логгер pre-bound с:
 
-- `method` (HTTP method)
-- `path` (routed pattern)
-- `request_id` (when `RequestID` middleware ran first)
-- `user_id` (when `LocalsAuthSubject` is populated — the kit's `service` package auto-wires this from the JWT principal)
-- `route` (when the route has a `.Name(...)` set)
+- `method` (HTTP-метод)
+- `path` (routed-pattern)
+- `request_id` (когда middleware `RequestID` запускался ранее)
+- `user_id` (когда `LocalsAuthSubject` populate'д — пакет `service` кита авто-подключает это из JWT-principal'а)
+- `route` (когда у роута установлен `.Name(...)`)
 
 ```go
 app.Use(fibermap.RequestID())
@@ -297,18 +297,18 @@ app.Use(fibermap.LoggerInjector(svc.Logger()))
 
 app.Post("/links", func(c *fiber.Ctx) error {
     fibermap.LoggerFrom(c).Info("link created", "code", code)
-    // emits {... method=POST path=/links request_id=... user_id=... code=...}
+    // эмитит {... method=POST path=/links request_id=... user_id=... code=...}
     return c.SendStatus(201)
 }).Name("links.create")
 ```
 
-`service.New` auto-installs `LoggerInjector` at the App level; opt out via `service.WithoutLoggerInjector()` when you wire your own.
+`service.New` авто-устанавливает `LoggerInjector` на уровне App; opt out через `service.WithoutLoggerInjector()`, когда вы подключаете свой.
 
-`LoggerFrom(nil)` and `LoggerFrom(c)` without the middleware installed both fall back to `slog.Default()` so handler code stays panic-free in any wiring context.
+`LoggerFrom(nil)` и `LoggerFrom(c)` без установленного middleware оба fallback'ятся на `slog.Default()`, так что handler-код остаётся panic-free в любом контексте проводки.
 
 ## Security headers
 
-`fibermap.SecurityHeaders(opts...)` returns a Fiber middleware that adds the OWASP baseline response headers — `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and an API-friendly `Content-Security-Policy`. Mount at the App level so `/metrics`, `/healthz`, `/readyz` carry the headers too:
+`fibermap.SecurityHeaders(opts...)` возвращает Fiber-middleware, который добавляет OWASP-baseline response-headers — `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin` и API-friendly `Content-Security-Policy`. Mount на уровне App, чтобы `/metrics`, `/healthz`, `/readyz` тоже несли headers:
 
 ```go
 app.Use(fibermap.SecurityHeaders(
@@ -317,26 +317,26 @@ app.Use(fibermap.SecurityHeaders(
 ))
 ```
 
-| Option | Effect |
+| Опция | Эффект |
 |---|---|
-| `WithHSTSMaxAge(seconds)` | Override the default 1-year `max-age` |
-| `WithHSTSIncludeSubdomains()` | Append `includeSubDomains` — every subdomain becomes HTTPS-only |
-| `WithHSTSPreload()` | Append `preload` (only valid with includeSubdomains + after registering at hstspreload.org) |
-| `WithoutHSTS()` | Drop the HSTS header (use for non-HTTPS deployments) |
-| `WithCSP(policy)` | Override the default API-friendly CSP |
-| `WithoutCSP()` | Drop the CSP header |
+| `WithHSTSMaxAge(seconds)` | Override default 1-year `max-age` |
+| `WithHSTSIncludeSubdomains()` | Append `includeSubDomains` — каждый sub-domain становится HTTPS-only |
+| `WithHSTSPreload()` | Append `preload` (валидно только с includeSubdomains + после регистрации в hstspreload.org) |
+| `WithoutHSTS()` | Дропнуть HSTS-header (для non-HTTPS деплоев) |
+| `WithCSP(policy)` | Override default API-friendly CSP |
+| `WithoutCSP()` | Дропнуть CSP-header |
 | `WithFrameOptions(value)` | Override `X-Frame-Options` (default `DENY`) |
 | `WithReferrerPolicy(value)` | Override `Referrer-Policy` (default `strict-origin-when-cross-origin`) |
 
-`service.New` auto-installs the middleware with defaults; pass `service.WithoutSecurityHeaders` or `service.WithSecurityHeaders(opts...)` to disable or customise.
+`service.New` авто-устанавливает middleware с defaults; передайте `service.WithoutSecurityHeaders` или `service.WithSecurityHeaders(opts...)`, чтобы отключить или кастомизировать.
 
-## Testing
+## Тестирование
 
-Use `fibermap/fibermaptest` for assertions over `Engine.Routes()` (route inventory checks). For request-level tests, use `Engine.Mount(app)` on a fresh `*fiber.App` and drive `app.Test(req)`.
+Используйте `fibermap/fibermaptest` для assertion'ов над `Engine.Routes()` (route-inventory проверки). Для request-level тестов используйте `Engine.Mount(app)` на свежем `*fiber.App` и драйвите `app.Test(req)`.
 
 ```go
 func TestRoutes(t *testing.T) {
-    eng := buildEngine(t)                    // your setup
+    eng := buildEngine(t)                    // ваш setup
     app := fiber.New(fiber.Config{ErrorHandler: fibermap.ErrorHandler(nil)})
     if err := eng.Mount(app); err != nil { t.Fatal(err) }
 
@@ -345,21 +345,22 @@ func TestRoutes(t *testing.T) {
 }
 ```
 
-## Limitations
+## Ограничения
 
-- **No built-in rate-limiting.** Use `gofiber/fiber/v2/middleware/limiter` via `WithUse`.
-- **No hot-reload of routes.yaml.** Loaded once at startup.
-- **No per-route auth declarative shorthand.** Use middleware factories registered via `auth/fibermount.MountMiddlewareFactories`.
-- **YAML errors at parse time, not edit time.** Use the routes.schema.json (see `fibermap/schema/`) in your editor for live validation.
-- **`Mount`/`Run` can be called only once per engine.** Re-mounting is a programmer error (panics).
+- **Нет built-in rate-limiting'а.** Используйте `gofiber/fiber/v2/middleware/limiter` через `WithUse`.
+- **Нет hot-reload routes.yaml.** Грузится один раз на старте.
+- **Нет per-route auth декларативного shorthand'а.** Используйте middleware-factory, зарегистрированные через `auth/fibermount.MountMiddlewareFactories`.
+- **YAML-ошибки на parse-time, не edit-time.** Используйте routes.schema.json (см. `fibermap/schema/`) в вашем редакторе для live-валидации.
+- **`Mount`/`Run` можно вызвать только один раз на engine.** Re-mount — это программерская ошибка (panic'ит).
 
-## See also
+## См. также
 
-- [`fibermap/bind`](bind/README.md) — request body/query/header/params decoding + validation
-- [`fibermap/factory`](factory/README.md) — helpers for building middleware factories
-- [`fibermap/fibermaptest`](fibermaptest/README.md) — testing helpers for Routes() inventory
-- [`fibermap/openapi`](openapi/README.md) — OpenAPI 3.0 spec generation from `Engine.Routes()`
-- [`fibermap/schema`](schema/README.md) — embedded JSON schema for routes.yaml
-- [`auth/fibermount`](../auth/fibermount/README.md) — mounts `bearer`/`require_scope`/`require_role` factories onto the engine
-- [`errs`](../errs/README.md) — the typed-error contract used by `ErrorHandler`
-- [`examples/urlshort/`](../examples/urlshort/README.md) — full integration example
+- [`fibermap/bind`](bind/README.md) — декодирование request body/query/header/params + валидация
+- [`fibermap/factory`](factory/README.md) — хелперы для сборки middleware-factory
+- [`fibermap/fibermaptest`](fibermaptest/README.md) — testing-хелперы для inventory Routes()
+- [`fibermap/openapi`](openapi/README.md) — генерация OpenAPI 3.0 spec'а из `Engine.Routes()`
+- [`fibermap/schema`](schema/README.md) — embedded JSON-schema для routes.yaml
+- [`auth/fibermount`](../auth/fibermount/README.md) — монтирует `bearer`/`require_scope`/`require_role` factory на engine
+- [`errs`](../errs/README.md) — typed-error контракт, используемый `ErrorHandler`'ом
+- [`examples/urlshort/`](../examples/urlshort/README.md) — полный интеграционный пример
+</content>

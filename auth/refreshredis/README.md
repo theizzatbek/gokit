@@ -1,11 +1,11 @@
 # auth/refreshredis
 
-Redis-backed `auth.RefreshStore` over `redis/go-redis/v9`. Each record is one HASH with `EXPIREAT`; family + subject SETs back the bulk-revoke paths. `Consume` runs as a single Lua script for atomicity (consume + reuse detection + family revoke all server-side).
+Redis-backed `auth.RefreshStore` поверх `redis/go-redis/v9`. Каждая запись — это один HASH с `EXPIREAT`; family + subject SET'ы обеспечивают bulk-revoke пути. `Consume` выполняется как один Lua-скрипт для атомарности (consume + reuse detection + family revoke — всё server-side).
 
-**Parent:** [../README.md](../README.md)
-**Import:** `github.com/theizzatbek/gokit/auth/refreshredis`
+**Родитель:** [../README.md](../README.md)
+**Импорт:** `github.com/theizzatbek/gokit/auth/refreshredis`
 
-## Use
+## Использование
 
 ```go
 import (
@@ -21,30 +21,30 @@ authObj, _ := auth.New[MyClaims](auth.Config{
 }, auth.WithRefreshStore(refreshredis.New(rdb)))
 ```
 
-## Notes
+## Заметки
 
-- **Same contract as [`refreshpg`](../refreshpg/README.md).** Picks Redis when you'd rather not extend your Postgres schema, or want sub-millisecond Consume.
-- **Auto-expiration via `EXPIREAT`.** Expired tokens GC themselves — no periodic cleanup job needed.
-- **Single Lua script per Consume.** Eliminates the round-trip race window between SELECT + UPDATE. Replicates correctly via Redis MULTI semantics.
-- **Family + subject SETs** index records for `RevokeFamily` and `RevokeAllForSubject` without scanning. SETs auto-EXPIRE alongside the longest-lived family member.
-- **Token hashes only.** Same security property as refreshpg — DB/cache leak doesn't compromise raw tokens.
-- **Cluster-safe** when keys for a given family hash to the same slot — Redis handles this via hash-tags built into the key naming scheme.
+- **Тот же контракт, что и у [`refreshpg`](../refreshpg/README.md).** Выбирайте Redis, когда не хочется расширять Postgres-схему, или нужен sub-ms Consume.
+- **Авто-expiration через `EXPIREAT`.** Истёкшие токены GC'ятся сами — periodic cleanup job не нужен.
+- **Один Lua-скрипт на Consume.** Устраняет round-trip race window между SELECT + UPDATE. Корректно реплицируется через семантику Redis MULTI.
+- **Family + subject SET'ы** индексируют записи для `RevokeFamily` и `RevokeAllForSubject` без сканирования. SET'ы авто-EXPIRE'ятся вместе с самым долгоживущим членом family.
+- **Только хеши токенов.** Та же security property, что и у refreshpg — leak DB/кэша не компрометирует сырые токены.
+- **Cluster-safe**, когда ключи для данной family хешатся в один слот — Redis обрабатывает это через hash-tags, встроенные в схему именования ключей.
 
-## Choosing between refreshpg and refreshredis
+## Выбор между refreshpg и refreshredis
 
-| Concern | refreshpg | refreshredis |
+| Критерий | refreshpg | refreshredis |
 |---|---|---|
-| Single source of truth | ✓ (in same DB as users) | ✗ (separate persistence) |
-| Sub-ms Consume latency | medium | ✓ |
-| Auto-expiration | ✗ (manual cleanup) | ✓ |
-| Failure-domain | shared with app DB | independent |
-| Operational overhead | none extra | Redis instance |
+| Единый source of truth | ✓ (в той же DB, что и users) | ✗ (отдельная persistence) |
+| Sub-ms Consume latency | средняя | ✓ |
+| Авто-expiration | ✗ (ручная чистка) | ✓ |
+| Failure-domain | общий с app DB | независимый |
+| Операционный overhead | без дополнительного | Redis-инстанс |
 
-Most services start with `refreshpg` and migrate to `refreshredis` only if refresh latency becomes a hotspot or they're separating short-lived state from durable data.
+Большинство сервисов начинают с `refreshpg` и мигрируют на `refreshredis` только если refresh latency становится hotspot'ом, или они разделяют short-lived state и durable data.
 
-## Testing
+## Тестирование
 
-Use [testcontainers-go/modules/redis](https://golang.testcontainers.org/modules/redis/):
+Используйте [testcontainers-go/modules/redis](https://golang.testcontainers.org/modules/redis/):
 
 ```go
 c, _ := tcredis.Run(ctx, "redis:7-alpine")
@@ -55,7 +55,8 @@ rdb := redis.NewClient(&redis.Options{Addr: endpoint})
 store := refreshredis.New(rdb)
 ```
 
-## See also
+## См. также
 
-- [`auth`](../README.md) — parent
-- [`auth/refreshpg`](../refreshpg/README.md) — Postgres-backed alternative with identical contract
+- [`auth`](../README.md) — родитель
+- [`auth/refreshpg`](../refreshpg/README.md) — Postgres-backed альтернатива с идентичным контрактом
+</content>

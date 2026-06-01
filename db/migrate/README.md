@@ -1,22 +1,20 @@
 # db/migrate
 
-Zero-dependency Postgres migration runner built on the kit's
-`*db.DB`. Conventions over configuration — drop SQL files into an
-`embed.FS`, call `migrate.Up(ctx, d, fsys)`, and the runner picks
-them up.
+Zero-dependency Postgres migration runner на базе китового `*db.DB`.
+Конвенции вместо конфигурации — кидайте SQL-файлы в `embed.FS`,
+вызывайте `migrate.Up(ctx, d, fsys)`, и runner их подхватит.
 
-## Why use it
+## Зачем это нужно
 
-Every service has the same migration boilerplate: list files,
-read them in order, exec them, remember which ones already ran.
-This package is the smallest reasonable answer:
+У каждого сервиса один и тот же migration boilerplate: перечислить
+файлы, прочитать их в порядке, выполнить, помнить какие уже
+запускались. Этот пакет — самый разумный минимальный ответ:
 
-- Schema-tracking table created automatically.
-- Files run in their own transaction by default (override via
-  directive).
-- Idempotent reruns skip already-applied files.
-- No external dependencies — `service.WithMigrations(fsys)` wires
-  the whole thing.
+- Schema-tracking таблица создаётся автоматически.
+- Файлы по умолчанию запускаются в своих транзакциях (override через директиву).
+- Идемпотентные перезапуски пропускают уже применённые файлы.
+- Никаких внешних зависимостей — `service.WithMigrations(fsys)`
+  подключает всё.
 
 ## Quickstart
 
@@ -32,46 +30,45 @@ var migrationsFS embed.FS
 
 svc, _ := service.New(ctx, cfg,
     service.WithMigrations(migrationsFS))
-// migrate.Up runs after buildDB, before any subsystem that reads
-// schema (auth.refreshpg, outbox).
+// migrate.Up запускается после buildDB, до любой подсистемы,
+// читающей схему (auth.refreshpg, outbox).
 ```
 
-Manual usage:
+Ручное использование:
 
 ```go
 fsys, _ := fs.Sub(migrationsFS, "migrations")
 if err := migrate.Up(ctx, svc.DB, fsys); err != nil { ... }
 ```
 
-## File naming convention
+## Конвенция именования файлов
 
-| Pattern | Role |
+| Шаблон | Роль |
 |---|---|
-| `NNNN_name.sql` | Up migration. NNNN is the version key; sort lexically — use zero-padded width for portability. |
-| `NNNN_name.down.sql` | Optional Down for the same NNNN. Required if you intend to run `migrate.Down`. |
+| `NNNN_name.sql` | Up-миграция. NNNN — version key; сортируется лексически — используйте zero-padded ширину для portability. |
+| `NNNN_name.down.sql` | Опциональный Down для того же NNNN. Обязателен, если вы планируете запускать `migrate.Down`. |
 
-`name` matches `[A-Za-z0-9._-]+`. Non-`.sql` files in the FS are
-silently ignored (README.md alongside migrations doesn't trip the
-parser).
+`name` матчит `[A-Za-z0-9._-]+`. Не-`.sql` файлы в FS молча
+игнорируются (README.md рядом с миграциями не валит парсер).
 
-## Directives
+## Директивы
 
-| Directive | Effect |
+| Директива | Эффект |
 |---|---|
-| `-- @migrate:no-transaction` on the first non-blank line | Runs the file OUTSIDE a transaction. Required for `CREATE INDEX CONCURRENTLY` and similar statements Postgres refuses to wrap. |
+| `-- @migrate:no-transaction` на первой непустой строке | Запускает файл ВНЕ транзакции. Нужно для `CREATE INDEX CONCURRENTLY` и подобных statements, которые Postgres отказывается оборачивать. |
 
-## API surface
+## API-поверхность
 
-| Function | Returns |
+| Функция | Возвращает |
 |---|---|
-| `Up(ctx, d, fsys)` | Apply every pending Up in version order. Skips applied. |
-| `Down(ctx, d, fsys, n)` | Roll back the n most recently applied versions. Errors with `migrate_unknown_down` if a rolled-back version has no `.down.sql`. |
-| `Version(ctx, d)` | Highest applied version, "" when empty. |
-| `List(ctx, d, fsys)` | Parsed Ups + Applied flag — for `kit migrate status` style tools. |
-| `Parse(fsys)` | Read-only parser; returns Up slice + Down lookup. Useful for CI checks. |
-| `Schema()` | (not used here — outbox-style schema embedding is per-feature.) |
+| `Up(ctx, d, fsys)` | Применяет все pending Up'ы в порядке версий. Пропускает применённые. |
+| `Down(ctx, d, fsys, n)` | Откатывает n самых недавно применённых версий. Ошибка `migrate_unknown_down`, если у откатываемой версии нет `.down.sql`. |
+| `Version(ctx, d)` | Самая высокая применённая версия, "" если пусто. |
+| `List(ctx, d, fsys)` | Распарсенные Up'ы + флаг Applied — для тулзов вроде `kit migrate status`. |
+| `Parse(fsys)` | Read-only парсер; возвращает Up-срез + Down lookup. Полезно для CI-проверок. |
+| `Schema()` | (здесь не используется — outbox-style embedding схемы per-feature.) |
 
-## Tracking table
+## Tracking-таблица
 
 ```sql
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -81,36 +78,37 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 )
 ```
 
-The runner bootstraps this table on every Up/Down/Version/List
-call. It's idempotent so reapplying schema doesn't fail.
+Runner bootstrap'ит эту таблицу на каждый Up/Down/Version/List
+вызов. Идемпотентно, так что повторное применение схемы не падает.
 
 ## Error codes
 
-| Code | Meaning |
+| Code | Смысл |
 |---|---|
-| `migrate_read_fs` | `embed.FS` read failed. |
-| `migrate_invalid_filename` | `.sql` file doesn't match `NNNN_name(.down)?.sql`. |
-| `migrate_duplicate_version` | Two Up files share an NNNN prefix. |
-| `migrate_orphan_down` | A `.down.sql` has no matching Up. |
-| `migrate_apply_failed` | A migration's SQL execution failed. |
-| `migrate_rollback_failed` | A Down migration's SQL execution failed. |
-| `migrate_track_failed` | INSERT/DELETE on schema_migrations failed. |
-| `migrate_bootstrap_failed` | schema_migrations CREATE TABLE failed. |
-| `migrate_unknown_down` | Down asked to roll back a version with no Down file. |
+| `migrate_read_fs` | Чтение `embed.FS` зафейлилось. |
+| `migrate_invalid_filename` | `.sql` файл не соответствует `NNNN_name(.down)?.sql`. |
+| `migrate_duplicate_version` | Два Up-файла делят NNNN-префикс. |
+| `migrate_orphan_down` | У `.down.sql` нет совпадающего Up. |
+| `migrate_apply_failed` | Выполнение SQL миграции зафейлилось. |
+| `migrate_rollback_failed` | Выполнение SQL Down-миграции зафейлилось. |
+| `migrate_track_failed` | INSERT/DELETE на schema_migrations зафейлился. |
+| `migrate_bootstrap_failed` | CREATE TABLE schema_migrations зафейлился. |
+| `migrate_unknown_down` | Down просили откатить версию без Down-файла. |
 
-## Limitations
+## Ограничения
 
-- **Postgres only.** Dialect-agnostic runners compromise the SQL-
-  forward feel; the kit targets pgx + Postgres by design.
-- **No cross-version rollback graph.** Down operates strictly on
-  the most-recently-applied N versions.
-- **No online schema changes.** pgroll / pg-osc style runners are
-  out of scope.
-- **Per-file Tx, not per-batch.** Up stops on first failure but
-  does NOT roll back successfully-applied earlier files in the
-  same call.
+- **Только Postgres.** Dialect-agnostic runner'ы компрометируют
+  SQL-forward ощущение; кит таргетит pgx + Postgres by design.
+- **Нет cross-version rollback графа.** Down работает строго с N
+  самыми недавно применёнными версиями.
+- **Нет online schema changes.** Runner'ы стиля pgroll / pg-osc
+  вне scope'а.
+- **Per-file Tx, не per-batch.** Up останавливается на первом
+  failure, но НЕ откатывает успешно применённые ранее файлы в том
+  же вызове.
 
-## See also
+## См. также
 
-- [`db`](../README.md) — the underlying pool wrapper.
-- [`service`](../../service/README.md) — `service.WithMigrations(fsys)` auto-wires the runner.
+- [`db`](../README.md) — обёртка пула под капотом.
+- [`service`](../../service/README.md) — `service.WithMigrations(fsys)` авто-подключает runner.
+</content>

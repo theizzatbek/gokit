@@ -1,11 +1,11 @@
 # errs/errsval
 
-Bridge from [go-playground/validator/v10](https://github.com/go-playground/validator) `ValidationErrors` into `*errs.Error{Kind: Validation}` with one `FieldError` per failed rule populated. Kept in a subpackage so `errs/` itself stays stdlib-only.
+Мост от [go-playground/validator/v10](https://github.com/go-playground/validator) `ValidationErrors` к `*errs.Error{Kind: Validation}` с одним `FieldError` на каждое сработавшее правило. Держится в подпакете, чтобы сам `errs/` оставался stdlib-only.
 
-**Parent:** [../README.md](../README.md)
-**Import:** `github.com/theizzatbek/gokit/errs/errsval`
+**Родитель:** [../README.md](../README.md)
+**Импорт:** `github.com/theizzatbek/gokit/errs/errsval`
 
-## Use
+## Использование
 
 ```go
 import (
@@ -27,26 +27,27 @@ func handler(c *fiber.Ctx) error {
         return errsval.FromValidator(err)
         // *errs.Error{Kind: Validation, Code: "invalid_body",
         //   Details: [{Field: "email", Rule: "required"}, …]}
-        // → 400 via fibermap.ErrorHandler
+        // → 400 через fibermap.ErrorHandler
     }
     // …
 }
 ```
 
-## Notes
+## Заметки
 
-- **`FromValidator(err)` is idempotent on already-typed errors.** If `err` isn't a `validator.ValidationErrors`, returns it unchanged — safe to wrap unconditionally.
-- **Each `validator.FieldError` becomes one `errs.FieldError`** with `Field` = the struct field name (or json tag, depending on validator's `RegisterTagNameFunc`), `Rule` = the failed tag, `Param` = the tag param (e.g. `"18"` for `min=18`), `Message` = a generic human-readable message.
-- **For nicer messages**, post-process the `Details`:
+- **`FromValidator(err)` идемпотентен на уже типизированных ошибках.** Если `err` не `validator.ValidationErrors`, возвращает её без изменений — безопасно оборачивать безусловно.
+- **Каждая `validator.FieldError` становится одной `errs.FieldError`** с `Field` = имя поля структуры (или json-тэг, в зависимости от `RegisterTagNameFunc` валидатора), `Rule` = сработавший тэг, `Param` = параметр тэга (например, `"18"` для `min=18`), `Message` = generic human-readable сообщение.
+- **Для более красивых сообщений** обрабатывайте `Details` после:
   ```go
   e := errsval.FromValidator(err).(*errs.Error)
   for i := range e.Details {
       e.Details[i].Message = nicer(e.Details[i])
   }
   ```
-- **`fibermap.bind` already wires this** — you rarely call `FromValidator` directly. Use `bind.Body[T](c, v)` and the conversion happens in the bind layer.
+- **`fibermap.bind` уже это подключает** — `FromValidator` напрямую вы вызываете редко. Используйте `bind.Body[T](c, v)`, и конвертация происходит в bind-слое.
 
-## See also
+## См. также
 
-- [`errs`](../README.md) — parent package
-- [`fibermap/bind`](../../fibermap/bind/README.md) — auto-invokes `FromValidator` on bind failures
+- [`errs`](../README.md) — родительский пакет
+- [`fibermap/bind`](../../fibermap/bind/README.md) — авто-вызывает `FromValidator` при bind-ошибках
+</content>

@@ -1,18 +1,24 @@
 # fibermap/openapi
 
-OpenAPI 3.0 spec generation + UI mounting from a `*fibermap.Engine[T]`. Reflects request/response models registered via `fibermap.WithBody`/`WithQuery`/`WithHeaders`/`WithParams`/`WithResponse` HandlerOptions, walks `Engine.Routes()`, emits a JSON spec, and (via `Generator.Mount`) installs `/openapi.json` + a `/docs` HTML viewer (Scalar UI by default).
+Генерация OpenAPI 3.0 spec'а + UI mount из `*fibermap.Engine[T]`. Рефлектит request/response модели, зарегистрированные через HandlerOptions `fibermap.WithBody`/`WithQuery`/`WithHeaders`/`WithParams`/`WithResponse`, обходит `Engine.Routes()`, эмитит JSON-спек и (через `Generator.Mount`) устанавливает `/openapi.json` + HTML-viewer на `/docs` (по умолчанию Scalar UI).
 
-**Import:** `github.com/theizzatbek/gokit/fibermap/openapi`
-**Depends on:** `github.com/theizzatbek/gokit/fibermap`
+**Импорт:** `github.com/theizzatbek/gokit/fibermap/openapi`
+**Зависит от:** `github.com/theizzatbek/gokit/fibermap`
 
-> **Tip:** When using `gokit/service`, you can declare Info / Servers /
-> SecuritySchemes / MiddlewareSecurity in `routes.yaml`'s top-level
-> `openapi:` block instead of passing them via Go code. See
+> **Tip:** При использовании `gokit/service` вы можете объявить Info /
+> Servers / SecuritySchemes / MiddlewareSecurity в top-level блоке
+> `openapi:` в `routes.yaml` вместо передачи через Go-код. См.
 > [service README](../../service/README.md#openapi-from-routesyaml).
 
-## Why use it
+## Зачем это нужно
 
-Writing OpenAPI by hand is a chore: routes and schemas duplicate code that's already in your handlers + routes.yaml. fibermap already has the route table (`Engine.Routes()`) and the typed-handler registration knobs (`WithBody`, `WithResponse`). `openapi.NewGenerator(eng).Mount()` joins them and gives you `/openapi.json` + `/docs` with no maintenance burden — and `tags`/`summary`/`description` from your routes.yaml flow straight in.
+Писать OpenAPI руками — это рутина: роуты и схемы дублируют код,
+который уже есть в ваших хендлерах + routes.yaml. fibermap уже имеет
+route-таблицу (`Engine.Routes()`) и typed-handler регистрационные
+ручки (`WithBody`, `WithResponse`). `openapi.NewGenerator(eng).Mount()`
+соединяет их и даёт вам `/openapi.json` + `/docs` без maintenance
+burden'а — и `tags`/`summary`/`description` из вашего routes.yaml
+проливаются прямо в.
 
 ## Quickstart
 
@@ -24,7 +30,7 @@ import (
 
 eng := fibermap.Default[AppCtx]()
 
-// Register handlers with body/response schemas for OpenAPI to reflect.
+// Регистрируйте handler'ы со схемами body/response, чтобы OpenAPI их отрефлектил.
 fibermap.RegisterHandlerWithBody(eng, "tasks.create",
     func(c *fibermap.Context[AppCtx], req CreateRequest) error {
         return c.Status(201).JSON(Task{})
@@ -35,7 +41,7 @@ fibermap.RegisterHandlerWithBody(eng, "tasks.create",
 
 eng.LoadFile("routes.yaml")
 
-// One call to mount /openapi.json + /docs
+// Один вызов для монтирования /openapi.json + /docs
 gen := openapi.NewGenerator(eng,
     openapi.WithInfo(openapi.Info{
         Title:       "Tasks API",
@@ -51,19 +57,19 @@ eng.Run(fibermap.WithAddr(":3000"))
 // → open http://localhost:3000/docs    (Scalar UI)
 ```
 
-## Public API
+## Публичный API
 
 ```go
 type Generator[T any] struct{ /* unexported */ }
 
 func NewGenerator[T any](eng *fibermap.Engine[T], opts ...Option) *Generator[T]
 
-// Mount installs /openapi.json + /docs as programmatic routes on the
-// engine. Must be called BEFORE eng.Mount/Run.
+// Mount устанавливает /openapi.json + /docs как программные роуты на
+// engine. Должен быть вызван ДО eng.Mount/Run.
 func (g *Generator[T]) Mount(opts ...MountOpts) error
 
-// Generate returns the raw JSON bytes — useful for `fibermap dump-openapi`
-// style tooling or writing the spec to a file at build time.
+// Generate возвращает сырые JSON-байты — полезно для тулзов
+// стиля `fibermap dump-openapi` или для записи спека в файл на build-time.
 func (g *Generator[T]) Generate() ([]byte, error)
 ```
 
@@ -72,24 +78,24 @@ type MountOpts struct {
     SpecPath   string  // default "/openapi.json"
     DocsPath   string  // default "/docs"
     Viewer     Viewer  // ScalarUI (default) | SwaggerUI | Redoc | NoViewer
-    SpecURL    string  // only when Viewer != NoViewer; default uses SpecPath
+    SpecURL    string  // только когда Viewer != NoViewer; default использует SpecPath
 }
 ```
 
-## Options
+## Опции
 
-| Option | Notes |
+| Опция | Заметки |
 |---|---|
-| `WithInfo(Info{Title, Version, Description, Contact})` | OpenAPI `info` block — set per service |
-| `WithServer(url, description)` | Adds an entry to `servers[]`; call multiple times for prod/staging |
-| `WithSecurity(name, SecurityScheme)` | Defines a `components.securitySchemes` entry (HTTPBearer/HTTPBasic/APIKey/OAuth2) |
-| `MapMiddlewareToSecurity(middleware, schemeName)` | Tells the generator "routes with this middleware require this security scheme" |
-| `SecurityMapping(schemeName, scheme, middlewares...)` | Convenience: `WithSecurity` + `MapMiddlewareToSecurity` in one call |
-| `WithDefaultResponse(status int, model any)` | Adds a default response (e.g. 400/401/403/404/500 = errs.Response{}) to every operation that doesn't override |
+| `WithInfo(Info{Title, Version, Description, Contact})` | OpenAPI `info`-блок — установите per service |
+| `WithServer(url, description)` | Добавляет запись в `servers[]`; вызывайте несколько раз для prod/staging |
+| `WithSecurity(name, SecurityScheme)` | Определяет запись в `components.securitySchemes` (HTTPBearer/HTTPBasic/APIKey/OAuth2) |
+| `MapMiddlewareToSecurity(middleware, schemeName)` | Говорит generator'у "роуты с этим middleware требуют эту security-схему" |
+| `SecurityMapping(schemeName, scheme, middlewares...)` | Удобство: `WithSecurity` + `MapMiddlewareToSecurity` в одном вызове |
+| `WithDefaultResponse(status int, model any)` | Добавляет default-response (например, 400/401/403/404/500 = errs.Response{}) в каждую операцию, которая не override'ит |
 
 ## Common patterns
 
-### Wiring security schemes
+### Подключение security-схем
 
 ```go
 gen := openapi.NewGenerator(eng,
@@ -99,9 +105,9 @@ gen := openapi.NewGenerator(eng,
 )
 ```
 
-Routes whose middleware list contains `bearer` automatically get `security: [{BearerAuth: []}]` in the generated spec.
+Роуты, чей middleware-список содержит `bearer`, автоматически получают `security: [{BearerAuth: []}]` в сгенерированном спеке.
 
-### Default error responses for every operation
+### Default error responses для каждой операции
 
 ```go
 gen := openapi.NewGenerator(eng,
@@ -113,25 +119,25 @@ gen := openapi.NewGenerator(eng,
 )
 ```
 
-Then in handler registrations you only declare the success response:
+Тогда в handler-регистрациях вы объявляете только success-response:
 
 ```go
 fibermap.RegisterHandlerWithBody(eng, "tasks.create",
     func(c *fibermap.Context[AppCtx], req CreateRequest) error { /* … */ },
-    fibermap.WithResponse(201, Task{}),  // success only — defaults fill the rest
+    fibermap.WithResponse(201, Task{}),  // только success — defaults заполняют остальное
 )
 ```
 
-### Choosing the docs UI
+### Выбор docs UI
 
 ```go
 gen.Mount(openapi.MountOpts{Viewer: openapi.ScalarUI})  // default — modern, fast
 gen.Mount(openapi.MountOpts{Viewer: openapi.SwaggerUI})
 gen.Mount(openapi.MountOpts{Viewer: openapi.Redoc})
-gen.Mount(openapi.MountOpts{Viewer: openapi.NoViewer})   // /openapi.json only
+gen.Mount(openapi.MountOpts{Viewer: openapi.NoViewer})   // только /openapi.json
 ```
 
-### Custom mount paths
+### Кастомные mount-пути
 
 ```go
 gen.Mount(openapi.MountOpts{
@@ -140,7 +146,7 @@ gen.Mount(openapi.MountOpts{
 })
 ```
 
-### Multiple environments — `servers[]`
+### Несколько окружений — `servers[]`
 
 ```go
 openapi.NewGenerator(eng,
@@ -155,39 +161,40 @@ openapi.NewGenerator(eng,
 ```go
 data, err := gen.Generate()
 _ = os.WriteFile("openapi.json", data, 0644)
-// Now diff against committed openapi.json in CI to catch unintended API changes
+// Теперь diff'те против закоммиченного openapi.json в CI, чтобы поймать непреднамеренные API-изменения
 ```
 
-## What gets reflected
+## Что рефлектится
 
-| Route metadata | Source |
+| Метаданные роута | Источник |
 |---|---|
 | `paths[<path>].<method>.summary` | YAML `summary:` |
 | `paths[<path>].<method>.description` | YAML `description:` |
 | `paths[<path>].<method>.tags` | YAML `tags:` (array) |
 | `paths[<path>].<method>.operationId` | YAML `name:` |
-| Request body schema | `fibermap.WithBody(StructType{})` HandlerOption |
-| Query parameters | `fibermap.WithQuery(StructType{})` — fields with `query:"name"` tag |
-| Path parameters | `fibermap.WithParams(StructType{})` + YAML `:name` segments |
-| Header parameters | `fibermap.WithHeaders(StructType{})` — fields with `header:"X-Name"` tag |
-| Response schemas | `fibermap.WithResponse(status, StructType{})` per-status |
-| Security requirement | `MapMiddlewareToSecurity` matching the route's middleware list |
-| Default responses | `WithDefaultResponse(status, StructType{})` |
+| Схема request body | HandlerOption `fibermap.WithBody(StructType{})` |
+| Query-параметры | `fibermap.WithQuery(StructType{})` — поля с тэгом `query:"name"` |
+| Path-параметры | `fibermap.WithParams(StructType{})` + YAML-сегменты `:name` |
+| Header-параметры | `fibermap.WithHeaders(StructType{})` — поля с тэгом `header:"X-Name"` |
+| Response-схемы | `fibermap.WithResponse(status, StructType{})` per-status |
+| Security-требование | `MapMiddlewareToSecurity`, соответствующий middleware-списку роута |
+| Default-responses | `WithDefaultResponse(status, StructType{})` |
 
-Schema reflection uses Go struct tags: `json:"name"`, `validate:"required,min=1,max=200"`, `description:"..."`. `validate` rules translate to OpenAPI `required` / `minLength` / `maximum` / `enum` etc.
+Schema-reflection использует Go struct-тэги: `json:"name"`, `validate:"required,min=1,max=200"`, `description:"..."`. Правила `validate` транслируются в OpenAPI `required` / `minLength` / `maximum` / `enum` и т.д.
 
-## Limitations
+## Ограничения
 
-- **Schema reflection covers JSON tags + validator rules.** Custom JSON marshallers / interfaces don't reflect.
-- **Discriminated unions** require manual `oneOf` schema overrides — not auto-derived.
-- **No spec versioning** — `WithInfo.Version` is the OpenAPI doc version, not API contract version. Bump it on breaking changes manually.
-- **Polymorphic responses** (different schema per status from the same handler) supported via multiple `WithResponse(status, model)` calls.
-- **YAML route metadata is the source of truth.** `summary`/`description`/`tags` set in struct tags or godoc are NOT reflected — keep them in routes.yaml.
-- **Scalar/Swagger/Redoc UI loads its CDN assets.** No internet at render time → blank UI. The JSON at `/openapi.json` still works.
+- **Schema reflection покрывает JSON-тэги + правила validator'а.** Кастомные JSON-маршаллеры / интерфейсы не рефлектятся.
+- **Discriminated unions** требуют ручных `oneOf` schema-override'ов — не auto-derived.
+- **Нет spec-версионирования** — `WithInfo.Version` — это OpenAPI doc-version, не API contract version. Бампайте на breaking changes руками.
+- **Polymorphic responses** (разная схема per status из одного handler'а) поддержаны через несколько вызовов `WithResponse(status, model)`.
+- **YAML route metadata — это source of truth.** `summary`/`description`/`tags`, установленные в struct-тэгах или godoc, НЕ рефлектятся — держите их в routes.yaml.
+- **Scalar/Swagger/Redoc UI грузят свои CDN-ассеты.** Нет интернета на render-time → blank UI. JSON на `/openapi.json` всё ещё работает.
 
-## See also
+## См. также
 
-- [`fibermap`](../README.md) — registers the handlers + metadata this package reflects
-- [`errs`](../../errs/README.md) — `errs.Response{}` for default error response schemas
-- [`examples/tasks`](../../examples/tasks/) — uses openapi for `/openapi.json` + `/docs` (Scalar UI)
-- [`examples/urlshort`](../../examples/urlshort/README.md) — minimal openapi mount
+- [`fibermap`](../README.md) — регистрирует хендлеры + метаданные, которые этот пакет рефлектит
+- [`errs`](../../errs/README.md) — `errs.Response{}` для default error-response схем
+- [`examples/tasks`](../../examples/tasks/) — использует openapi для `/openapi.json` + `/docs` (Scalar UI)
+- [`examples/urlshort`](../../examples/urlshort/README.md) — минимальный openapi mount
+</content>

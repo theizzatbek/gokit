@@ -1,37 +1,36 @@
 # batch
 
-Generic batched-handler dispatcher. Collects typed items via
-`Submit` and hands them to the caller's `HandlerFn` as a slice — one
-call per buffered batch. Per-item ack callbacks let upstream
-sources (e.g. the kit's natsmap pull subscriber) commit the whole
-batch atomically.
+Generic batched-handler диспетчер. Собирает типизированные элементы
+через `Submit` и отдаёт их в caller'ский `HandlerFn` срезом — один
+вызов на буферный батч. Per-item ack-колбэки позволяют upstream-источникам
+(например, kit'овому natsmap pull-подписчику) commit'ить весь батч атомарно.
 
-**Import:** `github.com/theizzatbek/gokit/batch`
-**Depends on:** `github.com/prometheus/client_golang/prometheus`, `errs/`
+**Импорт:** `github.com/theizzatbek/gokit/batch`
+**Зависит от:** `github.com/prometheus/client_golang/prometheus`, `errs/`
 
-## When to use
+## Когда использовать
 
-- Want one handler call per N items + every-item-or-none
-  acknowledgement.
-- Buffering an event stream into a bulk DB write
+- Нужен один вызов handler'а на N элементов + every-item-or-none
+  подтверждение.
+- Буферизуете event stream в bulk DB-запись
   (`INSERT/UPDATE … VALUES (..), (..), …`).
-- Throttling outbound batches (one HTTP push per second instead of
-  N pushes per second).
+- Throttling исходящих батчей (один HTTP-push в секунду вместо N
+  push'ов в секунду).
 
-For visit-counter-style aggregation where you want a key-keyed map
-collapsed before flush (sum across many events into one row per
-key), do the aggregation **inside** `HandlerFn` — that's a domain
-concern, not a kit concern.
+Для visit-counter-style агрегации, где вы хотите key-keyed map,
+collapsed до flush'а (sum across many events into one row per key),
+делайте агрегацию **внутри** `HandlerFn` — это domain-задача, не
+kit-задача.
 
-## Quickstart — direct use
+## Quickstart — прямое использование
 
 ```go
 b, err := batch.New[Event](batch.Config[Event]{
     HandlerFn: func(ctx context.Context, batch []Event) error {
-        return persistAll(ctx, batch) // one transaction
+        return persistAll(ctx, batch) // одна транзакция
     },
-    BatchSize: 1000,        // required
-    Interval:  time.Second, // default 1s when zero
+    BatchSize: 1000,        // обязательно
+    Interval:  time.Second, // дефолт 1s при zero
     Logger:    logger,
 })
 if err != nil { return err }
@@ -42,36 +41,35 @@ for evt := range events {
 }
 ```
 
-## Quickstart — with per-item ack
+## Quickstart — с per-item ack
 
 ```go
 b.Submit(event, func(err error) {
     if err == nil {
         msg.Ack()          // upstream queue commit
     } else {
-        msg.Nak()          // redeliver on err
+        msg.Nak()          // redeliver при err
     }
 })
 ```
 
-Every `ack` closure in a batch fires with the same `err` —
-`HandlerFn`'s return value. All-or-nothing semantics: a successful
-batch ack-confirms every item; a failed batch nak-redelivers every
-item.
+Каждое `ack`-замыкание в батче срабатывает с одним и тем же `err` —
+return value `HandlerFn`. All-or-nothing семантика: успешный батч
+ack-подтверждает каждый элемент; неудачный — nak-redeliver'ит каждый.
 
-The kit's `natsmap.RegisterBatchedHandler` uses exactly this pattern
-internally so YAML-declared subscribers get at-least-once batched
-delivery without users wiring Submit themselves.
+`natsmap.RegisterBatchedHandler` кита использует именно этот паттерн
+внутри, так что YAML-объявленные подписчики получают at-least-once
+batched-доставку без того, чтобы пользователи проводили Submit сами.
 
 ## Config
 
-| Field | Default | Notes |
+| Поле | По умолчанию | Заметки |
 |---|---|---|
-| `HandlerFn func(ctx, []T) error` | — | **Required.** Receives the buffered slice as one call. |
-| `BatchSize int` | — | **Required, > 0.** Size cap; reaching it fires an early flush. |
-| `Interval time.Duration` | `1s` | Buffer-age cap. Either trigger flushes. |
-| `Logger *slog.Logger` | nil (silent) | Warn entries on HandlerFn errors. |
-| `Metrics prometheus.Registerer` | nil (off) | Four `batch_*` collectors. |
+| `HandlerFn func(ctx, []T) error` | — | **Обязательно.** Получает буферный срез одним вызовом. |
+| `BatchSize int` | — | **Обязательно, > 0.** Кап размера; достижение его триггерит ранний flush. |
+| `Interval time.Duration` | `1s` | Кап возраста буфера. Любой триггер flush'ит. |
+| `Logger *slog.Logger` | nil (silent) | Warn-записи на HandlerFn ошибках. |
+| `Metrics prometheus.Registerer` | nil (off) | Четыре `batch_*` коллектора. |
 
 ## API
 
@@ -83,54 +81,42 @@ func (b *Batcher[T]) Flush(ctx context.Context) error
 func (b *Batcher[T]) Close() error
 ```
 
-- `Submit` is goroutine-safe — producer goroutines call it
-  concurrently. `nil` ack is supported for fire-and-forget items.
-- `Flush` is a manual drain (tests, interactive shutdown paths).
-- `Close` does one final flush, stops the goroutine, is idempotent.
-- `(*Batcher[T])(nil)` is safe on every method — Submit is a no-op,
-  Flush/Close return nil. Lets callers thread an optional batcher
-  through their code.
+- `Submit` goroutine-safe — производительные горутины вызывают её конкурентно. `nil` ack поддерживается для fire-and-forget элементов.
+- `Flush` — ручной дренаж (тесты, интерактивные shutdown-пути).
+- `Close` делает один финальный flush, останавливает горутину, идемпотентен.
+- `(*Batcher[T])(nil)` безопасен на каждом методе — Submit — no-op, Flush/Close возвращают nil. Позволяет caller'ам пробрасывать опциональный batcher через свой код.
 
-## Trigger model
+## Trigger-модель
 
-Two triggers run in parallel:
+Два триггера работают параллельно:
 
-1. **Interval ticker** — every `Interval`.
-2. **Size cap** — `Submit` brings the buffer to `BatchSize` distinct
-   items, a non-blocking signal jumps the queue and triggers an
-   immediate flush.
+1. **Interval ticker** — каждый `Interval`.
+2. **Size cap** — `Submit` доводит буфер до `BatchSize` различных элементов, non-blocking сигнал прыгает в очередь и триггерит немедленный flush.
 
-Both call the same dispatch path; `HandlerFn` runs **outside** the
-batcher's lock so high-frequency `Submit` calls don't stall on a
-slow downstream.
+Оба зовут один и тот же dispatch-путь; `HandlerFn` запускается **снаружи** batcher-лока, так что high-frequency `Submit` вызовы не stall'ятся на медленном downstream.
 
-## Errors
+## Ошибки
 
-`New` returns `*errs.Error` via `errors.Join` when required fields
-are missing — every gap surfaces at once.
+`New` возвращает `*errs.Error` через `errors.Join`, когда обязательные поля отсутствуют — каждый gap всплывает одновременно.
 
 | Code | Cause |
 |---|---|
 | `batch_missing_handler_fn` | `Config.HandlerFn` nil |
 | `batch_invalid_batch_size` | `Config.BatchSize` <= 0 |
 
-## Metrics
+## Метрики
 
-Pass `Config.Metrics = reg` to register four series:
+Передайте `Config.Metrics = reg`, чтобы зарегистрировать четыре серии:
 
-| Series | Type | Labels |
+| Серия | Тип | Labels |
 |---|---|---|
 | `batch_handlers_total` | Counter | `outcome=success\|error` |
 | `batch_items_processed_total` | Counter | — |
 | `batch_handler_duration_seconds` | Histogram | — |
 | `batch_batch_size` | Histogram | — |
 
-## See also
+## См. также
 
-- [`clients/natsmap`](../clients/natsmap/README.md) —
-  `RegisterBatchedHandler[T]` wires the batched-dispatch pattern
-  onto a JetStream Pull subscriber. YAML configures `batch_size`
-  and `batch_interval`; the kit handles Submit + ack/nak atomically.
-- `examples/urlshort/internal/links/visit_counter.go` — production
-  use case via the natsmap path: one slice of events per batch →
-  domain-side aggregation → one UPDATE … FROM (VALUES …).
+- [`clients/natsmap`](../clients/natsmap/README.md) — `RegisterBatchedHandler[T]` подключает паттерн batched-dispatch'а на JetStream Pull-подписчик. YAML конфигурирует `batch_size` и `batch_interval`; кит обрабатывает Submit + ack/nak атомарно.
+- `examples/urlshort/internal/links/visit_counter.go` — production use case через natsmap-путь: один срез событий на батч → domain-side агрегация → один UPDATE … FROM (VALUES …).
+</content>

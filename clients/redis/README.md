@@ -1,15 +1,15 @@
 # redisclient
 
-Thin Redis bootstrap for kit-based services. One call opens a
-`*redis.Client`, retries the initial PING with exponential backoff,
-and (when wired) routes every command through a Prometheus +
-`*slog.Logger` hook.
+Тонкий Redis-bootstrap для kit-based сервисов. Один вызов открывает
+`*redis.Client`, ретраит начальный PING с экспоненциальным backoff'ом
+и (когда подключено) маршрутит каждую команду через Prometheus +
+`*slog.Logger` хук.
 
-**Import:** `github.com/theizzatbek/gokit/clients/redis`
-**Depends on:** `github.com/redis/go-redis/v9`
+**Импорт:** `github.com/theizzatbek/gokit/clients/redis`
+**Зависит от:** `github.com/redis/go-redis/v9`
 
-Package name is `redisclient` to avoid colliding with go-redis's
-own `redis` package — same convention as `clients/nats` →
+Имя пакета — `redisclient`, чтобы не конфликтовать с собственным
+пакетом `redis` у go-redis — та же конвенция, что у `clients/nats` →
 `natsclient`.
 
 ## Quickstart
@@ -25,59 +25,58 @@ cli, err := redisclient.Connect(ctx, redisclient.Config{
 if err != nil { return err }
 defer cli.Close()
 
-rdb := cli.Redis()  // *redis.Client — full go-redis surface
+rdb := cli.Redis()  // *redis.Client — полная go-redis поверхность
 ```
 
-`service.New` auto-wires this when `service.Config.Redis.URL` is
-set — exposes the result as `svc.Redis`.
+`service.New` авто-подключает это, когда `service.Config.Redis.URL`
+установлен — экспонирует результат как `svc.Redis`.
 
 ## Config
 
-| Field | Env (with `REDIS_` prefix in service) | Notes |
+| Поле | Env (с префиксом `REDIS_` в service) | Заметки |
 |---|---|---|
-| `URL` | `REDIS_URL` | Required. `redis://[user:pass@]host:port[/db]`, `rediss://…` for TLS. |
-| `ConnectMaxRetries` | `REDIS_CONNECT_MAX_RETRIES` | 0 = no retry (one attempt). service auto-defaults to 5 when zero; pass `-1` to disable. |
-| `ConnectBackoffBase` | `REDIS_CONNECT_BACKOFF_BASE` | Doubles each attempt. service injects 1s when zero. |
-| `ConnectBackoffMax` | `REDIS_CONNECT_BACKOFF_MAX` | Caps the per-attempt wait. service injects 16s when zero. |
+| `URL` | `REDIS_URL` | Обязательно. `redis://[user:pass@]host:port[/db]`, `rediss://…` для TLS. |
+| `ConnectMaxRetries` | `REDIS_CONNECT_MAX_RETRIES` | 0 = no retry (одна попытка). service авто-устанавливает 5 при zero; передайте `-1`, чтобы отключить. |
+| `ConnectBackoffBase` | `REDIS_CONNECT_BACKOFF_BASE` | Удваивается на каждой попытке. service инжектит 1s при zero. |
+| `ConnectBackoffMax` | `REDIS_CONNECT_BACKOFF_MAX` | Кеп per-attempt wait. service инжектит 16s при zero. |
 
-## Options
+## Опции
 
-| Option | Notes |
+| Опция | Заметки |
 |---|---|
-| `WithLogger(*slog.Logger)` | Wires the connect-retry Warn + per-command observability via the go-redis Hook. |
-| `WithMetrics(prometheus.Registerer)` | Registers `redis_commands_total{cmd,outcome}`, `redis_command_duration_seconds{cmd}`, and `redis_pool_size_total{state}`. |
-| `WithRedisOptions(fn)` | Mutator for the parsed `*redis.Options` (PoolSize, MinIdleConns, ReadTimeout, custom TLSConfig — anything not expressible in the URL). |
+| `WithLogger(*slog.Logger)` | Подключает connect-retry Warn + per-command observability через go-redis Hook. |
+| `WithMetrics(prometheus.Registerer)` | Регистрирует `redis_commands_total{cmd,outcome}`, `redis_command_duration_seconds{cmd}` и `redis_pool_size_total{state}`. |
+| `WithRedisOptions(fn)` | Мутатор для распарсенных `*redis.Options` (PoolSize, MinIdleConns, ReadTimeout, custom TLSConfig — всё, что не выражается в URL). |
 
 ## Observability
 
-`WithMetrics` installs a go-redis Hook that records every command
-issued through `Client.Redis()` — including commands by user code,
-not just kit-issued ones.
+`WithMetrics` устанавливает go-redis Hook, который записывает каждую
+команду, выполняемую через `Client.Redis()` — включая команды
+пользовательского кода, не только kit-issued.
 
 - `redis_commands_total{cmd, outcome}` — counter. `outcome="error"`
-  excludes `redis.Nil` (the "key not found" sentinel is operational
-  success).
-- `redis_command_duration_seconds{cmd}` — histogram, default
-  buckets.
+  исключает `redis.Nil` (sentinel "key not found" — это операционный
+  успех).
+- `redis_command_duration_seconds{cmd}` — histogram, дефолтные
+  бакеты.
 - `redis_pool_size_total{state="hits|misses|idle|stale|total"}` —
-  gauge, refreshed from `PoolStats()` on every scrape.
+  gauge, обновляется из `PoolStats()` на каждом scrape.
 
-## Errors
+## Ошибки
 
-| Code | When |
+| Code | Когда |
 |---|---|
-| `redis_missing_url` | `Config.URL` empty at `Connect`. |
-| `redis_invalid_url` | `redis.ParseURL` rejected the URL. |
-| `redis_connect_failed` | PING failed after exhausting `ConnectMaxRetries`. Wraps the last underlying error. |
+| `redis_missing_url` | `Config.URL` пуст на `Connect`. |
+| `redis_invalid_url` | `redis.ParseURL` отклонил URL. |
+| `redis_connect_failed` | PING зафейлился после исчерпания `ConnectMaxRetries`. Оборачивает последнюю underlying ошибку. |
 
-All three propagate as `*errs.Error` with `Kind` set:
-`KindValidation` for the first two, `KindUnavailable` for the
-third. Service maps the connect failure to
-`service_redis_connect_failed` via `Wrap`.
+Все три прокидываются как `*errs.Error` с установленным `Kind`:
+`KindValidation` для первых двух, `KindUnavailable` для третьей.
+Service маппит connect failure в `service_redis_connect_failed`
+через `Wrap`.
 
-## See also
+## См. также
 
-- [`clients/cache`](../cache/README.md) — typed Get/Set/SetNotFound/
-  Invalidate cache layered on top of any `*redis.Client`.
-- [`service`](../../service/README.md) — `service.Config.Redis` +
-  `WithRedisOptions(...)` for the bundled wiring.
+- [`clients/cache`](../cache/README.md) — типизированный кэш Get/Set/SetNotFound/Invalidate поверх любого `*redis.Client`.
+- [`service`](../../service/README.md) — `service.Config.Redis` + `WithRedisOptions(...)` для интегрированной проводки.
+</content>

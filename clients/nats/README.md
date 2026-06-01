@@ -1,13 +1,13 @@
 # clients/nats
 
-Typed NATS / JetStream client wrapper (package `natsclient`). `Connect(ctx, cfg, opts...) (*Client, error)` opens a connection + JetStream context. Generic `Publisher[T]` / `Subscribe[T]` over an opt-in `Codec` (JSON default). Auto-ack handler model: handler returns nil → Ack, err → Nak with exponential backoff, decode-fail → Term (poison pill). `MaxInFlight` semaphore caps handler concurrency. Idempotent `EnsureStream` for app-managed stream lifecycle.
+Типизированная обёртка над NATS / JetStream клиентом (пакет `natsclient`). `Connect(ctx, cfg, opts...) (*Client, error)` открывает соединение + JetStream context. Generic `Publisher[T]` / `Subscribe[T]` поверх опциональной `Codec` (JSON по умолчанию). Auto-ack handler model: handler возвращает nil → Ack, err → Nak с экспоненциальным backoff'ом, decode-fail → Term (poison pill). `MaxInFlight` семафор cap'ит handler-concurrency. Идемпотентный `EnsureStream` для app-managed stream-lifecycle'а.
 
-**Import:** `github.com/theizzatbek/gokit/clients/nats` (package `natsclient` — naming avoids collision with `nats-io/nats.go`)
-**Depends on:** `nats-io/nats.go` + `prometheus/client_golang` + `github.com/theizzatbek/gokit/errs`
+**Импорт:** `github.com/theizzatbek/gokit/clients/nats` (пакет `natsclient` — именование избегает коллизии с `nats-io/nats.go`)
+**Зависит от:** `nats-io/nats.go` + `prometheus/client_golang` + `github.com/theizzatbek/gokit/errs`
 
-## Why use it
+## Зачем это нужно
 
-The raw `nats.go` API is `[]byte`-based and untyped. Every service ends up writing the same publish-encode-with-codec and subscribe-decode-Ack-Nak boilerplate, with subtle bugs around "what if decode fails forever — do we infinitely redeliver?". `natsclient` is that bundle: typed `Publisher[T]` + `Subscribe[T]` with auto-Ack, opinionated handler model (decode fail → Term, not redeliver), MaxInFlight backpressure, and stable error mapping into `*errs.Error`.
+Raw `nats.go` API — `[]byte`-based и нетипизированный. Каждый сервис в итоге пишет один и тот же publish-encode-with-codec и subscribe-decode-Ack-Nak boilerplate, с тонкими багами вокруг "что если decode фейлится навсегда — мы бесконечно re-deliver'им?". `natsclient` — это такой бандл: типизированный `Publisher[T]` + `Subscribe[T]` с auto-Ack, opinionated handler model (decode fail → Term, не redeliver), MaxInFlight backpressure и стабильным error-mapping'ом в `*errs.Error`.
 
 ## Quickstart
 
@@ -31,7 +31,7 @@ func main() {
     if err != nil { return err }
     defer c.Close()
 
-    // Idempotent — safe on every startup.
+    // Идемпотентно — безопасно на каждом старте.
     err = c.EnsureStream(ctx, natsclient.StreamConfig{
         Name:     "ORDERS",
         Subjects: []string{"orders.>"},
@@ -47,7 +47,7 @@ func main() {
     sub, err := natsclient.Subscribe[OrderCreated](ctx, c, "orders.created",
         func(ctx context.Context, m natsclient.Msg[OrderCreated]) error {
             if err := sendInvoice(ctx, m.Data); err != nil {
-                return err  // → Nak with exponential backoff
+                return err  // → Nak с экспоненциальным backoff'ом
             }
             return nil      // → Ack
         },
@@ -59,60 +59,57 @@ func main() {
 }
 ```
 
-## Configuration
+## Конфигурация
 
 ### `natsclient.Config`
 
-| Field | Default | Notes |
+| Поле | По умолчанию | Заметки |
 |---|---|---|
-| `URL` | — (required) | `nats://host:port`, comma-separated for cluster |
-| `Name` | filepath.Base(os.Args[0]) | Client name visible in NATS monitoring |
+| `URL` | — (обязательно) | `nats://host:port`, comma-separated для кластера |
+| `Name` | filepath.Base(os.Args[0]) | Имя клиента, видимое в NATS-мониторинге |
 | `Timeout` | 5s | Connect timeout |
-| `Token` | "" | Token auth (pick at most ONE auth method) |
-| `User`, `Password` | "" | Basic auth (both required together) |
-| `CredsFile` | "" | NATS 2.0+ JWT creds file path |
-| `NKeySeed` | "" | Raw NKey seed |
-| `MaxReconnects` | -1 (infinite) | Set positive to give up |
-| `ReconnectWait` | 2s | Delay between reconnect attempts |
-| `ConnectMaxRetries` | `0` (no retry) | K8s boot resilience |
-| `ConnectBackoffBase` | `0` | K8s boot resilience |
-| `ConnectBackoffMax` | `0` | K8s boot resilience |
+| `Token` | "" | Token-auth (выберите максимум ОДИН метод auth) |
+| `User`, `Password` | "" | Basic-auth (оба требуются вместе) |
+| `CredsFile` | "" | Путь к NATS 2.0+ JWT creds-файлу |
+| `NKeySeed` | "" | Сырой NKey-seed |
+| `MaxReconnects` | -1 (infinite) | Установите положительное, чтобы сдаться |
+| `ReconnectWait` | 2s | Задержка между попытками reconnect'а |
+| `ConnectMaxRetries` | `0` (no retry) | K8s boot-resilience |
+| `ConnectBackoffBase` | `0` | K8s boot-resilience |
+| `ConnectBackoffMax` | `0` | K8s boot-resilience |
 
-### Connect retry (K8s boot resilience)
+### Connect retry (K8s boot-resilience)
 
-Three optional Config fields cap initial-Connect retry behaviour:
+Три опциональных Config-поля cap'ят initial-Connect retry-поведение:
 
-| Field | Env (via `gokit/service`) | Default |
+| Поле | Env (через `gokit/service`) | По умолчанию |
 |---|---|---|
 | `ConnectMaxRetries` | `NATS_CONNECT_MAX_RETRIES` | `0` (no retry) |
 | `ConnectBackoffBase` | `NATS_CONNECT_BACKOFF_BASE` | `0` |
 | `ConnectBackoffMax` | `NATS_CONNECT_BACKOFF_MAX` | `0` |
 
-Kit default is fail-fast (1 attempt). When using `gokit/service`,
-the service auto-injects 5 retries with 1s base / 16s cap (~31s
-total). To disable, set `NATS_CONNECT_MAX_RETRIES=-1` or call
-`service.WithoutConnectRetry()`.
+Дефолт кита — fail-fast (1 попытка). При использовании `gokit/service`,
+service авто-инжектит 5 retries с 1s base / 16s cap (~31s
+total). Чтобы отключить, установите `NATS_CONNECT_MAX_RETRIES=-1` или вызовите `service.WithoutConnectRetry()`.
 
-This is initial-Connect retry only. Post-connection drops are
-handled by `nats.go`'s existing `MaxReconnects` + `ReconnectWait`
-(unchanged by this feature).
+Это retry только initial-Connect'а. Post-connection drops обрабатываются существующими `MaxReconnects` + `ReconnectWait` у `nats.go` (не меняются этой фичей).
 
-### Options
+### Опции
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `WithCodec(Codec)` | `JSONCodec` | Wire format for ALL publishers and subscribers |
-| `WithLogger(*slog.Logger)` | silent | Reconnect/disconnect events, handler errors, decode failures |
-| `WithMetrics(prometheus.Registerer)` | no collectors | publish/decode/handler counters + histograms |
-| `WithReconnectHandler(fn)` | none | Fires after each successful reconnect |
-| `WithDisconnectErrHandler(fn)` | none | Fires on each disconnect |
-| `WithClosedHandler(fn)` | none | Fires when connection is permanently closed |
+| `WithCodec(Codec)` | `JSONCodec` | Wire-format для ВСЕХ публишеров и подписчиков |
+| `WithLogger(*slog.Logger)` | silent | Reconnect/disconnect события, handler-ошибки, decode failures |
+| `WithMetrics(prometheus.Registerer)` | нет коллекторов | publish/decode/handler counters + histograms |
+| `WithReconnectHandler(fn)` | none | Срабатывает после каждого успешного reconnect'а |
+| `WithDisconnectErrHandler(fn)` | none | Срабатывает на каждом disconnect'е |
+| `WithClosedHandler(fn)` | none | Срабатывает, когда соединение окончательно закрыто |
 
 ## Common patterns
 
 ### Stream lifecycle — `EnsureStream`
 
-`EnsureStream` is idempotent: creates the stream if absent, validates config matches if present, returns the existing stream otherwise. Safe to call on every startup.
+`EnsureStream` идемпотентен: создаёт stream, если отсутствует, валидирует config, если присутствует, возвращает существующий stream в противном случае. Безопасно зватть на каждом старте.
 
 ```go
 err := c.EnsureStream(ctx, natsclient.StreamConfig{
@@ -128,26 +125,26 @@ err := c.EnsureStream(ctx, natsclient.StreamConfig{
 })
 ```
 
-If a stream with the same name exists with a different config, `EnsureStream` returns `*errs.Error{Code: "stream_config_invalid"}` — explicit failure so you don't silently run on the wrong config.
+Если stream с тем же именем существует с другим config'ом, `EnsureStream` возвращает `*errs.Error{Code: "stream_config_invalid"}` — explicit failure, так что вы молча не работаете на неверном config'е.
 
-### Publishing
+### Публикация
 
 ```go
 pub := natsclient.NewPublisher[OrderCreated](c)
 if err := pub.Publish(ctx, "orders.created", evt); err != nil {
-    // *errs.Error{Code: "publish_failed"} on JetStream rejection,
-    // *errs.Error{Code: "encode_failed"} on codec error
+    // *errs.Error{Code: "publish_failed"} при JetStream rejection,
+    // *errs.Error{Code: "encode_failed"} при codec-ошибке
 }
 
-// With Nats-Msg-Id for dedup
+// С Nats-Msg-Id для dedup'а
 err := pub.PublishWithHeaders(ctx, "orders.created", evt, map[string][]string{
     "Nats-Msg-Id": {evt.ID},
 })
 ```
 
-Publishes go through JetStream (subjects matching a stream) or core NATS (others) automatically — `Publisher` introspects the connected stream config.
+Публикации идут через JetStream (subjects, совпадающие со stream'ом) или core NATS (другие) автоматически — `Publisher` introspect'ит connected-stream config.
 
-### Subscribing — auto-ack handler model
+### Подписка — auto-ack handler model
 
 ```go
 sub, err := natsclient.Subscribe[OrderCreated](ctx, c, "orders.created",
@@ -159,7 +156,7 @@ sub, err := natsclient.Subscribe[OrderCreated](ctx, c, "orders.created",
     natsclient.WithMaxDeliver(5),
     natsclient.WithAckWait(30*time.Second),
     natsclient.WithBackoff(func(redeliveries int) time.Duration {
-        // exponential 1s, 5s, 25s, …
+        // экспонента 1s, 5s, 25s, …
         d := time.Duration(1<<redeliveries) * time.Second
         if d > time.Minute { return time.Minute }
         return d
@@ -168,29 +165,29 @@ sub, err := natsclient.Subscribe[OrderCreated](ctx, c, "orders.created",
 defer sub.Drain()  // graceful: stop pulling, finish in-flight, ack remaining
 ```
 
-| Handler returns | Action |
+| Handler возвращает | Действие |
 |---|---|
 | `nil` | Ack |
-| non-nil `error` | Nak (with backoff if configured) |
-| decode failure (before handler runs) | Term — poison pill, removed permanently from stream |
-| panic | Recovered, treated as error → Nak |
+| non-nil `error` | Nak (с backoff'ом, если сконфигурирован) |
+| decode failure (до запуска handler'а) | Term — poison pill, постоянно удалён из stream'а |
+| panic | Recover'ится, обрабатывается как error → Nak |
 
-After `WithMaxDeliver` is exceeded, the message is `Term`'d and logged at ERROR.
+После исчерпания `WithMaxDeliver`, message Term'ается и логируется на ERROR.
 
-### Subscribe options
+### Subscribe-опции
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `WithDurable(name)` | empty (ephemeral) | JetStream durable consumer name — survives subscriber restart |
-| `WithMaxInFlight(n)` | 1 | Concurrent handlers semaphore (backpressure) |
-| `WithAckWait(d)` | 30s | NATS redelivers if Ack not seen within `d` |
-| `WithMaxDeliver(n)` | 5 | Total delivery attempts before Term |
-| `WithBackoff(fn)` | exponential | `fn(redeliveries) time.Duration` |
-| `WithStartFrom(StartPolicy)` | StartNew | Where the consumer starts: `StartNew` / `StartAll` / `StartFromTime(t)` / `StartFromSequence(seq)` |
-| `WithFilterSubject(s)` | subject from call | Override subject filter for the consumer |
-| `WithQueueGroup(g)` | none | Distributed work-queue semantics (round-robin across queue members) |
+| `WithDurable(name)` | пусто (ephemeral) | Имя JetStream-durable consumer'а — переживает restart подписчика |
+| `WithMaxInFlight(n)` | 1 | Семафор concurrent handler'ов (backpressure) |
+| `WithAckWait(d)` | 30s | NATS redeliver'ит, если Ack не виден внутри `d` |
+| `WithMaxDeliver(n)` | 5 | Total попыток delivery до Term'а |
+| `WithBackoff(fn)` | экспонента | `fn(redeliveries) time.Duration` |
+| `WithStartFrom(StartPolicy)` | StartNew | Где consumer стартует: `StartNew` / `StartAll` / `StartFromTime(t)` / `StartFromSequence(seq)` |
+| `WithFilterSubject(s)` | subject из вызова | Override фильтра subject'а для consumer'а |
+| `WithQueueGroup(g)` | none | Distributed work-queue семантика (round-robin между queue-членами) |
 
-### Custom codec (e.g. protobuf)
+### Кастомный codec (например, protobuf)
 
 ```go
 type ProtoCodec struct{}
@@ -200,49 +197,49 @@ func (ProtoCodec) Decode(data []byte, v any) error { return proto.Unmarshal(data
 c, _ := natsclient.Connect(ctx, cfg, natsclient.WithCodec(ProtoCodec{}))
 ```
 
-One codec per Client — keeps the wire format consistent service-wide.
+Один codec на Client — держит wire-format консистентным service-wide.
 
-## Error model
+## Error-модель
 
-All errors are `*errs.Error` with stable `Code`:
+Все ошибки — `*errs.Error` со стабильным `Code`:
 
-| Code | Kind | When |
+| Code | Kind | Когда |
 |---|---|---|
-| `connect_failed` | Unavailable | Initial connect (DNS, refused, auth fail) |
+| `connect_failed` | Unavailable | Initial connect (DNS, refused, auth-fail) |
 | `jetstream_unavailable` | Unavailable | JetStream context unreachable |
-| `missing_url` / `auth_ambiguous` | Validation | Config errors at Connect |
+| `missing_url` / `auth_ambiguous` | Validation | Config-ошибки на Connect |
 | `invalid_nkey` | Validation | NKeySeed unparseable |
-| `stream_not_found` / `stream_op_failed` / `stream_config_invalid` | Various | EnsureStream + stream ops |
-| `consumer_op_failed` | Various | Subscribe / consumer ops |
-| `publish_failed` | Unavailable | JetStream / NATS publish failure |
-| `encode_failed` / `decode_failed` | Internal | Codec failures |
+| `stream_not_found` / `stream_op_failed` / `stream_config_invalid` | Различные | EnsureStream + stream-операции |
+| `consumer_op_failed` | Различные | Subscribe / consumer-операции |
+| `publish_failed` | Unavailable | Failure публикации JetStream / NATS |
+| `encode_failed` / `decode_failed` | Internal | Codec-failures |
 
-## OpenTelemetry trace propagation
+## OpenTelemetry trace-propagation
 
-Every publish path (`Publisher.Publish`, `PublishViaCodec`, `PublishRaw`) injects W3C `traceparent` / `tracestate` headers onto the outbound msg using the process-global OTel propagator (no-op when none is installed). Every subscribe path (`Subscribe`, `SubscribeRaw`) extracts them back into the handler's `ctx`, so handler spans are children of the publisher's span. Result: a Sentry / Jaeger / Tempo waterfall shows HTTP → NATS publish → NATS handle as one continuous trace across the async boundary.
+Каждый publish-путь (`Publisher.Publish`, `PublishViaCodec`, `PublishRaw`) инжектит W3C `traceparent` / `tracestate` headers в outbound msg, используя process-global OTel propagator (no-op, когда ни один не установлен). Каждый subscribe-путь (`Subscribe`, `SubscribeRaw`) экстрактит их обратно в handler'ский `ctx`, так что handler-span'ы — дети publisher-span'а. Результат: водопад Sentry / Jaeger / Tempo показывает HTTP → NATS publish → NATS handle как одну непрерывную трассу через async-границу.
 
 ```go
-otel.SetTextMapPropagator(propagation.TraceContext{}) // kit doesn't install one for you
+otel.SetTextMapPropagator(propagation.TraceContext{}) // кит не устанавливает один за вас
 ```
 
-The `Inject` path is **idempotent on existing `traceparent`**: when the headers map already carries one (typical of the `db/outbox` flow, where the original request's TraceContext was snapshotted into the row at Enqueue time), the propagator does NOT overwrite. This keeps the outbox Worker's later dispatch on the originating trace instead of a fresh worker-loop trace.
+Путь `Inject` **идемпотентен по существующему `traceparent`**: когда headers-map уже несёт его (типично для `db/outbox`-flow, где оригинальный TraceContext запроса был снапшочен в строку на Enqueue-time), propagator НЕ перезаписывает. Это держит более поздний dispatch worker'а outbox'а на originating-трассе, а не на свежей worker-loop-трассе.
 
-For the batched JetStream Pull path (`natsmap` with `batch_size: N`), the dispatch ctx is `context.Background()` (a batch can mix traces — picking one is wrong). Handlers iterating per-msg can extract per-event: `ctx = natsclient.ExtractTraceContext(ctx, msg.Headers)`.
+Для batched JetStream Pull-пути (`natsmap` с `batch_size: N`), dispatch ctx — `context.Background()` (батч может смешивать трассы — выбирать одну неправильно). Handler'ы, итерирующие per-msg, могут extract'ить per-event: `ctx = natsclient.ExtractTraceContext(ctx, msg.Headers)`.
 
 ## Observability
 
 ### slog
 
-- `Info "natsclient connect"` on first connect
-- `Warn "natsclient disconnected"` on each disconnect
-- `Info "natsclient reconnected"` on each successful reconnect
-- `Warn "natsclient handler error"` (on Nak)
+- `Info "natsclient connect"` на первом connect'е
+- `Warn "natsclient disconnected"` на каждом disconnect'е
+- `Info "natsclient reconnected"` на каждом успешном reconnect'е
+- `Warn "natsclient handler error"` (на Nak'е)
 - `Error "natsclient decode failed"` (poison pill Term)
-- `Warn "natsclient max deliver exceeded"` (Term after retries)
+- `Warn "natsclient max deliver exceeded"` (Term после retries)
 
-### Prometheus (opt-in)
+### Prometheus (опционально)
 
-| Metric | Type | Labels |
+| Метрика | Тип | Labels |
 |---|---|---|
 | `natsclient_published_total` | counter | `subject`, `status` |
 | `natsclient_publish_duration_seconds` | histogram | `subject` |
@@ -250,9 +247,9 @@ For the batched JetStream Pull path (`natsmap` with `batch_size: N`), the dispat
 | `natsclient_handler_duration_seconds` | histogram | `subject` |
 | `natsclient_in_flight` | gauge | `subject` |
 
-## Testing
+## Тестирование
 
-Use [testcontainers-go/modules/nats](https://golang.testcontainers.org/modules/nats/):
+Используйте [testcontainers-go/modules/nats](https://golang.testcontainers.org/modules/nats/):
 
 ```go
 c, _ := tcnats.Run(ctx, "nats:2-alpine", testcontainers.WithCmd("-js"))
@@ -268,19 +265,20 @@ client.EnsureStream(ctx, natsclient.StreamConfig{
 // subscribe + publish + assert
 ```
 
-For per-test isolation, use unique stream + subject names per test.
+Для per-test изоляции используйте уникальные stream + subject имена per test.
 
-## Limitations
+## Ограничения
 
-- **JetStream-first design.** Subjects covered by no stream auto-use core NATS (best-effort). If you need exclusively core NATS, use raw `nats.go` and skip this wrapper.
-- **One codec per Client.** Heterogeneous wire formats across topics require multiple `*Client` instances or a custom codec dispatching internally.
-- **Auto-ack model is opinionated.** Handler returns nil → Ack. No "explicit Ack later from a goroutine" — by design (avoids leaked Ack budget).
-- **`WithMaxInFlight` is local, not stream-wide.** For stream-wide backpressure use JetStream's own MaxAckPending on the consumer.
-- **No multi-stream subjects via one Subscribe.** One subscription = one subject (or NATS wildcard) on one stream.
-- **`Drain` blocks** until in-flight handlers finish. For force-shutdown use `Close` (loses in-flight).
+- **JetStream-first дизайн.** Subjects, не покрытые никаким stream'ом, авто-используют core NATS (best-effort). Если вам нужен исключительно core NATS, используйте сырой `nats.go` и пропустите эту обёртку.
+- **Один codec на Client.** Гетерогенные wire-format'ы по topic'ам требуют нескольких инстансов `*Client` или кастомного codec'а, диспатчящего внутри.
+- **Auto-ack model — opinionated.** Handler возвращает nil → Ack. Никаких "explicit Ack позже из горутины" — by design (избегает leaked Ack budget).
+- **`WithMaxInFlight` local, не stream-wide.** Для stream-wide backpressure'а используйте собственный MaxAckPending у JetStream'а на consumer'е.
+- **Нет multi-stream subjects через один Subscribe.** Одна subscription = один subject (или NATS-wildcard) на одном stream'е.
+- **`Drain` блокирует** пока in-flight handlers не закончат. Для force-shutdown используйте `Close` (теряет in-flight).
 
-## See also
+## См. также
 
-- [`errs`](../../errs/README.md) — error contract
-- [`examples/nats`](../../examples/nats/) — minimal publish + subscribe example
-- [`examples/urlshort`](../../examples/urlshort/README.md) — uses natsclient for `urlshort.link.{created,visited}` publish
+- [`errs`](../../errs/README.md) — error-контракт
+- [`examples/nats`](../../examples/nats/) — минимальный publish + subscribe пример
+- [`examples/urlshort`](../../examples/urlshort/README.md) — использует natsclient для публикации `urlshort.link.{created,visited}`
+</content>

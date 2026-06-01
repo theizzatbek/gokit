@@ -1,13 +1,13 @@
 # clients/apimap
 
-Declarative outbound HTTP layer symmetric to `fibermap` for inbound. Describe upstream APIs in YAML (clients, endpoints, methods, paths, encoding/decoding, per-endpoint timeout/retry overrides, per-client auth); call them by name at runtime via typed `Decode[T]` / `Exchange[Req, Resp]` dispatch.
+Декларативный исходящий HTTP-слой, симметричный `fibermap` для входящего. Описываете upstream API в YAML (клиенты, эндпоинты, методы, пути, encode/decode, per-endpoint timeout/retry-override'ы, per-client auth); зовёте их по имени в runtime через типизированный `Decode[T]` / `Exchange[Req, Resp]` dispatch.
 
-**Import:** `github.com/theizzatbek/gokit/clients/apimap`
-**Depends on:** `gopkg.in/yaml.v3` + `github.com/theizzatbek/gokit/errs` + `github.com/theizzatbek/gokit/clients/httpc`
+**Импорт:** `github.com/theizzatbek/gokit/clients/apimap`
+**Зависит от:** `gopkg.in/yaml.v3` + `github.com/theizzatbek/gokit/errs` + `github.com/theizzatbek/gokit/clients/httpc`
 
-## Why use it
+## Зачем это нужно
 
-`clients/httpc` gives you a `*http.Client` with retry. It does NOT solve **endpoint definition** — every project still hand-codes the same per-endpoint URL building, header setting, error-mapping, body-decoding boilerplate. That fragment is repeated, per-endpoint, across every service. `apimap` is the missing layer: endpoints live in YAML; the code calls them by name. One grep across `*.yaml` answers "what external APIs does this service call?"
+`clients/httpc` даёт вам `*http.Client` с retry. Он НЕ решает **endpoint definition** — каждый проект всё ещё руками кодит тот же per-endpoint URL-building, header-setting, error-mapping, body-decoding boilerplate. Этот фрагмент повторяется per-endpoint через каждый сервис. `apimap` — недостающий слой: эндпоинты живут в YAML; код зовёт их по имени. Один grep по `*.yaml` отвечает "какие внешние API этот сервис вызывает?"
 
 ## Quickstart
 
@@ -51,55 +51,55 @@ user, err := apimap.Decode[User](ctx, client, "github.get_user",
     apimap.Call{Path: map[string]string{"username": "torvalds"}})
 ```
 
-## YAML schema
+## YAML-схема
 
 ```yaml
 clients:
-  - name: <string>                          # required, unique within engine
-    base_url: <absolute URL>                # optional; omit for "open client" mode (caller passes Call.URL)
-    timeout: <duration>                     # optional → httpc.Config.Timeout
-    max_retries: <int>                      # optional → httpc.Config.MaxRetries
-    backoff_base: <duration>                # optional → httpc.Config.BackoffBase
-    backoff_max: <duration>                 # optional → httpc.Config.BackoffMax
-    default_headers:                        # optional, applied to every endpoint
+  - name: <string>                          # обязательно, уникально в engine
+    base_url: <absolute URL>                # опционально; пропустите для "open client" режима (caller передаёт Call.URL)
+    timeout: <duration>                     # опционально → httpc.Config.Timeout
+    max_retries: <int>                      # опционально → httpc.Config.MaxRetries
+    backoff_base: <duration>                # опционально → httpc.Config.BackoffBase
+    backoff_max: <duration>                 # опционально → httpc.Config.BackoffMax
+    default_headers:                        # опционально, применяется к каждому эндпоинту
       <Header-Name>: <value>
-    auth:                                   # optional; one of basic|bearer|header|custom|none
+    auth:                                   # опционально; один из basic|bearer|header|custom|none
       type: basic
       username: <string>
       password: <string>
-    # — or —
+    # — или —
     #   type: bearer
     #   token: <string>
-    # — or —
+    # — или —
     #   type: header
     #   name: <Header-Name>
     #   value: <string>
-    # — or —
+    # — или —
     #   type: custom
-    #   name: <signer-id>   # must match a RegisterAuth registration
-    # — or —
+    #   name: <signer-id>   # должен совпадать с регистрацией RegisterAuth
+    # — или —
     #   type: none
     endpoints:
-      - name: <string>                      # required, unique within client
+      - name: <string>                      # обязательно, уникально в client'е
         method: GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS
-        path: <string with {var} segments>  # e.g. /users/{username}
-        encode: json|form|raw|none          # default "none"
-        decode: json|raw|none               # default "none"
-        headers:                            # optional, merged over default_headers
+        path: <string с {var}-сегментами>   # например, /users/{username}
+        encode: json|form|raw|none          # по умолчанию "none"
+        decode: json|raw|none               # по умолчанию "none"
+        headers:                            # опционально, мерджится поверх default_headers
           <Header-Name>: <value>
-        timeout: <duration>                 # optional, overrides client-level
-        max_retries: <int>                  # optional, overrides client-level
-        backoff_base: <duration>            # optional
-        backoff_max: <duration>             # optional
+        timeout: <duration>                 # опционально, override client-level
+        max_retries: <int>                  # опционально, override client-level
+        backoff_base: <duration>            # опционально
+        backoff_max: <duration>             # опционально
 ```
 
 ### Env-var substitution
 
-`${VAR_NAME}` anywhere in the YAML is replaced from `os.Getenv` at LoadFile time (regex `[A-Z_][A-Z0-9_]*` — uppercase only). Missing env → `*errs.Error{Code: "apimap_env_var_unset"}`. Use this for secrets — never literal-write tokens.
+`${VAR_NAME}` где угодно в YAML заменяется из `os.Getenv` на LoadFile-time (regex `[A-Z_][A-Z0-9_]*` — только uppercase). Missing env → `*errs.Error{Code: "apimap_env_var_unset"}`. Используйте это для secrets — никогда не записывайте literal-токены.
 
-### Explicit env values via `WithEnv`
+### Явные env-значения через `WithEnv`
 
-If your service already has typed config, pass values explicitly instead of relying on process env:
+Если ваш сервис уже имеет typed-config, передайте значения явно вместо опоры на process env:
 
 ```go
 e := apimap.New(apimap.WithEnv(map[string]string{
@@ -108,9 +108,9 @@ e := apimap.New(apimap.WithEnv(map[string]string{
 e.LoadFile("clients.yaml")
 ```
 
-`WithEnv` map is consulted first; on miss, falls back to `os.LookupEnv`. Both miss → `apimap_env_var_unset`. Useful when typed config is the source of truth and you don't want apimap-only values polluting process env.
+`WithEnv` map consult'ируется первым; на miss fallback'ится на `os.LookupEnv`. Оба miss → `apimap_env_var_unset`. Полезно, когда typed-config — source of truth, и вы не хотите apimap-only значениями загрязнять process env.
 
-## Public API
+## Публичный API
 
 ```go
 type Engine struct{ /* unexported */ }
@@ -120,45 +120,45 @@ type Client struct{ /* unexported */ }
 func New() *Engine
 func (e *Engine) LoadFile(path string) error
 func (e *Engine) LoadBytes(b []byte) error
-func RegisterRequest[T any](e *Engine, endpoint string)       // optional — enforces Exchange[T,_]
-func RegisterResponse[T any](e *Engine, endpoint string)      // optional — enforces Decode[T] / Exchange[_,T]
+func RegisterRequest[T any](e *Engine, endpoint string)       // опционально — enforces Exchange[T,_]
+func RegisterResponse[T any](e *Engine, endpoint string)      // опционально — enforces Decode[T] / Exchange[_,T]
 func (e *Engine) Build(opts ...Option) (*Client, error)
 
-// Options
+// Опции
 func WithLogger(*slog.Logger) Option        // → httpc.WithLogger
-func WithMetrics(prometheus.Registerer) Option  // → apimap_* collectors (NOT forwarded to httpc)
+func WithMetrics(prometheus.Registerer) Option  // → коллекторы apimap_* (НЕ форвардятся в httpc)
 func WithBaseTransport(http.RoundTripper) Option // → httpc.WithBaseTransport
 
 // Runtime calls
 type Call struct {
-    Path    map[string]string  // {var} substitution; URL-escaped
-    Query   url.Values         // merged over endpoint defaults (per-key override)
-    Headers http.Header        // merged last over default + auth + endpoint headers
-    Body    any                // used by Do(); Exchange() takes body as separate arg
+    Path    map[string]string  // подстановка {var}; URL-escaped
+    Query   url.Values         // мерджится поверх endpoint-defaults (per-key override)
+    Headers http.Header        // мерджится последней поверх default + auth + endpoint-headers
+    Body    any                // используется Do(); Exchange() принимает body как отдельный аргумент
 }
 
-// Untyped — returns stdlib *http.Response, caller decodes + closes Body
+// Untyped — возвращает stdlib *http.Response, caller декодирует + закрывает Body
 func (c *Client) Do(ctx context.Context, endpoint string, call Call) (*http.Response, error)
 
-// Typed — uses endpoint.decode, maps non-2xx to *errs.Error, closes Body
+// Typed — использует endpoint.decode, маппит non-2xx в *errs.Error, закрывает Body
 func Decode[Resp any](ctx context.Context, c *Client, endpoint string, call Call) (Resp, error)
 
-// Typed with request body — encodes per endpoint.encode, decodes per endpoint.decode
+// Typed с request-body — кодирует per endpoint.encode, декодирует per endpoint.decode
 func Exchange[Req, Resp any](ctx context.Context, c *Client, endpoint string, body Req, call Call) (Resp, error)
 ```
 
 ## Common patterns
 
-### Headers precedence
+### Приоритет headers
 
-When multiple sources set the same header, last wins:
+Когда несколько источников устанавливают тот же header, последний побеждает:
 
 1. `client.default_headers` (YAML)
-2. **Auth-derived header** (`Authorization` from `auth:` block)
+2. **Auth-derived header** (`Authorization` из `auth:` блока)
 3. `endpoint.headers` (YAML)
 4. `Call.Headers` (per-call)
 
-Endpoint can override auth (rare; useful for debugging). `Call.Headers` always wins so tests + per-call overrides remain possible.
+Endpoint может override'нуть auth (редко; полезно для debug'а). `Call.Headers` всегда побеждает, так что тесты + per-call override'ы остаются возможны.
 
 ### Per-endpoint timeout/retry override
 
@@ -167,29 +167,29 @@ endpoints:
   - name: list_repos
     method: GET
     path: /users/{user}/repos
-    # uses client-level timeout / max_retries
+    # использует client-level timeout / max_retries
   - name: bulk_index
     method: POST
     path: /search/index
-    timeout: 60s       # this one is slow
-    max_retries: 0     # this one must not retry
+    timeout: 60s       # этот медленный
+    max_retries: 0     # этот не должен ретраиться
     encode: json
     decode: json
 ```
 
-At Build, endpoints with overrides get their own `*http.Client` (via `httpc.New`); endpoints without overrides share the per-API-client `*http.Client`. Free per-endpoint retry/timeout policy.
+На Build эндпоинты с override'ами получают свой собственный `*http.Client` (через `httpc.New`); эндпоинты без override'ов шарят per-API-client `*http.Client`. Free per-endpoint retry/timeout-политика.
 
-### Open client (ad-hoc URLs, multi-host fetcher)
+### Open client (ad-hoc URL'ы, multi-host fetcher)
 
-When the upstream isn't one stable origin — e.g. a metadata fetcher that pulls
-arbitrary user-supplied URLs, a webhook responder that posts to caller-provided
-endpoints, a sandbox/prod switchboard — omit `base_url` and pass the full URL
-per request via `Call.URL`:
+Когда upstream — не один стабильный origin — например, metadata-fetcher, который
+тащит произвольные user-supplied URL'ы, webhook-responder, который post'ит на
+caller-provided эндпоинты, sandbox/prod switchboard — пропустите `base_url` и
+передавайте полный URL per request через `Call.URL`:
 
 ```yaml
 clients:
   - name: web
-    # base_url omitted → "open client"
+    # base_url пропущен → "open client"
     timeout: 10s
     max_retries: 2
     default_headers:
@@ -197,7 +197,7 @@ clients:
     endpoints:
       - name: fetch
         method: GET
-        decode: raw       # most open-client uses are "give me the body bytes"
+        decode: raw       # большинство open-client использований — "дай мне body-байты"
 ```
 
 ```go
@@ -206,34 +206,34 @@ body, err := apimap.Decode[[]byte](ctx, client, "web.fetch", apimap.Call{
 })
 ```
 
-**Rules:**
-- The two URL sources are mutually exclusive — declaring `base_url` AND passing `Call.URL` returns `*errs.Error{Code: "apimap_url_conflict"}` at request time.
-- Open client + empty `Call.URL` → `apimap_missing_request_url`.
-- Open client + `Call.Path` → `apimap_unknown_path_var` (no template to substitute against).
-- `Call.Query` still merges over the URL's existing query string.
-- All client-level knobs (timeout, max_retries, backoff, default_headers, auth, custom signers) apply as usual.
+**Правила:**
+- Два источника URL взаимно исключающие — объявление `base_url` И передача `Call.URL` возвращает `*errs.Error{Code: "apimap_url_conflict"}` на request-time.
+- Open client + пустой `Call.URL` → `apimap_missing_request_url`.
+- Open client + `Call.Path` → `apimap_unknown_path_var` (нет template'а для подстановки).
+- `Call.Query` всё ещё мерджится поверх существующего URL query-string.
+- Все client-level knob'ы (timeout, max_retries, backoff, default_headers, auth, custom signers) применяются как обычно.
 
-**When to prefer open client over a raw `*http.Client`:** if you want the kit's unified observability (slog + Prometheus), the `*errs.Error` mapping on non-2xx, the typed `Decode[T] / Exchange[Req,Resp]` API, or YAML-level retry/timeout knobs — even when the URL is dynamic. If none of that matters, the bare `httpc.New(...)` is one less indirection.
+**Когда предпочесть open client сырому `*http.Client`:** если хотите унифицированную observability кита (slog + Prometheus), `*errs.Error`-маппинг на non-2xx, типизированный `Decode[T] / Exchange[Req,Resp]` API или YAML-level retry/timeout knob'ы — даже когда URL динамический. Если ничего из этого не важно, голый `httpc.New(...)` — на одну indirection меньше.
 
-**Connection pooling caveat:** open clients commonly call many different hosts. Go's `http.DefaultTransport` pools per-host, so this is fine for moderate traffic; if you're hitting thousands of distinct hosts/sec, tune `MaxIdleConnsPerHost` via a custom transport passed through `WithBaseTransport`.
+**Connection-pooling caveat:** open client'ы часто зовут много разных хостов. Go-овый `http.DefaultTransport` pool'ит per-host, так что это нормально для умеренного трафика; если бьёте тысячи различных хостов/sec, тюньте `MaxIdleConnsPerHost` через кастомный transport, переданный через `WithBaseTransport`.
 
-### Auth declared in YAML
+### Auth, объявленный в YAML
 
-Three header-style shapes plus one extensible shape:
+Три header-style формы плюс одна extensible-форма:
 
 ```yaml
 auth: {type: basic,  username: ${BASIC_USER}, password: ${BASIC_PASS}}
 auth: {type: bearer, token: ${API_TOKEN}}
 auth: {type: header, name: X-API-Key, value: ${API_KEY}}
-auth: {type: custom, name: payments_hmac}    # see below
-auth: {type: none}                            # or omit auth entirely
+auth: {type: custom, name: payments_hmac}    # см. ниже
+auth: {type: none}                            # или пропустите auth целиком
 ```
 
-For `basic` / `bearer` / `header` the resolved header is applied automatically before sending. `Call.Headers["Authorization"]` can still override per-call.
+Для `basic` / `bearer` / `header` резолвленный header применяется автоматически перед отправкой. `Call.Headers["Authorization"]` всё ещё может override'нуть per-call.
 
-### Custom signing (HMAC, mTLS-signed payloads, request-bound signatures)
+### Кастомное signing (HMAC, mTLS-signed payloads, request-bound signatures)
 
-When the upstream needs a signature that depends on the per-request method, path, body, timestamp or nonce — anything that cannot precompute into a static header — declare `auth.type=custom` and register a request-mutating function under the same `name`:
+Когда upstream нуждается в подписи, зависящей от per-request метода, пути, body, timestamp'а или nonce — всего, что нельзя precompute в статический header — объявите `auth.type=custom` и зарегистрируйте request-mutating функцию под тем же `name`:
 
 ```yaml
 clients:
@@ -251,8 +251,8 @@ eng := apimap.New()
 _ = eng.LoadFile("clients.yaml")
 apimap.RegisterAuth(eng, "payments_hmac", func(req *http.Request) error {
     ts := strconv.FormatInt(time.Now().Unix(), 10)
-    // Compute HMAC over method + path + ts + body (read via GetBody so the
-    // body stream stays available for the actual send + future retries).
+    // Compute HMAC over method + path + ts + body (читать через GetBody, так
+    // что body-stream остаётся доступным для actual send + будущих retries).
     var bodyBytes []byte
     if req.GetBody != nil {
         b, _ := req.GetBody()
@@ -271,21 +271,19 @@ apimap.RegisterAuth(eng, "payments_hmac", func(req *http.Request) error {
 client, err := eng.Build(...)
 ```
 
-**Layering and retries.** The signer sits *below* httpc's retry layer — it runs once per network attempt. If the server returns a transient 5xx/429 and httpc retries, the signer re-fires with a fresh `*http.Request` whose body is restored from `req.GetBody`, producing a fresh signature/timestamp. Timestamp-bearing schemes with tight clock-skew windows survive retries.
+**Layering и retries.** Signer сидит *под* retry-слоем httpc — он запускается один раз на network-attempt. Если server возвращает transient 5xx/429 и httpc ретраит, signer re-fires со свежим `*http.Request`, тело которого восстановлено из `req.GetBody`, продуцируя свежую signature/timestamp. Timestamp-bearing схемы с tight clock-skew окнами переживают retries.
 
-**Reading the body.** Use `req.GetBody()` (returns a fresh `io.ReadCloser`) — never `req.Body` directly, otherwise the stream is consumed before the upstream sees it. `httpc` populates `GetBody` for all body-carrying methods.
+**Чтение body.** Используйте `req.GetBody()` (возвращает свежий `io.ReadCloser`) — никогда `req.Body` напрямую, иначе stream потребляется до того, как upstream увидит его. `httpc` populate'ит `GetBody` для всех body-carrying методов.
 
-**Errors.** If `fn` returns an error, the request never leaves; the error surfaces as the `Do` / `Decode` / `Exchange` return value. Wrap with `*errs.Error{KindInternal}` if you want a stable Code.
+**Ошибки.** Если `fn` возвращает ошибку, request никогда не уходит; ошибка всплывает как return-value у `Do` / `Decode` / `Exchange`. Оборачивайте `*errs.Error{KindInternal}`, если хотите стабильный Code.
 
-**Build-time validation.** If YAML references `auth.name=foo` but `RegisterAuth(eng, "foo", ...)` was never called, `Build` returns `*errs.Error{Code: "apimap_unknown_custom_auth"}`. Duplicate `RegisterAuth` for the same name panics at registration time (programmer error).
+**Build-time валидация.** Если YAML ссылается на `auth.name=foo`, но `RegisterAuth(eng, "foo", ...)` никогда не вызывался, `Build` возвращает `*errs.Error{Code: "apimap_unknown_custom_auth"}`. Дубликат `RegisterAuth` для того же имени panic'ит на registration-time (программерская ошибка).
 
-**Per-client only.** Each client picks its own signer; endpoints inside a client all share that client's signer. If you need different signing schemes for different endpoints of the same API, split them into separate clients.
+**Только per-client.** Каждый клиент выбирает свой signer; эндпоинты внутри одного клиента все шарят его signer. Если нужны разные signing-схемы для разных эндпоинтов одного API, разделите на отдельные клиенты.
 
-### Typed Register* (optional, runtime-checked)
+### Типизированный Register* (опционально, runtime-checked)
 
-`RegisterRequest[T]` / `RegisterResponse[T]` are optional but, when set,
-they bind the endpoint to a specific Go type. `Decode[U]` / `Exchange[U,V]`
-then check that the call's generics match the registration at runtime:
+`RegisterRequest[T]` / `RegisterResponse[T]` опциональные, но, когда установлены, они bind'ят эндпоинт к специфическому Go-типу. `Decode[U]` / `Exchange[U,V]` потом проверяют, что generic'и вызова матчат регистрацию на runtime:
 
 ```go
 type IssueResp struct { Number int }
@@ -295,41 +293,36 @@ client, _ := eng.Build(...)
 // OK:
 out, _ := apimap.Decode[IssueResp](ctx, client, "gh.get_issue", apimap.Call{})
 
-// PANICS at call time with *errs.Error{Code: "apimap_type_mismatch"}:
+// PANIC'ит на call-time с *errs.Error{Code: "apimap_type_mismatch"}:
 _, _ = apimap.Decode[OtherShape](ctx, client, "gh.get_issue", apimap.Call{})
 ```
 
-Same check on the Req side for `Exchange`. Endpoints without a
-registration accept any generic — registration is opt-in. Build still
-validates that every registered name exists in the YAML
-(`apimap_registered_endpoint_missing`).
+Та же проверка на Req-стороне для `Exchange`. Эндпоинты без регистрации принимают любой generic — регистрация opt-in. Build всё ещё валидирует, что каждое зарегистрированное имя существует в YAML (`apimap_registered_endpoint_missing`).
 
-Why panic and not return an error? Because Decode[Wrong] is a programmer
-mistake — silent JSON-decode of the wrong shape leads to nil zeros in
-production. Panic surfaces it in the first test run.
+Почему panic, а не возврат ошибки? Потому что Decode[Wrong] — это программерская ошибка — silent JSON-decode неверной формы ведёт к nil-zero'ам в production. Panic высвечивает её на первом тест-ране.
 
-### Body encoding modes
+### Режимы encode body
 
-| `encode:` | Body type accepted | Content-Type set |
+| `encode:` | Принимаемый тип body | Установленный Content-Type |
 |---|---|---|
-| `none` (default) | any (ignored) | — |
-| `json` | any `json.Marshal`-able | `application/json` |
-| `form` | `url.Values` or `map[string]string` | `application/x-www-form-urlencoded` |
-| `raw` | `io.Reader` | — (caller sets via Call.Headers) |
+| `none` (по умолчанию) | любой (игнорируется) | — |
+| `json` | любой `json.Marshal`-able | `application/json` |
+| `form` | `url.Values` или `map[string]string` | `application/x-www-form-urlencoded` |
+| `raw` | `io.Reader` | — (caller ставит через Call.Headers) |
 
-Type mismatches return `*errs.Error{Code: "apimap_unsupported_body_type"}`.
+Type-mismatch'и возвращают `*errs.Error{Code: "apimap_unsupported_body_type"}`.
 
-### Response decoding modes
+### Режимы декодирования response
 
-| `decode:` | What `Decode[T]` returns |
+| `decode:` | Что `Decode[T]` возвращает |
 |---|---|
-| `none` (default) | `Decode[T]` returns zero T; body drained |
+| `none` (по умолчанию) | `Decode[T]` возвращает zero T; body drain'ится |
 | `json` | `json.NewDecoder(resp.Body).Decode(&out)` |
-| `raw` | T must be `[]byte` (whole body) or `io.ReadCloser` (caller closes) |
+| `raw` | T должен быть `[]byte` (всё body) или `io.ReadCloser` (caller закрывает) |
 
-### Error mapping (non-2xx in `Decode` / `Exchange`)
+### Маппинг ошибок (non-2xx в `Decode` / `Exchange`)
 
-| Status | `errs.Kind` | `errs.Error.Code` |
+| Статус | `errs.Kind` | `errs.Error.Code` |
 |---|---|---|
 | 400 | Validation | `apimap_<client>_<endpoint>_bad_request` |
 | 401 | Unauthorized | `apimap_<client>_<endpoint>_unauthorized` |
@@ -337,53 +330,53 @@ Type mismatches return `*errs.Error{Code: "apimap_unsupported_body_type"}`.
 | 404 | NotFound | `apimap_<client>_<endpoint>_not_found` |
 | 409 | Conflict | `apimap_<client>_<endpoint>_conflict` |
 | 429 | RateLimited | `apimap_<client>_<endpoint>_rate_limited` |
-| other 4xx | Validation | `apimap_<client>_<endpoint>_client_error` |
+| другие 4xx | Validation | `apimap_<client>_<endpoint>_client_error` |
 | 5xx | Internal | `apimap_<client>_<endpoint>_server_error` |
 
-`*errs.Error.Details` carries `[]FieldError` entries: `{status, url, body (truncated to 4KB)}`.
+`*errs.Error.Details` несёт `[]FieldError` записи: `{status, url, body (обрезано до 4KB)}`.
 
-`Do()` does NOT convert non-2xx to error — it passes `*http.Response` through unchanged. That's the escape hatch for streaming downloads and custom decoding.
+`Do()` НЕ конвертирует non-2xx в error — он передаёт `*http.Response` без изменений. Это escape-hatch для streaming-загрузок и кастомного декодирования.
 
-## Build-time validation
+## Build-time валидация
 
-`Engine.Build()` aggregates every validation failure via `errors.Join`. Codes:
+`Engine.Build()` агрегирует каждый validation-failure через `errors.Join`. Codes:
 
-| Code | When |
+| Code | Когда |
 |---|---|
-| `apimap_no_clients` | YAML loaded but `clients:` empty |
-| `apimap_duplicate_client` | two clients share `name` |
-| `apimap_duplicate_endpoint` | two endpoints share `name` within one client |
-| `apimap_missing_client_name` | client without `name` |
-| `apimap_invalid_base_url` | non-absolute or unparseable URL |
-| `apimap_invalid_method` | HTTP method outside the allowed set |
-| `apimap_invalid_path_var` | bad `{var}` shape or duplicate in one path |
+| `apimap_no_clients` | YAML загружен, но `clients:` пуст |
+| `apimap_duplicate_client` | два клиента шарят `name` |
+| `apimap_duplicate_endpoint` | два эндпоинта шарят `name` в одном клиенте |
+| `apimap_missing_client_name` | клиент без `name` |
+| `apimap_invalid_base_url` | non-absolute или unparseable URL |
+| `apimap_invalid_method` | HTTP-метод вне allowed-set'а |
+| `apimap_invalid_path_var` | плохая `{var}`-форма или дубликат в одном path'е |
 | `apimap_invalid_encode` / `apimap_invalid_decode` | unknown mode |
-| `apimap_auth_invalid_type` | type not in basic/bearer/header/none |
-| `apimap_auth_missing_field` | required field for the chosen type missing |
-| `apimap_env_var_unset` / `apimap_env_var_malformed` | `${VAR}` resolution failed |
-| `apimap_registered_endpoint_missing` | `Register*` named an endpoint not in YAML |
-| `apimap_already_built` | `Build()` called twice |
+| `apimap_auth_invalid_type` | type не в basic/bearer/header/none |
+| `apimap_auth_missing_field` | обязательное поле для выбранного типа отсутствует |
+| `apimap_env_var_unset` / `apimap_env_var_malformed` | разрешение `${VAR}` зафейлилось |
+| `apimap_registered_endpoint_missing` | `Register*` назвал эндпоинт не в YAML |
+| `apimap_already_built` | `Build()` вызван дважды |
 
-Runtime codes from `Do`/`Decode`/`Exchange`: `apimap_unknown_endpoint`, `apimap_missing_path_var`, `apimap_unknown_path_var`, `apimap_encode_failed`, `apimap_decode_failed`, `apimap_unsupported_body_type`, `apimap_unsupported_decode_type`, plus the dynamic per-endpoint status codes above.
+Runtime-коды из `Do`/`Decode`/`Exchange`: `apimap_unknown_endpoint`, `apimap_missing_path_var`, `apimap_unknown_path_var`, `apimap_encode_failed`, `apimap_decode_failed`, `apimap_unsupported_body_type`, `apimap_unsupported_decode_type`, плюс динамические per-endpoint status-коды выше.
 
 ## Observability
 
-`WithLogger(*slog.Logger)` flows through to `clients/httpc` (per-attempt request/retry/exhausted logs).
+`WithLogger(*slog.Logger)` проходит насквозь в `clients/httpc` (per-attempt request/retry/exhausted-логи).
 
-`WithMetrics(prometheus.Registerer)` registers apimap-owned collectors keyed by `<client>.<endpoint>`:
+`WithMetrics(prometheus.Registerer)` регистрирует apimap-owned коллекторы, keyed by `<client>.<endpoint>`:
 
-| Series | Labels | Type |
+| Серия | Labels | Тип |
 |---|---|---|
 | `apimap_requests_total` | `client`, `endpoint`, `status` | Counter |
-| `apimap_request_duration_seconds` | `client`, `endpoint`, `status` | Histogram (default buckets) |
+| `apimap_request_duration_seconds` | `client`, `endpoint`, `status` | Histogram (дефолтные бакеты) |
 
-`status` is bucketed (`2xx` / `3xx` / `4xx` / `5xx` / `error`) so label cardinality stays bounded — transport failures (timeout, refused, retry-exhausted) land on `error`. Precise status codes still live in the per-endpoint `*errs.Error.Code` (e.g. `apimap_github_get_user_not_found`).
+`status` бакетизирован (`2xx` / `3xx` / `4xx` / `5xx` / `error`), так что label-cardinality остаётся bounded — transport-failures (timeout, refused, retry-exhausted) приземляются в `error`. Точные status-коды всё ещё живут в per-endpoint `*errs.Error.Code` (например, `apimap_github_get_user_not_found`).
 
-The registry is NOT forwarded to the underlying `clients/httpc`. Earlier versions did, which made `apimap.WithMetrics(sharedReg)` panic in `service.New` — the shared registry already held `httpc_*` from the explicit `httpc.New` call. With the apimap-owned set, `service.New` auto-applies `apimap.WithMetrics(svc.Metrics())` and a single `/metrics` scrape returns the full picture: `apimap_*`, `httpc_*`, `db_*`, `nats_*`, `fibermap_http_*`.
+Registry НЕ форвардится в лежащий снизу `clients/httpc`. Более ранние версии форвардили, что заставляло `apimap.WithMetrics(sharedReg)` panic'ить в `service.New` — shared-registry уже держал `httpc_*` из explicit `httpc.New` вызова. С apimap-owned набором, `service.New` авто-применяет `apimap.WithMetrics(svc.Metrics())`, и один `/metrics`-scrape возвращает полную картину: `apimap_*`, `httpc_*`, `db_*`, `nats_*`, `fibermap_http_*`.
 
-## Testing
+## Тестирование
 
-Override `${MICROLINK_BASE_URL}` (or your env var) to point at a `httptest.NewServer`:
+Override'ните `${MICROLINK_BASE_URL}` (или ваш env var), чтобы указать на `httptest.NewServer`:
 
 ```go
 srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -404,18 +397,19 @@ client, _ := eng.Build()
 out, _ := apimap.Decode[Resp](context.Background(), client, "ml.get", apimap.Call{})
 ```
 
-## Limitations
+## Ограничения
 
-- **No OpenAPI ingest.** Manual YAML; future tool could derive from a remote API spec.
-- **No codegen.** Runtime dispatch only — types are registered at startup, not generated.
-- **No hot-reload.** YAML loaded once at startup.
-- **Status label is bucketed.** `apimap_requests_total{status=4xx}` is one series for every 4xx; per-status detail belongs in the per-endpoint `*errs.Error.Code` set rather than as labels (cardinality control).
-- **OAuth2/refresh-token flows out of scope.** Use `auth:` for one static credential; for dynamic-secret refresh on each call (e.g. periodic token rotation) declare `auth.type=custom` and have your signer fetch the current token, or wrap `http.RoundTripper` via `WithBaseTransport`.
-- **Per-endpoint `auth:` blocks not supported.** Auth is a property of the upstream API as a whole; override per-call via `Call.Headers`.
-- **Streaming uploads** beyond `encode: raw` with an `io.Reader` are out of scope.
+- **Нет OpenAPI ingest'а.** Ручной YAML; будущая тулза могла бы вывести из remote API-spec'а.
+- **Нет codegen'а.** Только runtime-dispatch — типы регистрируются на старте, не генерируются.
+- **Нет hot-reload'а.** YAML грузится один раз на старте.
+- **Status-label бакетизирован.** `apimap_requests_total{status=4xx}` — это одна серия для каждого 4xx; per-status-детали принадлежат per-endpoint набору `*errs.Error.Code`, а не label'ам (cardinality control).
+- **OAuth2/refresh-token flow вне scope'а.** Используйте `auth:` для одного статического credential'а; для dynamic-secret refresh на каждом вызове (например, periodic token rotation) объявите `auth.type=custom` и пусть ваш signer fetch'ит текущий токен, или оберните `http.RoundTripper` через `WithBaseTransport`.
+- **Per-endpoint блоки `auth:` не поддержаны.** Auth — это property upstream API целиком; override per-call через `Call.Headers`.
+- **Streaming-загрузки** за пределами `encode: raw` с `io.Reader` вне scope'а.
 
-## See also
+## См. также
 
-- [`clients/httpc`](../httpc/README.md) — the underlying `*http.Client` builder
-- [`errs`](../../errs/README.md) — error contract
-- [`examples/urlshort`](../../examples/urlshort/README.md) — apimap calling MicroLink in the enrich package
+- [`clients/httpc`](../httpc/README.md) — лежащий снизу builder `*http.Client`
+- [`errs`](../../errs/README.md) — error-контракт
+- [`examples/urlshort`](../../examples/urlshort/README.md) — apimap, зовущий MicroLink в пакете enrich
+</content>

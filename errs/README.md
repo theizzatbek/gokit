@@ -1,13 +1,13 @@
 # errs
 
-Typed domain errors with HTTP mapping. One `*Error` type carries a closed-enum `Kind`, a stable string `Code`, optional `Details` for field-level failures, and a wrapped `Cause`. `errs.HTTP(err)` maps to the wire shape every kit package agrees on.
+Типизированные доменные ошибки с маппингом в HTTP. Один тип `*Error` несёт closed-enum `Kind`, стабильный строковый `Code`, опциональный `Details` для field-level ошибок и обёрнутый `Cause`. `errs.HTTP(err)` маппит в wire-форму, на которую согласен каждый пакет кита.
 
-**Import:** `github.com/theizzatbek/gokit/errs`
-**Depends on:** stdlib only
+**Импорт:** `github.com/theizzatbek/gokit/errs`
+**Зависит от:** только stdlib
 
-## Why use it
+## Зачем это нужно
 
-Every service ends up inventing the same vocabulary: "not found", "validation failed", "unauthorized", "internal". `errs` is that vocabulary, plus an HTTP mapping table so `return err` from a handler produces the right status + JSON body without each handler re-deciding. Every other gokit package returns `*errs.Error` for known conditions — so the contract is uniform across `db`, `auth`, `clients/*`, `fibermap`.
+Каждый сервис в итоге изобретает один и тот же словарь: "not found", "validation failed", "unauthorized", "internal". `errs` — это словарь плюс HTTP-маппинг таблица, так что `return err` из хендлера производит правильный статус + JSON body, без того чтобы каждый хендлер заново это решал. Любой другой пакет gokit возвращает `*errs.Error` для известных условий — поэтому контракт единый для `db`, `auth`, `clients/*`, `fibermap`.
 
 ## Quickstart
 
@@ -17,7 +17,7 @@ import (
     xerrs "github.com/theizzatbek/gokit/errs"
 )
 
-// Constructing
+// Конструирование
 if user == nil {
     return xerrs.NotFound("user_not_found", "user does not exist")
 }
@@ -25,32 +25,32 @@ if err := svc.charge(); err != nil {
     return xerrs.Wrap(err, xerrs.KindUnavailable, "payment_provider_down", "stripe call failed")
 }
 
-// Consuming (e.g. in fibermap's ErrorHandler — already wired by fibermap.ErrorHandler)
+// Потребление (например, в fibermap'овском ErrorHandler — уже подключено через fibermap.ErrorHandler)
 status, body := xerrs.HTTP(err)  // status=404, body={code:"user_not_found", ...}
 return c.Status(status).JSON(body)
 ```
 
-## The `Kind` taxonomy
+## Таксономия `Kind`
 
-| Kind | HTTP status | Use when |
+| Kind | HTTP статус | Когда использовать |
 |---|---|---|
-| `KindNotFound` | 404 | Resource doesn't exist |
-| `KindAlreadyExists` | 409 | Unique-key collision on create |
-| `KindConflict` | 409 | Generic write conflict (concurrent edit, fk violation) |
-| `KindValidation` | 400 | Bad input — bad shape, failed validation rules |
-| `KindUnauthorized` | 401 | No / invalid credentials |
-| `KindPermission` | 403 | Authenticated but not allowed |
-| `KindRateLimited` | 429 | Too many requests |
-| `KindUnavailable` | 503 | Dependency down (DB, upstream) |
-| `KindTimeout` | 504 | Operation exceeded deadline |
-| `KindInternal` | 500 | Programmer error / unrecognised failure |
-| `KindUnknown` (zero value) | 500 | Don't construct directly; means "not classified" |
+| `KindNotFound` | 404 | Ресурс не существует |
+| `KindAlreadyExists` | 409 | Коллизия по уникальному ключу при create |
+| `KindConflict` | 409 | Конфликт записи (конкурентное редактирование, нарушение fk) |
+| `KindValidation` | 400 | Плохой ввод — неверная форма, неудачные правила валидации |
+| `KindUnauthorized` | 401 | Нет / невалидные credentials |
+| `KindPermission` | 403 | Аутентифицирован, но не разрешено |
+| `KindRateLimited` | 429 | Слишком много запросов |
+| `KindUnavailable` | 503 | Зависимость лежит (DB, upstream) |
+| `KindTimeout` | 504 | Операция превысила deadline |
+| `KindInternal` | 500 | Ошибка программиста / нераспознанный сбой |
+| `KindUnknown` (zero value) | 500 | Не конструируйте напрямую; означает "не классифицирована" |
 
-`HTTP(err)` returns 500 for any `error` that isn't `*errs.Error` — so unhandled errors fail safe instead of leaking internals.
+`HTTP(err)` возвращает 500 для любой `error`, которая не `*errs.Error` — так что необработанные ошибки fail safe, а не утекают внутрь.
 
-## Constructors
+## Конструкторы
 
-Every `Kind` has two flavours:
+У каждого `Kind` две версии:
 
 | Kind | Plain | Sprintf |
 |---|---|---|
@@ -65,20 +65,20 @@ Every `Kind` has two flavours:
 | Timeout | `errs.Timeout(code, msg)` | `errs.Timeoutf(...)` |
 | Internal | `errs.Internal(code, msg)` | `errs.Internalf(...)` |
 
-Wrap an existing `error`:
+Обернуть существующую `error`:
 
 ```go
 errs.Wrap(err, errs.KindInternal, "db_failure", "database operation failed")
 errs.Wrapf(err, errs.KindUnavailable, "stripe_call_failed", "stripe %s call failed", op)
 ```
 
-`errors.Unwrap`, `errors.Is`, `errors.As` all work on wrapped errors.
+`errors.Unwrap`, `errors.Is`, `errors.As` работают на обёрнутых ошибках.
 
 ## Common patterns
 
-### Code naming convention
+### Соглашение по именованию Code
 
-Stable, machine-readable, lowercase snake_case. Per-package or per-domain prefix avoids collisions:
+Стабильное, machine-readable, lowercase snake_case. Per-package или per-domain префикс избегает коллизий:
 
 ```
 user_not_found          // generic
@@ -87,9 +87,9 @@ db_failure
 apimap_github_get_user_not_found  // generated per-endpoint by clients/apimap
 ```
 
-Codes are public API for downstream consumers (they may switch on them in their tests or alerting). Treat code changes like API changes.
+Code'ы — это публичный API для downstream-consumers (они могут switch'иться по ним в тестах или алертах). Относитесь к изменению Code как к изменению API.
 
-### FieldError details for validation
+### `FieldError` details для валидации
 
 ```go
 errs.Validation("invalid_body", "request body failed validation",
@@ -98,7 +98,7 @@ errs.Validation("invalid_body", "request body failed validation",
 )
 ```
 
-Wire shape:
+Wire-форма:
 
 ```json
 {
@@ -111,9 +111,9 @@ Wire shape:
 }
 ```
 
-For converting `go-playground/validator` `ValidationErrors` automatically, use [`errs/errsval`](errsval/README.md).
+Для автоматической конвертации `go-playground/validator` `ValidationErrors` используйте [`errs/errsval`](errsval/README.md).
 
-### Attaching details after construction
+### Прикрепление details после конструирования
 
 ```go
 e := errs.Validation("invalid_body", "bad request").
@@ -122,7 +122,7 @@ e := errs.Validation("invalid_body", "bad request").
     )
 ```
 
-### Inspecting errors
+### Инспектирование ошибок
 
 ```go
 var e *xerrs.Error
@@ -134,20 +134,20 @@ if errors.As(err, &e) {
     log.Info("known failure", "code", e.Code)
 }
 
-// or by Kind:
+// или по Kind:
 if errors.Is(err, somethingSentinel) { /* … */ }
 
-// unwrap to original cause:
+// размотать до оригинальной причины:
 var pgErr *pgconn.PgError
 if errors.As(err, &pgErr) { /* … */ }
 ```
 
-### Flattening `errors.Join` aggregates
+### Распаковка агрегатов `errors.Join`
 
-Kit build/validate steps return `errors.Join(...)` when multiple
-`*xerrs.Error` failures co-occur. `errs.All` walks the join tree
-(plus standard `Unwrap` chains) and hands back every `*Error` it can
-reach, in depth-first order:
+Build/validate шаги кита возвращают `errors.Join(...)`, когда несколько
+сбоев `*xerrs.Error` происходят одновременно. `errs.All` обходит join-дерево
+(плюс стандартные цепочки `Unwrap`) и возвращает каждый `*Error`, до которого
+может дотянуться, в depth-first порядке:
 
 ```go
 if err := eng.Mount(app); err != nil {
@@ -158,12 +158,12 @@ if err := eng.Mount(app); err != nil {
 }
 ```
 
-Wrapped chains (`Wrap(rootErr, ...)`) surface both layers. Non-`*Error`
-members of a Join are skipped silently; `errs.All(nil)` returns `nil`.
+Wrap-цепочки (`Wrap(rootErr, ...)`) показывают оба уровня. Не-`*Error` члены
+Join'а молча пропускаются; `errs.All(nil)` возвращает `nil`.
 
-### Structured logging
+### Структурированное логирование
 
-`*Error` implements `slog.LogValuer`, so passing it to `slog` emits structured fields automatically:
+`*Error` реализует `slog.LogValuer`, так что передача его в `slog` автоматически эмитит структурированные поля:
 
 ```go
 logger.Error("create user failed", "err", err)
@@ -171,11 +171,11 @@ logger.Error("create user failed", "err", err)
 //    "err":{"kind":"validation","code":"user_exists","message":"…"}}
 ```
 
-## HTTP integration
+## HTTP интеграция
 
-`errs.HTTP(err) (int, Response)` is the single function fibermap's `ErrorHandler` calls. You almost never call it directly — register `fibermap.ErrorHandler(logger)` as your `fiber.Config.ErrorHandler` and `return err` from handlers.
+`errs.HTTP(err) (int, Response)` — это та единственная функция, которую вызывает fibermap'овский `ErrorHandler`. Вы почти никогда её не вызываете напрямую — зарегистрируйте `fibermap.ErrorHandler(logger)` как ваш `fiber.Config.ErrorHandler` и делайте `return err` из хендлеров.
 
-For non-fibermap servers (e.g. stdlib `net/http`):
+Для не-fibermap серверов (например, stdlib `net/http`):
 
 ```go
 func handle(w http.ResponseWriter, r *http.Request) {
@@ -191,9 +191,9 @@ func handle(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-## Testing
+## Тестирование
 
-Match Kind + Code precisely:
+Точно матчите Kind + Code:
 
 ```go
 err := svc.Delete(ctx, "missing")
@@ -209,17 +209,18 @@ if e.Code != "user_not_found" {
 }
 ```
 
-For testing `errors.Join`-wrapped chains, walk the multi-error tree (see `examples/urlshort/internal/config/config_test.go::containsCode` for a reference helper).
+Для тестирования цепочек, обёрнутых через `errors.Join`, обходите multi-error дерево (см. `examples/urlshort/internal/config/config_test.go::containsCode` как референсный хелпер).
 
-## Limitations
+## Ограничения
 
-- **No stack traces.** Causes are wrapped, not framed. Use `slog` with `Cause` (the wrapped error) if you need source info.
-- **No retryability flag.** A `Kind` doesn't say "retry me". Decide at the call site based on Kind (e.g. `Unavailable`/`Timeout` → retry; `Validation` → don't).
-- **No localisation.** `Message` is for humans-but-developers. Translate at the UI layer.
-- **`Code` is your contract.** Never reuse a code for a different meaning between versions.
+- **Нет стектрейсов.** Causes оборачиваются, а не фреймятся. Используйте `slog` с `Cause` (обёрнутая ошибка), если нужна source info.
+- **Нет флага retryability.** `Kind` не говорит "retry me". Решайте на call-site по Kind'у (например, `Unavailable`/`Timeout` → retry; `Validation` → нет).
+- **Нет локализации.** `Message` — для humans-but-developers. Переводите на UI-слое.
+- **`Code` — это ваш контракт.** Никогда не переиспользуйте код для другого смысла между версиями.
 
-## See also
+## См. также
 
-- [`errs/errsval`](errsval/README.md) — bridge from `go-playground/validator` to `*errs.Error{Kind: Validation}`
-- [`fibermap`](../fibermap/README.md) — `ErrorHandler` wires `errs.HTTP` into Fiber
-- [`db`](../db/README.md), [`auth`](../auth/README.md), [`clients/*`](../clients/) — every package returns `*errs.Error`
+- [`errs/errsval`](errsval/README.md) — мост от `go-playground/validator` к `*errs.Error{Kind: Validation}`
+- [`fibermap`](../fibermap/README.md) — `ErrorHandler` подключает `errs.HTTP` к Fiber
+- [`db`](../db/README.md), [`auth`](../auth/README.md), [`clients/*`](../clients/) — каждый пакет возвращает `*errs.Error`
+</content>
