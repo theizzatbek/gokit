@@ -2,10 +2,9 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 
+	"github.com/theizzatbek/gokit/db/lock"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
@@ -68,53 +67,33 @@ func (s *Service[T, C]) AddSingletonCron(name, schedule string, fn JobFn) error 
 	return s.AddCron(name, schedule, wrapped)
 }
 
-// wrapSingleton produces a JobFn that runs fn under a
-// pg_try_advisory_lock. Reused by both buildCron (config-time
+// wrapSingleton produces a JobFn that runs fn under a kit
+// db/lock advisory lock. Reused by both buildCron (config-time
 // jobs) and AddSingletonCron (post-build).
+//
+// Skip semantics: when another replica holds the lock,
+// db/lock.TryAcquire returns (false, nil, nil), which we surface
+// as a Debug log + nil return — the missed tick is the expected
+// outcome, not an error.
 func (s *Service[T, C]) wrapSingleton(name string, fn JobFn) JobFn {
-	lockID := jobLockID(name)
+	lk := lock.New(s.DB, "cron."+name)
 	return func(ctx context.Context) error {
-		conn, err := s.DB.Pool().Acquire(ctx)
+		acquired, release, err := lk.TryAcquire(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
 			return xerrs.Wrap(err, xerrs.KindUnavailable, CodeSingletonCronLockAcquire,
-				"service: singleton cron acquire conn")
+				"service: singleton cron lock")
 		}
-		defer conn.Release()
-		var ok bool
-		if err := conn.QueryRow(ctx,
-			"SELECT pg_try_advisory_lock($1)", lockID).Scan(&ok); err != nil {
-			return xerrs.Wrap(err, xerrs.KindUnavailable, CodeSingletonCronLockAcquire,
-				"service: pg_try_advisory_lock")
-		}
-		if !ok {
+		if !acquired {
 			if s.logger != nil {
 				s.logger.Debug("cron: singleton tick skipped (lock held elsewhere)",
 					"name", name)
 			}
 			return nil
 		}
-		defer func() {
-			// Best-effort unlock — log on failure but don't fail
-			// the job. The session-level lock auto-releases when
-			// the conn is returned to the pool / closed anyway.
-			if _, uerr := conn.Exec(context.Background(),
-				"SELECT pg_advisory_unlock($1)", lockID); uerr != nil && s.logger != nil {
-				s.logger.Warn("cron: singleton unlock failed",
-					"name", name, "err", uerr.Error())
-			}
-		}()
+		defer release()
 		return fn(ctx)
 	}
-}
-
-// jobLockID maps a job name to a stable int64 advisory-lock key —
-// first 8 bytes of sha256(name), interpreted as big-endian signed
-// int64. The signed cast loses 1 bit of entropy but matches
-// Postgres's `bigint` signature.
-func jobLockID(name string) int64 {
-	sum := sha256.Sum256([]byte(name))
-	return int64(binary.BigEndian.Uint64(sum[:8]))
 }

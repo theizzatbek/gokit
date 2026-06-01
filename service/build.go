@@ -21,6 +21,7 @@ import (
 	"github.com/theizzatbek/gokit/db"
 	xerrs "github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/fibermap"
+	"github.com/theizzatbek/gokit/otelkit"
 	"github.com/theizzatbek/gokit/sentrykit"
 )
 
@@ -87,6 +88,13 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		s.logger = slog.New(sentrykit.SlogHandler(s.logger.Handler(),
 			s.opts.sentrySlogOpts...))
 	}
+	// OTel logs bridge — tee kit-owned logger records to the OTel
+	// collector. User-supplied loggers (via WithLogger) stay
+	// untouched; wrap manually with `otelkit.SlogHandler(...)` if
+	// you want the tee there too.
+	if s.otelLogsShutdown != nil && ownedLogger {
+		s.logger = slog.New(otelkit.SlogHandler(s.logger.Handler(), s.opts.otelServiceName))
+	}
 
 	if err := s.buildDB(ctx); err != nil {
 		return nil, err
@@ -112,6 +120,10 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		return nil, err
 	}
 	if err := s.buildRedis(ctx); err != nil {
+		s.Close()
+		return nil, err
+	}
+	if err := s.buildS3(ctx); err != nil {
 		s.Close()
 		return nil, err
 	}

@@ -102,10 +102,33 @@ dbConn, _ := db.Connect(ctx, cfg, db.WithTracer(pgxTracer))
 
 `service.WithOtel` авто-подключает это к kit-овому DB-пулу всякий раз, когда DB сконфигурирована — `service.WithOtelPgxOptions(...)` прокидывает опции, `service.WithoutOtelPgxTracer()` отключает.
 
+## Logs
+
+`SetupLogs(ctx, serviceName, opts...)` инициализирует OTLP/HTTP log-exporter + batch-processor + global `log.LoggerProvider`. Возвращает shutdown — отложите его LIFO рядом с tracer/meter shutdown'ом. Reads те же `OTEL_EXPORTER_OTLP_*` env'ы, что и tracer/metrics, поэтому никакой дополнительной conf'ы для general-case-deployment'а не нужно.
+
+`SlogHandler(inner, scopeName) slog.Handler` — slog-handler-обёртка, которая tee'ит каждый `slog.Record` в `inner` И в OTel-логи через `go.opentelemetry.io/contrib/bridges/otelslog`. Inner-handler — это ваш существующий stderr/stdout-sink (`slog.NewJSONHandler(os.Stdout, …)`), OTel-сторона публикует record в configured `LoggerProvider`. Когда `SetupLogs` ещё не звался, OTel-сторона использует no-op global provider — overhead'а нет.
+
+```go
+shutdownLogs, _ := otelkit.SetupLogs(ctx, "myservice",
+    otelkit.WithLogsServiceVersion("v1.2.3"))
+defer shutdownLogs(context.Background())
+
+base := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+logger := slog.New(otelkit.SlogHandler(base, "myservice"))
+```
+
+`service.WithOtel(serviceName)` авто-подключает это: kit-built logger оборачивается `SlogHandler`'ом, и каждый kit-side `slog`-вызов (db/auth/httpc/nats) автоматически шипится в OTel-коллектор без caller-wiring'а. `WithLogger`-supplied loggers leave'ятся untouched — assumption: caller уже владеет своим observability-pipeline. Подавить через `service.WithoutOtelLogs()`, тюнить через `service.WithOtelLogsOptions(otelkit.WithLogsServiceVersion(...))`.
+
+| LogsOption | Заметки |
+|---|---|
+| `WithLogsServiceVersion(v)` | Установить `service.version` resource-атрибут. Default — empty. |
+| `WithLogsResourceAttribute(k, v)` | Добавить произвольный resource-атрибут к каждому log-record'у. Чанишь по нескольку раз для multiple key/value-пар. |
+| `WithLogsExporterOption(otlploghttp.Option)` | Прокинуть raw-`otlploghttp` option (custom-endpoint, TLS-config, retry). |
+
 ## Ограничения
 
-- **Logs pipeline вне scope'а.** Добавляйте руками если нужно.
-- **Только OTLP/HTTP.** Никакого gRPC-экспортера (добавил бы `google.golang.org/grpc` в прямые зависимости). Подключите руками через `WithExporterOption` / `WithMetricsExporterOption`, если очень нужно.
+- **Только OTLP/HTTP для logs.** Никакого gRPC-exporter'а — та же причина, что и у tracer/metrics-сторон.
+- **Только OTLP/HTTP для traces/metrics.** Никакого gRPC-экспортера (добавил бы `google.golang.org/grpc` в прямые зависимости). Подключите руками через `WithExporterOption` / `WithMetricsExporterOption`, если очень нужно.
 - **Нет SDK-level кастомизации.** Стек SpanProcessor зафиксирован на одном Batcher; metric-пайплайн зафиксирован на одном PeriodicReader. Для multi-pipeline конфигураций конструируйте свой `TracerProvider` / `MeterProvider` и зовите `otel.SetTracerProvider` / `otel.SetMeterProvider` напрямую.
 
 ## См. также
