@@ -198,6 +198,135 @@ func TestIdempotency_OverMaxBodySize_PassesThrough(t *testing.T) {
 	}
 }
 
+// lockingMemStore is memStore plus an IdempotencyLocker implementation
+// gated on a single SET-once flag per key so the test can assert the
+// 409 response on the second concurrent claim.
+type lockingMemStore struct {
+	*memStore
+	lockMu sync.Mutex
+	locks  map[string]bool
+}
+
+func newLockingMemStore() *lockingMemStore {
+	return &lockingMemStore{memStore: newMemStore(), locks: map[string]bool{}}
+}
+
+func (s *lockingMemStore) AcquireLock(_ context.Context, key string, _ time.Duration) (bool, error) {
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
+	if s.locks[key] {
+		return false, nil
+	}
+	s.locks[key] = true
+	return true, nil
+}
+
+func (s *lockingMemStore) ReleaseLock(_ context.Context, key string) error {
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
+	delete(s.locks, key)
+	return nil
+}
+
+func TestIdempotency_Locker_ConcurrentReturns409(t *testing.T) {
+	store := newLockingMemStore()
+	// Use a channel to block the first handler so the second
+	// request races into the locker while the first is "in flight".
+	release := make(chan struct{})
+	app := fiber.New(fiber.Config{ErrorHandler: ErrorHandler(nil)})
+	app.Post("/p", IdempotencyKey(store), func(c *fiber.Ctx) error {
+		<-release
+		return c.Status(fiber.StatusCreated).SendString("done")
+	})
+
+	var firstStatus, secondStatus int32
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		req := httptest.NewRequest("POST", "/p", nil)
+		req.Header.Set("X-Idempotency-Key", "k1")
+		r, _ := app.Test(req, 5000)
+		atomic.StoreInt32(&firstStatus, int32(r.StatusCode))
+	}()
+	// Give the first request time to acquire the lock.
+	time.Sleep(50 * time.Millisecond)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		req := httptest.NewRequest("POST", "/p", nil)
+		req.Header.Set("X-Idempotency-Key", "k1")
+		r, _ := app.Test(req, 5000)
+		atomic.StoreInt32(&secondStatus, int32(r.StatusCode))
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if atomic.LoadInt32(&firstStatus) != fiber.StatusCreated {
+		t.Errorf("first req status = %d, want 201", firstStatus)
+	}
+	if atomic.LoadInt32(&secondStatus) != fiber.StatusConflict {
+		t.Errorf("second req status = %d, want 409 (in flight)", secondStatus)
+	}
+}
+
+func TestIdempotency_Locker_DisabledViaOption(t *testing.T) {
+	// With WithIdempotencyWithoutLock, both concurrent requests must
+	// reach the handler (the in-flight 409 path is suppressed).
+	store := newLockingMemStore()
+	release := make(chan struct{})
+	var hits int32
+	app := fiber.New()
+	app.Post("/p", IdempotencyKey(store, WithIdempotencyWithoutLock()),
+		func(c *fiber.Ctx) error {
+			atomic.AddInt32(&hits, 1)
+			<-release
+			return c.SendString("ok")
+		})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest("POST", "/p", nil)
+			req.Header.Set("X-Idempotency-Key", "k2")
+			_, _ = app.Test(req, 5000)
+		}()
+	}
+	time.Sleep(80 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if atomic.LoadInt32(&hits) != 2 {
+		t.Errorf("hits = %d, want 2 with WithIdempotencyWithoutLock", hits)
+	}
+}
+
+func TestIdempotency_Locker_SequentialReleasesAndAllowsReplay(t *testing.T) {
+	// After the first request finishes, its captured response should
+	// replay on the second hit (cache path) — and the lock must
+	// not pin the key.
+	store := newLockingMemStore()
+	var hits int32
+	app := fiber.New()
+	app.Post("/p", IdempotencyKey(store), func(c *fiber.Ctx) error {
+		atomic.AddInt32(&hits, 1)
+		return c.Status(fiber.StatusCreated).SendString("v1")
+	})
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("POST", "/p", nil)
+		req.Header.Set("X-Idempotency-Key", "k3")
+		r, _ := app.Test(req)
+		if r.StatusCode != fiber.StatusCreated {
+			t.Errorf("call %d status = %d, want 201", i, r.StatusCode)
+		}
+	}
+	if atomic.LoadInt32(&hits) != 1 {
+		t.Errorf("hits = %d, want 1 (replay), got handler re-run", hits)
+	}
+}
+
 func TestIdempotency_CustomHeaderName(t *testing.T) {
 	store := newMemStore()
 	app := fiber.New()

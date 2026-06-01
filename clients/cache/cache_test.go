@@ -21,7 +21,10 @@ type payload struct {
 	Name string `json:"name"`
 }
 
-var testRDB *redis.Client
+var (
+	testRDB      *redis.Client
+	testRedisURL string
+)
 
 func TestMain(m *testing.M) {
 	os.Exit(runMain(m))
@@ -47,6 +50,7 @@ func runMain(m *testing.M) int {
 		println("conn string:", err.Error())
 		return 1
 	}
+	testRedisURL = url
 	opts, err := redis.ParseURL(url)
 	if err != nil {
 		println("parse url:", err.Error())

@@ -15,6 +15,13 @@ const (
 	// [WithIdempotencyRequired] but the inbound request did not
 	// carry the configured header.
 	CodeIdempotencyKeyMissing = "idempotency_key_missing"
+
+	// CodeIdempotencyInFlight — another request with the same
+	// idempotency-key is currently executing. The store implements
+	// [IdempotencyLocker] and refused the SETNX-style lock. Caller
+	// should retry after a short backoff. Mapped to 409 by
+	// errs.HTTP.
+	CodeIdempotencyInFlight = "idempotency_in_flight"
 )
 
 // StoredResponse is the captured shape replayed on subsequent hits
@@ -48,6 +55,36 @@ type IdempotencyStore interface {
 	Set(ctx context.Context, key string, resp *StoredResponse, ttl time.Duration) error
 }
 
+// IdempotencyLocker is an OPTIONAL extension to [IdempotencyStore]
+// that lets the middleware hold a short-lived lock around the
+// in-flight handler. When a store implements this interface (e.g.
+// the Redis-backed cache.RedisIdempotencyStore via SETNX), the
+// middleware:
+//
+//  1. Attempts AcquireLock(ctx, key, lockTTL) on cache miss.
+//  2. If acquired == false, returns 409 with Code
+//     CodeIdempotencyInFlight (another request with the same key is
+//     mid-flight). This closes the concurrent-replay race the
+//     plain Get/Set contract does not address.
+//  3. Runs the handler.
+//  4. Calls ReleaseLock(ctx, key) on exit (deferred — even on
+//     handler error).
+//
+// The lock has a TTL so a crashing handler does not pin the key
+// forever — failed locks roll off naturally. Lock TTL is tuned via
+// [WithIdempotencyLockTTL] (default 30s).
+//
+// Stores that do NOT implement IdempotencyLocker keep the
+// pre-locking behaviour (two concurrent requests may both run the
+// handler — middleware assumes downstream idempotency).
+//
+// Opt out at the middleware via [WithIdempotencyWithoutLock] even
+// when the store implements the locker.
+type IdempotencyLocker interface {
+	AcquireLock(ctx context.Context, key string, ttl time.Duration) (bool, error)
+	ReleaseLock(ctx context.Context, key string) error
+}
+
 // IdempotencyOption tunes [IdempotencyKey].
 type IdempotencyOption func(*idempotencyConfig)
 
@@ -58,6 +95,8 @@ type idempotencyConfig struct {
 	maxBodyBytes int
 	required     bool
 	skipStatuses map[int]bool
+	skipLock     bool
+	lockTTL      time.Duration
 }
 
 // WithIdempotencyHeader overrides the header name. Default is
@@ -111,6 +150,32 @@ func WithIdempotencyRequired() IdempotencyOption {
 	return func(c *idempotencyConfig) { c.required = true }
 }
 
+// WithIdempotencyLockTTL sets the TTL on the SETNX-style concurrency
+// lock the middleware places around in-flight handlers (when the
+// store implements [IdempotencyLocker]). The lock auto-expires so
+// a crashing handler does not pin the key indefinitely.
+//
+// Default 30s. Tune up for slow downstream calls (payment captures,
+// SMS sends), down for very fast handlers. Must be shorter than the
+// idempotency TTL — the lock guards the IN-FLIGHT window, not the
+// replay window.
+func WithIdempotencyLockTTL(d time.Duration) IdempotencyOption {
+	return func(c *idempotencyConfig) { c.lockTTL = d }
+}
+
+// WithIdempotencyWithoutLock disables the IdempotencyLocker path even
+// when the store implements it. Pre-lock behaviour: two concurrent
+// requests with the same key may BOTH run the handler — assumes
+// downstream idempotency at the DB / queue layer.
+//
+// Use sparingly. The locker default is the safer choice; opt out
+// only on routes where the in-flight-409 response is unacceptable
+// (e.g. very-long-running handlers where 409 noise drowns out
+// real conflicts).
+func WithIdempotencyWithoutLock() IdempotencyOption {
+	return func(c *idempotencyConfig) { c.skipLock = true }
+}
+
 // WithIdempotencySkipStatus marks status codes that should NOT be
 // cached. The middleware passes them through uncached so e.g. a 500
 // from a transient downstream doesn't get pinned for hours.
@@ -131,6 +196,7 @@ const (
 	defaultIdempotencyHeader  = "X-Idempotency-Key"
 	defaultIdempotencyTTL     = 24 * time.Hour
 	defaultIdempotencyMaxBody = 1 << 20 // 1 MiB
+	defaultIdempotencyLockTTL = 30 * time.Second
 	replayHeader              = "X-Idempotent-Replay"
 )
 
@@ -169,6 +235,7 @@ func IdempotencyKey(store IdempotencyStore, opts ...IdempotencyOption) fiber.Han
 		headerName:   defaultIdempotencyHeader,
 		ttl:          defaultIdempotencyTTL,
 		maxBodyBytes: defaultIdempotencyMaxBody,
+		lockTTL:      defaultIdempotencyLockTTL,
 		methods: map[string]bool{
 			fiber.MethodPost: true, fiber.MethodPut: true,
 			fiber.MethodPatch: true, fiber.MethodDelete: true,
@@ -209,6 +276,27 @@ func IdempotencyKey(store IdempotencyStore, opts ...IdempotencyOption) fiber.Han
 			}
 			c.Set(replayHeader, "true")
 			return c.Status(resp.Status).Send(resp.Body)
+		}
+		// Optional concurrency lock — closes the race the plain
+		// Get/Set contract doesn't cover. Two requests arriving with
+		// the same key, BOTH missing the cache, would both run the
+		// handler without this guard. With the locker, the second one
+		// returns 409 (Code: CodeIdempotencyInFlight).
+		locker, hasLocker := store.(IdempotencyLocker)
+		if hasLocker && !cfg.skipLock {
+			acquired, err := locker.AcquireLock(c.UserContext(), key, cfg.lockTTL)
+			if err != nil {
+				// Lock-acquisition failure on the backend is best-
+				// effort under the same contract as Get/Set: fail
+				// open so a Redis blip doesn't break writes.
+				hasLocker = false
+			} else if !acquired {
+				return errs.Conflict(CodeIdempotencyInFlight,
+					"idempotency key in flight, retry after backoff")
+			}
+			if hasLocker {
+				defer func() { _ = locker.ReleaseLock(context.Background(), key) }()
+			}
 		}
 		if err := c.Next(); err != nil {
 			return err

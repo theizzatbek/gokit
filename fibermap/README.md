@@ -276,10 +276,22 @@ app.Post("/payments",
 | `WithIdempotencyMaxBodySize(n)` | 1 MiB | Oversize-ответы проходят без кеширования. |
 | `WithIdempotencyRequired()` | off | Missing header возвращает 400 с `idempotency_key_missing`. |
 | `WithIdempotencySkipStatus(...)` | 5xx | Status-коды, которые НЕ должны кешироваться. |
+| `WithIdempotencyLockTTL(d)` | 30s | TTL SETNX-лока вокруг in-flight-хендлера (когда store реализует `IdempotencyLocker`). |
+| `WithIdempotencyWithoutLock()` | off | Подавить lock-path даже если store реализует `IdempotencyLocker`. |
 
-Default cache-backend — `clients/cache.NewIdempotencyStore(svc.Redis, prefix)`. YAML-роуты подключают factory через `auth/fibermount.MountIdempotencyKeyFactory(eng, store)` и используют `idempotency_key: ["1h", "required"]` в `routes.yaml`.
+Default cache-backend — `clients/cache.NewIdempotencyStore(svc.Redis, prefix)`, который реализует и `IdempotencyStore`, и `IdempotencyLocker` (SETNX). YAML-роуты подключают factory через `auth/fibermount.MountIdempotencyKeyFactory(eng, store)` и используют `idempotency_key: ["1h", "required"]` в `routes.yaml`.
 
-Заметка по конкурентности: два одновременных запроса с тем же ключом могут ОБА запустить хендлер — middleware не лочит вокруг store. Downstream-системы должны быть идемпотентны сами (transactional outbox + DB unique constraints — это канонический паттерн); этот middleware подавляет duplicate-work только через НЕ-перекрывающиеся запросы.
+### Concurrency-lock
+
+Когда store реализует `IdempotencyLocker` (например, `cache.RedisIdempotencyStore`), middleware автоматически берёт короткоживущий SETNX-лок на in-flight-хендлер:
+
+1. На cache-miss → `AcquireLock(ctx, key, lockTTL)`.
+2. Если lock уже занят другим request'ом → **409 Conflict** с Code `idempotency_in_flight`.
+3. После завершения хендлера → `ReleaseLock` (через defer, даже на error).
+
+Lock-TTL (default 30s) защищает от зависшего/упавшего хендлера — лок expires автоматически. Подавить через `WithIdempotencyWithoutLock()` если concurrent-409 шум перевешивает risk дублирующего handler-run'а (например, для очень долгих хендлеров).
+
+Stores, которые НЕ реализуют locker, сохраняют pre-lock-поведение — два concurrent-запроса с одним ключом могут оба запустить хендлер, downstream-идемпотентность (DB unique constraints / transactional outbox) обязательна.
 
 ## Request-scoped logger
 

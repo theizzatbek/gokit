@@ -335,6 +335,7 @@ last-write-wins (код override'ит). `Servers` / `SecuritySchemes` /
 | `WithOtelLogsOptions(otelkit.LogsOption...)` | Конфигурирует OTel logs-пайплайн, авто-включённый `WithOtel`'ом (resource-атрибуты, exporter-override'ы). No-op без `WithOtel`. |
 | `WithDBDrainTimeout(d)` | Cap на ожидание in-flight DB-запросов / транзакций во время `Service.Close`. По умолчанию 5s. `svc.DB.Drain(ctx)` вызывается с этим deadline'ом перед hard-Close. |
 | `WithS3Options(s3client.Option...)` | Extra `s3client.Option` для kit-built `*s3client.Client`. Logger + Metrics уже auto-wired'ы; reach for this для custom-retry policy через AWS SDK config. |
+| `WithRateLimit(ratelimit.Config, opts...)` | Opt-in kit-овского Redis-backed sliding-window лимитера (`svc.RateLimiter`). Регистрирует YAML middleware factory `rate_limit_redis` на Engine. Требует Config.Redis.URL (иначе `service_ratelimit_needs_redis`). Когда Auth тоже сконфигурирован — `user`/`subject` key-strategy резолвится через `auth.KeyBySubject[C]` автоматически. |
 
 ## Common patterns
 

@@ -127,6 +127,10 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		s.Close()
 		return nil, err
 	}
+	if err := s.buildRateLimit(); err != nil {
+		s.Close()
+		return nil, err
+	}
 	if err := s.buildNATSMap(ctx); err != nil {
 		s.Close()
 		return nil, err
@@ -140,6 +144,10 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		return nil, err
 	}
 	if err := s.mountAuthMiddleware(); err != nil {
+		s.Close()
+		return nil, err
+	}
+	if err := s.mountRateLimitFactory(); err != nil {
 		s.Close()
 		return nil, err
 	}
