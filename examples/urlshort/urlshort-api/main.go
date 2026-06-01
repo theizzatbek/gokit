@@ -5,22 +5,29 @@
 //   - Authn / authz: /auth/register, /auth/login, JWT issue
 //   - CRUD on the links table: create, list, update, delete, redirect
 //   - Schema ownership: applies shared/migrations/*.sql at boot
-//   - Publishes link lifecycle events via NATS:
+//   - Writes events:
 //   - urlshort.link.created — through the transactional outbox
-//     (writes INSIDE the same db.Tx as the link insert; the kit's
-//     outbox worker drains and publishes asynchronously)
-//   - urlshort.link.visited — direct fire-and-forget on each
-//     redirect; bounded loss on crash is acceptable since clicks
-//     are analytics-only
+//     (writes INSIDE the same db.Tx as the link insert; the
+//     publisher service drains the outbox table asynchronously)
+//   - urlshort.link.visited — fire-and-forget HTTP POST to the
+//     publisher gateway; the publisher republishes onto NATS.
+//     Bounded loss on crash is acceptable since clicks are
+//     analytics-only.
+//
+// Notably: api does NOT import natsmap. Every NATS-bound event flows
+// through urlshort-publisher (either via the shared outbox table or
+// via POST /publish). Lets the api binary live in a network zone
+// without NATS reachability.
 //
 // NOT in scope (other services own these):
 //
-//   - Visit aggregation → urlshort-counter (batched NATS subscriber)
-//   - Metadata enrichment → urlshort-enricher (apimap + NATS)
+//   - Outbox drain → urlshort-publisher (also hosts POST /publish)
+//   - Visit aggregation → urlshort-counter
+//   - Metadata enrichment → urlshort-enricher
 //
 // Run:
 //
-//	make up && make run-api    # local Postgres + NATS + this service
+//	make up && make run-api    # local Postgres + this service
 //	curl -X POST http://localhost:3000/auth/register \
 //	  -H 'content-type: application/json' \
 //	  -d '{"email":"a@b.com","password":"hunter2hunter2"}'
@@ -29,6 +36,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -37,11 +45,9 @@ import (
 	"github.com/go-playground/validator/v10"
 
 	"github.com/theizzatbek/gokit/clients/cache"
-	"github.com/theizzatbek/gokit/clients/natsmap"
-	"github.com/theizzatbek/gokit/db/outbox"
+	"github.com/theizzatbek/gokit/clients/httpc"
 	"github.com/theizzatbek/gokit/service"
 
-	"github.com/theizzatbek/gokit/examples/urlshort/shared/events"
 	"github.com/theizzatbek/gokit/examples/urlshort/shared/migrations"
 	"github.com/theizzatbek/gokit/examples/urlshort/urlshort-api/internal/appctx"
 	"github.com/theizzatbek/gokit/examples/urlshort/urlshort-api/internal/config"
@@ -94,24 +100,15 @@ func run() error {
 
 	svc, err := service.New[appctx.AppCtx, users.Claims](ctx, cfg.Config,
 		service.WithValidator(v),
-		service.WithNATSMap(),
 		service.WithRoutes(),
 		service.WithOpenAPI(),
 		// 64 KiB is plenty for the largest payload urlshort accepts.
 		service.WithBodyLimit(64*1024),
-		service.WithNATSMapRegistration(func(e *natsmap.Engine) {
-			// Publishers only — the counter / enricher own their
-			// subscribers in their own binaries.
-			natsmap.RegisterPublisher[events.LinkCreated](e, events.SubjectLinkCreated)
-			natsmap.RegisterPublisher[events.LinkVisited](e, events.SubjectLinkVisited)
-		}),
 		// api owns the schema — runs migrations on every boot.
 		service.WithMigrations(migrations.FS()),
-		// Transactional outbox: writes LinkCreated inside the same
-		// db.Tx as the link insert, drains via natsmap.PublishRaw.
-		service.WithOutbox(
-			outbox.WithRetention(7*24*time.Hour),
-		),
+		// Bootstrap the outbox table DDL so api can INSERT into it
+		// inside its tx — the worker that drains the table lives in
+		// urlshort-publisher.
 		service.WithOutboxAutoSchema(),
 	)
 	if err != nil {
@@ -126,7 +123,19 @@ func run() error {
 	}
 
 	linkCache := cache.For[links.CachedLink](svc.Redis, "urlshort:link:")
-	visitPub := publisher.NewVisit(svc.NATSMap, svc.Logger())
+
+	// Dedicated kit-grade HTTP client for the publisher call —
+	// retries + slow-call metrics ride the kit transport chain.
+	publisherHTTP, err := httpc.New(httpc.Config{
+		Timeout:     2 * time.Second,
+		MaxRetries:  2,
+		BackoffBase: 50 * time.Millisecond,
+	}, httpc.WithLogger(svc.Logger()))
+	if err != nil {
+		return err
+	}
+	visitPub := publisher.NewVisit(cfg.PublisherURL, publisherHTTP, svc.Logger())
+
 	usersSvc := users.NewService(svc.DB, svc.Hasher)
 	linksSvc := links.NewService(svc.DB, visitPub, linkCache)
 
@@ -136,3 +145,8 @@ func run() error {
 
 	return svc.Run()
 }
+
+// guard so http import doesn't become unused if a future refactor
+// drops the publisher http client. Keeps the package import-graph
+// stable across iterations.
+var _ = http.MethodPost

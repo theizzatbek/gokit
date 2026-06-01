@@ -30,9 +30,9 @@ type CachedLink struct {
 }
 
 // VisitPublisher emits one LinkVisited event per successful redirect.
-// Service depends on the interface (not natsmap directly) so the
-// example stays unit-testable: tests pass a no-op or in-memory
-// publisher, main.go wires a real natsmap-backed one.
+// Service depends on the interface (not the publisher transport
+// directly) so the example stays unit-testable: tests pass a no-op,
+// main.go wires the HTTP-backed urlshort-publisher gateway client.
 //
 // Enrichment (title / description / image_url) is OUT of scope for
 // the api — it happens asynchronously in urlshort-enricher after the
@@ -76,7 +76,8 @@ func scanLink(row pgx.Row, l *Link) error {
 // The INSERT + outbox.Enqueue run inside ONE db.Tx so the event is
 // persisted atomically with the link row — no crash window between
 // commit and publish. The kit-managed outbox.Worker drains the
-// outbox table asynchronously and publishes through natsmap.
+// outbox table asynchronously and publishes through natsmap (the
+// worker lives in urlshort-publisher, not here).
 //
 // Idempotent on (user_id, original_url): the second time a user posts
 // the same URL, this returns the existing link without inserting a
