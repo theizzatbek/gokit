@@ -38,6 +38,8 @@ Usage:
   kit doctor --url URL [flags]
   kit init <name> --module PATH [flags]
   kit add-endpoint METHOD PATH HANDLER [flags]
+  kit gen migration <name> [flags]
+  kit gen k8s --name svc --image IMG [flags]
 
 Pass --help on any subcommand for its flags.
 `
@@ -66,6 +68,8 @@ func main() {
 		err = runInit(ctx, os.Args[2:])
 	case "add-endpoint":
 		err = runAddEndpoint(ctx, os.Args[2:])
+	case "gen":
+		err = runGen(ctx, os.Args[2:])
 	case "help", "--help", "-h":
 		fmt.Fprint(os.Stdout, usageRoot)
 	default:
