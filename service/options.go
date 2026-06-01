@@ -15,6 +15,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/httpc"
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
+	"github.com/theizzatbek/gokit/clients/ratelimit"
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	s3client "github.com/theizzatbek/gokit/clients/s3"
 	"github.com/theizzatbek/gokit/db"
@@ -88,6 +89,8 @@ type options struct {
 	skipLogger                 bool
 	dbDrainTimeout             time.Duration
 	s3Opts                     []s3client.Option
+	rateLimitCfg               *ratelimit.Config
+	rateLimitOpts              []ratelimit.Option
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -572,6 +575,34 @@ func WithReadinessTimeout(d time.Duration) Option {
 //	)
 func WithReadinessChecker(c ...fibermap.Checker) Option {
 	return func(o *options) { o.readinessExtraCheckers = append(o.readinessExtraCheckers, c...) }
+}
+
+// WithRateLimit opts in the kit's Redis-backed rate limiter and
+// registers the `rate_limit_redis` middleware factory on Engine.
+// Requires a configured Redis (Config.Redis.URL); otherwise
+// service.New returns *errs.Error{Code: CodeRateLimitNeedsRedis}.
+//
+// The limit + window come from cfg — every YAML route tagged with
+// `rate_limit_redis` shares this single budget. To run multiple
+// budgets in one service, build limiters manually with
+// ratelimit.NewRedis and register additional factories via
+// fibermap.RegisterMiddlewareFactory.
+//
+//	service.New[App, Claims](ctx, cfg,
+//	    service.WithRateLimit(ratelimit.Config{
+//	        KeyPrefix: "rl:",
+//	        Limit:     120,
+//	        Window:    time.Minute,
+//	    }))
+//
+// When Auth is also configured, the `user` / `subject` YAML key
+// strategy uses auth.KeyBySubject[C] automatically — no further
+// wiring needed.
+func WithRateLimit(cfg ratelimit.Config, opts ...ratelimit.Option) Option {
+	return func(o *options) {
+		o.rateLimitCfg = &cfg
+		o.rateLimitOpts = append(o.rateLimitOpts, opts...)
+	}
 }
 
 // WithS3Options appends to the s3client options applied by

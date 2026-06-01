@@ -110,3 +110,49 @@ func (s *RedisIdempotencyStore) Set(ctx context.Context, key string, resp *fiber
 	}
 	return nil
 }
+
+// lockSuffix is appended to the cached-response key to form the
+// concurrency-lock key. Namespacing the lock under a sibling key
+// (instead of overloading the response key with a sentinel) avoids
+// a race between SETNX-lock and the Set-response write that would
+// otherwise need a Lua script to keep atomic.
+const lockSuffix = ":lock"
+
+// AcquireLock attempts to claim a short-lived concurrency lock for
+// the in-flight request keyed by `key`. Returns (true, nil) on
+// successful claim, (false, nil) when another request holds the
+// lock, (true, err) on transport failure (fail open — kit
+// middleware contract).
+//
+// Implements [fibermap.IdempotencyLocker] — the middleware
+// auto-detects the interface and engages the lock-path when
+// present.
+func (s *RedisIdempotencyStore) AcquireLock(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	if s == nil || s.rdb == nil {
+		return true, nil
+	}
+	ok, err := s.rdb.SetNX(ctx, s.prefix+key+lockSuffix, "1", ttl).Result()
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("idempotency: redis setnx failed", "key", key, "err", err.Error())
+		}
+		// Fail open — never deny a write because of a Redis blip.
+		return true, err
+	}
+	return ok, nil
+}
+
+// ReleaseLock removes the concurrency lock previously claimed by
+// AcquireLock. Best-effort: failures are logged + swallowed. Stays
+// nil-safe (called from a deferred closure in the middleware).
+func (s *RedisIdempotencyStore) ReleaseLock(ctx context.Context, key string) error {
+	if s == nil || s.rdb == nil {
+		return nil
+	}
+	if err := s.rdb.Del(ctx, s.prefix+key+lockSuffix).Err(); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("idempotency: redis del lock failed", "key", key, "err", err.Error())
+		}
+	}
+	return nil
+}

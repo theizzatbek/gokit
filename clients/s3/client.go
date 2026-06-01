@@ -304,8 +304,7 @@ func mapErr(err error, fallbackCode, msg string) error {
 	if err == nil {
 		return nil
 	}
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 		switch apiErr.ErrorCode() {
 		case "NoSuchKey", "NotFound":
 			return xerrs.Wrap(err, xerrs.KindNotFound, CodeNotFound, msg)
@@ -315,8 +314,7 @@ func mapErr(err error, fallbackCode, msg string) error {
 			return xerrs.Wrap(err, xerrs.KindNotFound, CodeBucketNotFound, msg)
 		}
 	}
-	var nsk *s3types.NoSuchKey
-	if errors.As(err, &nsk) {
+	if _, ok := errors.AsType[*s3types.NoSuchKey](err); ok {
 		return xerrs.Wrap(err, xerrs.KindNotFound, CodeNotFound, msg)
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -348,8 +346,7 @@ func outcomeFromErr(err error) string {
 	if isNotFoundCode(err) {
 		return "not_found"
 	}
-	var nf *s3types.NotFound
-	if errors.As(err, &nf) {
+	if _, ok := errors.AsType[*s3types.NotFound](err); ok {
 		return "not_found"
 	}
 	return "error"

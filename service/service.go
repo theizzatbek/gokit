@@ -12,6 +12,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/apimap"
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
+	"github.com/theizzatbek/gokit/clients/ratelimit"
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	s3client "github.com/theizzatbek/gokit/clients/s3"
 	"github.com/theizzatbek/gokit/db"
@@ -33,6 +34,12 @@ type Service[T any, C any] struct {
 	Hasher  *auth.Hasher        // nil when Auth is nil
 	Outbox  *outbox.Worker      // nil unless WithOutbox + DB + NATSMap all wired
 	S3      *s3client.Client    // nil when Config.S3.Bucket == ""
+
+	// RateLimiter is the Redis-backed sliding-window limiter built by
+	// [WithRateLimit]. nil unless the option was passed AND Redis is
+	// configured. When non-nil, the `rate_limit_redis` YAML factory
+	// is automatically registered on Engine.
+	RateLimiter *ratelimit.Redis
 
 	cfg     Config
 	logger  *slog.Logger
