@@ -82,6 +82,25 @@ func Handler(rt *natsmap.Runtime, opts ...Option) fiber.Handler {
 				}
 			}
 		}
+		// Custom handler takes over the publish step entirely. It
+		// MAY call natsmap.PublishRaw on rt, OR do something else
+		// (tee, persist, transform, etc.). When it writes to fc
+		// itself (custom status / body), the kit honours that;
+		// otherwise we fall through to the default success status.
+		if cfg.customHandler != nil {
+			if err := cfg.customHandler(ctx, c, rt, subject, body, hdrs); err != nil {
+				return err
+			}
+			// If the handler already wrote a response body the
+			// kit does NOT overwrite it — the handler owns the
+			// reply shape (e.g. "200 + {id: \"durable-key-...\"}").
+			// An empty body means the handler delegated the
+			// reply, so we send the configured success status.
+			if len(c.Response().Body()) > 0 {
+				return nil
+			}
+			return c.SendStatus(cfg.statusOK)
+		}
 		if err := natsmap.PublishRaw(c.UserContext(), rt, subject, body, hdrs); err != nil {
 			return xerrs.Wrap(err, xerrs.KindUnavailable, CodePublishFailed,
 				"natsgw: publish failed")

@@ -63,6 +63,7 @@ svc, _ := service.New[App, Claims](ctx, cfg,
 | `WithStatusOK(code)` | Override success-status. 200 для HTTP-semantics, 204 для fire-and-forget. |
 | `WithValidator(fn)` | Global validator — runs на каждый publish после allowlist + body-cap, до NATS publish. Stack multiple — first non-nil error wins. |
 | `WithSubjectValidator(subject, fn)` | Per-subject validator. Skipped когда inbound subject не match'ит. Stack для multi-subject contracts. |
+| `WithCustomHandler(fn)` | Полностью override default publish-step'а. Operator сам call'ит `natsmap.PublishRaw` (или нет), возвращает `nil` / `*errs.Error`. Last-write-wins на repeat call'ы. |
 
 ## Validators
 
@@ -123,6 +124,78 @@ natsgw.WithSubjectValidator("orders.placed",
         return nil
     })
 ```
+
+## Custom handler
+
+`WithCustomHandler(fn)` полностью **replaces** default-publish-step. Standard pipeline (subject extract, allowlist, body cap, validators, header collection) всё ещё runs; затем kit hand'ит control в `fn` вместо `natsmap.PublishRaw`.
+
+```go
+type CustomHandler func(
+    ctx context.Context,
+    fc *fiber.Ctx,
+    rt *natsmap.Runtime,
+    subject string,
+    body []byte,
+    headers map[string][]string,
+) error
+```
+
+Response-handling:
+
+- Handler returns `nil` + НЕ write'ит в `fc` → kit sends `WithStatusOK` (default 202).
+- Handler returns `nil` + write'нул в `fc` (e.g. `fc.Status(201).JSON(...)`) → kit honours it, не overwrite'ит.
+- Handler returns `*errs.Error` → kit's error-middleware рендерит со stable Code.
+- Handler returns plain `error` → 500.
+
+### Use-cases
+
+| Pattern | Зачем |
+|---|---|
+| **Tee на multiple subjects** | One inbound publish → fan-out на analytics + auditlog + primary-region + dr-region subjects. |
+| **Persist before publish** | Write payload в Postgres outbox-table OR S3 audit-log сначала; затем `natsmap.PublishRaw`. At-most-once → at-least-once upgrade. |
+| **Transform / enrich** | Add server-side timestamp, redact PII, sign payload, re-encode JSON в Avro. |
+| **Conditional routing** | Inspect body → route на `orders.high` vs `orders.low` subject based on amount. Block deny-list'ed shapes. |
+| **Custom response shape** | `fc.JSON({id: ..., durable: true})` вместо bare 202. Confirm-payload pattern. |
+
+### Пример: tee на два subject'а
+
+```go
+natsgw.WithCustomHandler(func(ctx context.Context, _ *fiber.Ctx,
+    rt *natsmap.Runtime, sub string, body []byte, h map[string][]string) error {
+    if err := natsmap.PublishRaw(ctx, rt, sub, body, h); err != nil {
+        return err
+    }
+    // Audit-trail на параллельный subject.
+    return natsmap.PublishRaw(ctx, rt, sub+".audit", body, h)
+})
+```
+
+### Пример: persist-then-publish
+
+```go
+natsgw.WithCustomHandler(func(ctx context.Context, fc *fiber.Ctx,
+    rt *natsmap.Runtime, sub string, body []byte, h map[string][]string) error {
+    durableID, err := store.Save(ctx, sub, body)
+    if err != nil {
+        return xerrs.Wrap(err, xerrs.KindInternal,
+            "gateway_persist_failed", "could not store payload")
+    }
+    if err := natsmap.PublishRaw(ctx, rt, sub, body, h); err != nil {
+        // Persist succeeded but publish failed — operator decides
+        // whether to roll back or schedule a retry. Here we just
+        // log + return the persist id so caller can re-trigger.
+        return fc.Status(202).JSON(map[string]any{
+            "id":             durableID,
+            "publish_failed": err.Error(),
+        })
+    }
+    return fc.Status(202).JSON(map[string]string{"id": durableID})
+})
+```
+
+### Композиция
+
+Только **один** custom handler одновременно (repeat call'ы — last-write-wins). Композиция (tee + transform + audit) — stack логику **внутри одного** handler'а, не layering options.
 
 ## Error-mapping
 

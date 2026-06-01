@@ -14,6 +14,7 @@ type config struct {
 	maxBodyBytes   int
 	statusOK       int
 	validators     []scopedValidator
+	customHandler  CustomHandler
 }
 
 // scopedValidator pairs a Validator with an optional subject scope.
