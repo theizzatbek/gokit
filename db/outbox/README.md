@@ -67,6 +67,18 @@ _ = w.Start(ctx)
 svc.OnShutdown(w.Stop)
 ```
 
+## Readiness check
+
+`outbox.NewChecker(d, opts...)` is the [`fibermap.Checker`](../../fibermap/README.md) implementation that surfaces outbox backlog on `/readyz`. `service.WithOutbox` auto-adds it; tune via `service.WithOutboxReadinessOpts(...)` or disable via `service.WithoutOutboxReadiness()`.
+
+| Option | Default | Notes |
+|---|---|---|
+| `WithMaxDepth(n)` | 10000 | Pending row count above this → 503 + `outbox_backlog` code. |
+| `WithMaxLag(d)` | 10m | Oldest pending row's age above this → 503 + `outbox_backlog` code. |
+| `WithCheckerName(name)` | "outbox" | Name surfaced under `checks: {…}` in the 503 body. |
+
+The check runs `SELECT count(*), MIN(created_at)` against the partial index the worker already uses — no extra index required.
+
 ## Trace context
 
 `Enqueue` snapshots the current OTel `TraceContext` (W3C `traceparent` / `tracestate`) into `Event.Headers` so the Worker's later publish preserves the originating trace across the async boundary. The kit's `natsclient.PublishRaw` inject path treats a pre-existing `traceparent` in headers as authoritative — the worker's (usually trace-less) ctx never overwrites the snapshot. Result: HTTP → Tx → outbox row → Worker → consumer all share one trace ID in the APM waterfall.

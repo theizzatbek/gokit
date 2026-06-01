@@ -324,7 +324,11 @@ Both flip the same internal flag; pass either or both — both setting `Enabled 
 | `WithCron(name, schedule, fn)` | Register a recurring job at config time. 5-field cron format (override via `WithCronParser`). Auto-wraps with `sentrykit.MonitorCron` when `WithSentry` is wired. |
 | `WithCronSlug(jobName, slug)` | Override the auto-derived Sentry Crons monitor slug. |
 | `WithCronParser(parser)` | Custom cron parser (e.g. 6-field with seconds for sub-minute jobs). |
-| `WithoutLoggerInjector()` | Skip the auto-installed [`fibermap.LoggerInjector`](../fibermap/README.md#request-scoped-logger) middleware. Handlers fall back to `slog.Default` when calling `fibermap.LoggerFrom(c)`. |
+| `WithoutLoggerInjector()` | Skip the auto-installed [`fibermap.LoggerInjector`](../fibermap/README.md#request-scoped-logger) middleware. |
+| `WithSingletonCron(name, schedule, fn)` | Like `WithCron` but wraps `fn` in `pg_try_advisory_lock(hash(name))` so only ONE replica per multi-replica deployment runs the job per tick. Requires DB. |
+| `svc.AddSingletonCron(name, schedule, fn)` | Post-build counterpart for jobs whose closure needs `svc.DB`. Same lock semantics. |
+| `WithOutboxReadinessOpts(outbox.CheckerOption...)` | Tune the auto-installed outbox backlog check on `/readyz`. Defaults `WithMaxDepth(10000)`, `WithMaxLag(10*time.Minute)`. |
+| `WithoutOutboxReadiness()` | Disable the auto-installed outbox readiness check. |
 | `WithOutbox(outbox.WorkerOption...)` | Enable the transactional outbox worker. Requires DB + (NATSMap OR `WithOutboxDispatcher`). Auto-wires logger + metrics, registers `OnShutdown(Stop)`. Default PublishFn = `natsmap.PublishRaw(ctx, rt, e.EventType, e.Payload, e.Headers)`. |
 | `WithOutboxDispatcher(fn)` | Override the default outbox PublishFn (e.g. fan out to multiple subjects, wrap with audit log, dispatch to a non-natsmap bus). |
 | `WithOutboxAutoSchema()` | Apply `outbox.Schema()` at boot. Off by default — most deployments fold the DDL into their migration tool. |

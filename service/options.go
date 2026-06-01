@@ -80,6 +80,8 @@ type options struct {
 	cronParser                 cron.Parser
 	skipLoggerInjector         bool
 	migrationsFS               fs.FS
+	skipOutboxReadiness        bool
+	outboxCheckerOpts          []outbox.CheckerOption
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -664,6 +666,30 @@ func WithBodyLimit(bytes int) Option {
 // process start.
 func WithMigrations(fsys fs.FS) Option {
 	return func(o *options) { o.migrationsFS = fsys }
+}
+
+// WithOutboxReadinessOpts forwards [outbox.CheckerOption] values
+// to the readiness check that [WithOutbox] auto-installs. Tune
+// depth / lag thresholds, override the check name.
+//
+//	service.WithOutbox(...),
+//	service.WithOutboxReadinessOpts(
+//	    outbox.WithMaxDepth(50000),
+//	    outbox.WithMaxLag(time.Hour),
+//	),
+//
+// No effect without [WithOutbox] or when
+// [WithoutOutboxReadiness] is also passed.
+func WithOutboxReadinessOpts(opts ...outbox.CheckerOption) Option {
+	return func(o *options) { o.outboxCheckerOpts = append(o.outboxCheckerOpts, opts...) }
+}
+
+// WithoutOutboxReadiness disables the auto-installed outbox
+// readiness check. Use when the deployment has its own SLA
+// monitoring for outbox lag and doesn't want /readyz to flap on
+// transient backlog.
+func WithoutOutboxReadiness() Option {
+	return func(o *options) { o.skipOutboxReadiness = true }
 }
 
 // WithOutbox enables the transactional outbox worker. Requires
