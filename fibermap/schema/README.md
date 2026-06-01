@@ -1,51 +1,52 @@
 # fibermap/schema
 
-JSON Schema (Draft 2020-12) for `routes.yaml`. Embedded into the binary at compile time and exposed via the top-level helper `fibermap.Schema() []byte`. Powers editor autocomplete + diagnostics in any YAML language server that supports `# yaml-language-server: $schema=...`.
+JSON Schema (Draft 2020-12) для `routes.yaml`. Встроен в бинарь во время компиляции и доступен через top-level хелпер `fibermap.Schema() []byte`. Питает editor-автодополнение + диагностику в любом YAML language server'е, который поддерживает `# yaml-language-server: $schema=...`.
 
-**Parent:** [../README.md](../README.md)
-**Files:** `routes.schema.json` (the single file)
-**Import:** none (data-only package — accessed via `fibermap.Schema()`)
+**Родитель:** [../README.md](../README.md)
+**Файлы:** `routes.schema.json` (единственный файл)
+**Импорт:** нет (data-only пакет — доступ через `fibermap.Schema()`)
 
-## Use
+## Использование
 
-### Editor setup
+### Настройка редактора
 
-Add this line at the top of any `routes.yaml`:
+Добавьте эту строку в начало любого `routes.yaml`:
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/gokit/main/fibermap/schema/routes.schema.json
 ```
 
-VS Code (with [redhat.vscode-yaml]), GoLand, and Vim with `coc-yaml` give:
+VS Code (с [redhat.vscode-yaml]), GoLand и Vim с `coc-yaml` дают:
 
-- autocomplete for `method` / `middleware_sets` / `cache.ttl` / etc.
-- hover docs on every field
-- inline diagnostics for typos in `middleware:` references and shape mismatches
+- автодополнение для `method` / `middleware_sets` / `cache.ttl` / и т.д.
+- hover-документацию на каждом поле
+- inline-диагностику для опечаток в `middleware:` ссылках и несоответствий формы
 
-### Programmatic access
+### Программный доступ
 
 ```go
 import "github.com/theizzatbek/gokit/fibermap"
 
-raw := fibermap.Schema()   // []byte of the JSON schema
-// Use to validate routes.yaml in CI without depending on the gokit binary.
+raw := fibermap.Schema()   // []byte JSON-схемы
+// Используйте для валидации routes.yaml в CI без зависимости от gokit-бинаря.
 ```
 
-The standalone CLI prints the same bytes:
+Автономный CLI печатает те же байты:
 
 ```bash
 fibermap dump-schema > routes.schema.json
 ```
 
-## Notes
+## Заметки
 
-- **The schema covers shape, not semantics.** Things like "handler `tasks.create` actually exists" are NOT enforced — they're checked at `Engine.Mount` time when registrations + YAML meet.
-- **Updates land with the binary.** Editors that fetch the schema from GitHub raw get the schema bundled with the tagged release; pin a specific tag in the URL if you want stability across `main` churn.
-- **Schema URL changed on rebrand** — old `raw.githubusercontent.com/theizzatbek/fibermap/...` redirects via the rename are NOT guaranteed; update your `routes.yaml` modeline to the new path.
+- **Схема покрывает форму, не семантику.** Вещи вроде "handler `tasks.create` действительно существует" НЕ проверяются — они проверяются на стадии `Engine.Mount`, когда регистрации встречаются с YAML.
+- **Обновления приезжают с бинарём.** Редакторы, которые тянут схему с GitHub raw, получают версию, упакованную с tagged release; запиньте специфичный тэг в URL, если хотите стабильности в churn'е `main`.
+- **URL схемы изменился после rebrand'а** — старые `raw.githubusercontent.com/theizzatbek/fibermap/...` redirect'ы через переименование НЕ гарантируются; обновите modeline в вашем `routes.yaml` на новый путь.
 
 [redhat.vscode-yaml]: https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml
 
-## See also
+## См. также
 
-- [`fibermap`](../README.md) — `Schema()` accessor, `Engine.LoadFile()` is what consumes routes.yaml at runtime
-- `cmd/fibermap` — CLI for `validate routes.yaml` + `dump-schema`
+- [`fibermap`](../README.md) — accessor `Schema()`, `Engine.LoadFile()` — это то, что в runtime потребляет routes.yaml
+- `cmd/fibermap` — CLI для `validate routes.yaml` + `dump-schema`
+</content>

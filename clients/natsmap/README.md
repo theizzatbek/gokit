@@ -1,15 +1,15 @@
 # clients/natsmap
 
-Declarative YAML layer over `clients/nats` for NATS / JetStream subscribers and publishers. Subscribers and publishers are described in YAML; Go code registers typed handlers and publishers by name; `Build` returns a goroutine-safe `*Runtime` exposing `Drain()` and `Publish[T](...)`. Symmetric to `clients/apimap` for outbound HTTP.
+Декларативный YAML-слой над `clients/nats` для NATS / JetStream подписчиков и публишеров. Подписчики и публишеры описываются в YAML; Go-код регистрирует типизированные хендлеры и публишеры по имени; `Build` возвращает goroutine-safe `*Runtime`, выставляющий `Drain()` и `Publish[T](...)`. Симметрично `clients/apimap` для исходящего HTTP.
 
-**Import:** `github.com/theizzatbek/gokit/clients/natsmap`
-**Depends on:** `gopkg.in/yaml.v3` + `github.com/theizzatbek/gokit/errs` + `github.com/theizzatbek/gokit/clients/nats`
+**Импорт:** `github.com/theizzatbek/gokit/clients/natsmap`
+**Зависит от:** `gopkg.in/yaml.v3` + `github.com/theizzatbek/gokit/errs` + `github.com/theizzatbek/gokit/clients/nats`
 
-## Why use it
+## Зачем это нужно
 
-`clients/nats` gives you typed `Publisher[T]` and `Subscribe[T]` with auto-Ack semantics. It does NOT solve **subject catalog** — every service still hand-writes the same Subscribe call per subject, with the same boilerplate around durable names, MaxInFlight, MaxDeliver, backoff curves, and start-from policies.
+`clients/nats` даёт вам типизированные `Publisher[T]` и `Subscribe[T]` с auto-Ack семантикой. Это НЕ решает **subject-каталог** — каждый сервис всё ещё руками пишет тот же Subscribe-вызов на каждый subject, с тем же boilerplate вокруг durable-имён, MaxInFlight, MaxDeliver, backoff-кривых и start-from политик.
 
-`natsmap` is the missing layer: subscribers and publishers live in YAML; the code registers typed handlers and publishes by name. One grep across `*.yaml` answers "what subjects does this service consume? what subjects does it publish?". Symmetric to `clients/apimap` for outbound HTTP — the kit's broader theme of a declarative outer shell wrapping a typed Go core.
+`natsmap` — недостающий слой: подписчики и публишеры живут в YAML; код регистрирует типизированные хендлеры и публикует по имени. Один grep по `*.yaml` отвечает "какие subjects этот сервис потребляет? какие subjects он публикует?". Симметрично `clients/apimap` для исходящего HTTP — более широкая тема кита: декларативная внешняя shell, оборачивающая типизированный Go-core.
 
 ## Quickstart
 
@@ -62,7 +62,7 @@ func main() {
     }
     defer c.Close()
 
-    // Idempotent — safe on every startup.
+    // Идемпотентно — безопасно на каждом старте.
     _ = c.EnsureStream(ctx, natsclient.StreamConfig{
         Name:     "ORDERS",
         Subjects: []string{"orders.>"},
@@ -92,80 +92,80 @@ func main() {
 }
 ```
 
-## YAML schemas
+## YAML-схемы
 
 ### `subscribers.yaml`
 
 ```yaml
 subscribers:
-  - name: <string>                 # required, unique within engine; pairs with RegisterHandler[T]
-    subject: <string>              # required; NATS subject (literal or wildcard)
-    durable: <string>              # optional; durable consumer name (survives restart)
-    max_in_flight: <int>           # optional; handler concurrency semaphore (>= 0)
-    max_deliver: <int>             # optional; total delivery attempts before Term (>= 0)
-    ack_wait: <duration>           # optional; redeliver if Ack not seen within this window
-    queue_group: <string>          # optional; round-robin across queue members (load balancing)
-    backoff:                       # optional; per-redelivery backoff
-      type: exponential|fixed      # default "exponential"
-      base: <duration>             # required when backoff: is set; must be > 0
-      max: <duration>              # optional; defaults to base*32 for exponential, ignored for fixed
-    start_from: <policy>           # optional; see "start_from shapes" below
-    filter_subject: <string>       # optional; override subject filter on the JetStream consumer
-    batch_size: <int>              # optional; > 0 switches to batched mode (see below)
-    batch_interval: <duration>     # optional; max wait between batches; defaults to 1s when batch_size > 0
+  - name: <string>                 # обязательно, уникально в engine; пара с RegisterHandler[T]
+    subject: <string>              # обязательно; NATS-subject (literal или wildcard)
+    durable: <string>              # опционально; имя durable-consumer'а (переживает restart)
+    max_in_flight: <int>           # опционально; семафор concurrency handler'ов (>= 0)
+    max_deliver: <int>             # опционально; total попыток delivery до Term (>= 0)
+    ack_wait: <duration>           # опционально; redeliver, если Ack не виден внутри этого окна
+    queue_group: <string>          # опционально; round-robin между queue-членами (load balancing)
+    backoff:                       # опционально; per-redelivery backoff
+      type: exponential|fixed      # по умолчанию "exponential"
+      base: <duration>             # обязательно, когда backoff: установлен; должен быть > 0
+      max: <duration>              # опционально; по умолчанию base*32 для exponential, игнорируется для fixed
+    start_from: <policy>           # опционально; см. "start_from формы" ниже
+    filter_subject: <string>       # опционально; override subject-фильтра на JetStream consumer'е
+    batch_size: <int>              # опционально; > 0 переключает в batched mode (см. ниже)
+    batch_interval: <duration>     # опционально; max wait между батчами; по умолчанию 1s, когда batch_size > 0
 ```
 
-#### Batched subscribers
+#### Batched-подписчики
 
-Set `batch_size: N` to opt the subscriber into JetStream Pull mode:
-the kit fetches up to N messages with a deadline of
-`batch_interval` (default 1s) and hands them to a batched handler
-registered via `natsmap.RegisterBatchedHandler[T]`:
+Установите `batch_size: N`, чтобы opt'нуть subscriber в JetStream Pull mode:
+кит fetch'ит до N сообщений с deadline'ом `batch_interval` (по умолчанию 1s)
+и отдаёт их batched-handler'у, зарегистрированному через
+`natsmap.RegisterBatchedHandler[T]`:
 
 ```go
 natsmap.RegisterBatchedHandler[OrderCreated](e, "invoice_sender",
     func(ctx context.Context, batch []natsclient.Msg[OrderCreated]) error {
-        return persistAll(ctx, batch) // one transaction
+        return persistAll(ctx, batch) // одна транзакция
     })
 ```
 
-The handler's return drives **all-or-nothing** ack semantics:
+Return handler'а драйвит **all-or-nothing** ack-семантику:
 
-- `return nil` → kit Acks every message in the batch (Postgres-style
-  `COMMIT` analog).
-- `return err` → kit Naks every message → JetStream redelivers the
-  whole batch on the next fetch (a `ROLLBACK`).
+- `return nil` → кит Ack'ает каждое сообщение в батче (Postgres-style
+  `COMMIT`-аналог).
+- `return err` → кит Nak'ает каждое сообщение → JetStream re-deliver'ит
+  весь батч на следующем fetch'е (`ROLLBACK`).
 
-Mode mismatches are caught at `Build`:
+Mode-mismatch'и ловятся на `Build`:
 
 | Code | Cause |
 |---|---|
-| `natsmap_batch_handler_required` | YAML has `batch_size > 0` but `RegisterHandler[T]` was called. |
-| `natsmap_regular_handler_required` | YAML has no `batch_size` but `RegisterBatchedHandler[T]` was called. |
+| `natsmap_batch_handler_required` | YAML имеет `batch_size > 0`, но был вызван `RegisterHandler[T]`. |
+| `natsmap_regular_handler_required` | YAML без `batch_size`, но был вызван `RegisterBatchedHandler[T]`. |
 
-Implementation lives in `clients/natsmap/batched.go`: a per-
-subscriber goroutine loops `nats.Subscription.Fetch(batch_size,
-MaxWait=batch_interval)`, decodes payloads through the registered
-codec, calls the typed batched handler, then walks the message
-slice acking or naking based on the return.
+Реализация живёт в `clients/natsmap/batched.go`: per-subscriber goroutine
+loop'ает `nats.Subscription.Fetch(batch_size, MaxWait=batch_interval)`,
+декодирует payloads через зарегистрированный codec, зовёт типизированный
+batched-handler, потом обходит message-срез ack'ая или nak'ая в зависимости
+от return'а.
 
-Decode failures Term the offending message (poison-pill suppression)
-and remove it from the live batch; the remaining successfully-
-decoded messages still proceed through the handler.
+Decode-failures Term'ают offending-сообщение (poison-pill suppression)
+и удаляют из живого батча; оставшиеся успешно-декодированные сообщения
+всё равно проходят через handler.
 
 ### `publishers.yaml`
 
 ```yaml
 publishers:
-  - name: <string>                 # required, unique within engine; pairs with RegisterPublisher[T]
-    subject: <string>              # required; NATS subject the publisher targets
-    headers:                       # optional; map[string]string applied to every publish
-      <Header-Name>: <value>       # expanded to []string{value} when sent
+  - name: <string>                 # обязательно, уникально в engine; пара с RegisterPublisher[T]
+    subject: <string>              # обязательно; NATS-subject, в который publisher таргетит
+    headers:                       # опционально; map[string]string, применяется к каждой публикации
+      <Header-Name>: <value>       # расширяется до []string{value} при отправке
 ```
 
-### Combined `events.yaml`
+### Комбинированный `events.yaml`
 
-Both blocks may live in one file:
+Оба блока могут жить в одном файле:
 
 ```yaml
 subscribers:
@@ -177,11 +177,11 @@ publishers:
     subject: orders.created
 ```
 
-`LoadFile` is additive — calling it multiple times appends entries into one engine. You can keep `subscribers.yaml` and `publishers.yaml` as separate files, or merge them into one `events.yaml`. Both shapes are first-class.
+`LoadFile` additive — вызов его несколько раз append'ит записи в один engine. Вы можете держать `subscribers.yaml` и `publishers.yaml` отдельными файлами, или мерджить их в один `events.yaml`. Обе формы first-class.
 
 ### Env-var substitution
 
-`${VAR_NAME}` anywhere in the YAML is resolved against `os.Getenv` at LoadFile time (regex `[A-Z_][A-Z0-9_]*` — uppercase only). Useful for environment-specific subject prefixes:
+`${VAR_NAME}` где угодно в YAML резолвится против `os.Getenv` на LoadFile-time (regex `[A-Z_][A-Z0-9_]*` — только uppercase). Полезно для environment-specific subject-префиксов:
 
 ```yaml
 subscribers:
@@ -190,14 +190,14 @@ subscribers:
     durable: invoice-sender-${ENV}
 ```
 
-| Code | When |
+| Code | Когда |
 |---|---|
-| `natsmap_env_var_unset` | `${FOO}` referenced but `FOO` not in env |
-| `natsmap_env_var_malformed` | `${...}` shape doesn't match the regex (e.g. `${lower-case}`) |
+| `natsmap_env_var_unset` | `${FOO}` упомянут, но `FOO` не в env'е |
+| `natsmap_env_var_malformed` | Форма `${...}` не соответствует regex (например, `${lower-case}`) |
 
-### Explicit env values via `WithEnv`
+### Явные env-значения через `WithEnv`
 
-If your service already has typed config, pass values explicitly:
+Если ваш сервис уже имеет typed-config, передайте значения явно:
 
 ```go
 e := natsmap.New(natsmap.WithEnv(map[string]string{
@@ -206,21 +206,21 @@ e := natsmap.New(natsmap.WithEnv(map[string]string{
 e.LoadFile("subscribers.yaml")
 ```
 
-Map consulted first; on miss falls back to `os.LookupEnv`. Both miss → `natsmap_env_var_unset`.
+Map consult'ируется первой; на miss fallback'ится на `os.LookupEnv`. Оба miss → `natsmap_env_var_unset`.
 
-## Streams declaration
+## Декларация streams
 
-natsmap can ensure JetStream streams alongside the subscribers and
-publishers that use them. Two shapes:
+natsmap может ensure'ить JetStream-стримы вместе с подписчиками и
+публишерами, которые их используют. Две формы:
 
-### Explicit list
+### Explicit-список
 
 ```yaml
 streams:
   - name: ORDERS
     subjects: [orders.>]
-    storage: file              # file (default) | memory
-    retention: limits          # limits (default) | interest | work_queue
+    storage: file              # file (по умолчанию) | memory
+    retention: limits          # limits (по умолчанию) | interest | work_queue
     max_age: 168h
     max_bytes: 0               # bytes; 0 = unlimited
     max_msgs: 0
@@ -228,7 +228,7 @@ streams:
     dedup: 2m
 ```
 
-### Auto-derive from subjects
+### Auto-derive из subjects
 
 ```yaml
 streams: auto
@@ -237,45 +237,43 @@ publishers:
   - { name: orders_out, subject: orders.created }
 ```
 
-`streams: auto` walks subscriber + publisher subjects, groups by first
-segment (`orders.created` → `orders`), and creates one stream per
-group with wildcard subjects (`orders.>`) and safe defaults (file
-storage, limits retention, unlimited age).
+`streams: auto` обходит subscriber + publisher subjects, группирует по первому
+сегменту (`orders.created` → `orders`) и создаёт один stream per группу с
+wildcard-subjects (`orders.>`) и безопасными defaults (file-storage,
+limits-retention, unlimited-age).
 
-For production, prefer the explicit list — defaults are not tuned
-(no MaxAge, no Replicas > 1). `auto` is great for dev and examples.
+Для production предпочитайте explicit-список — defaults не tuned'ы
+(без MaxAge, без Replicas > 1). `auto` отлично для dev'а и примеров.
 
-Combining `auto` and an explicit list in the same engine →
-`natsmap_streams_auto_conflict` error at Build.
+Комбинирование `auto` и explicit-списка в одном engine →
+`natsmap_streams_auto_conflict` ошибка на Build.
 
-## Multi-node behaviour
+## Multi-node поведение
 
-When the same service runs on N instances, subscriber defaults must
-avoid two instances fighting over the same durable consumer. natsmap
-applies these rules:
+Когда тот же сервис работает на N инстансах, subscriber-defaults должны
+избегать борьбы двух инстансов за тот же durable-consumer. natsmap
+применяет эти правила:
 
 | YAML `durable` | YAML `queue_group` | Effective `durable` | Effective `queue_group` |
 |---|---|---|---|
-| `""` (omitted) | `""` (omitted) | `name` | `name` (+ ServerGroup suffix) |
-| `""` | `"workers"` | `name` | `workers` (explicit wins) |
-| `"foo"` | `""` | `foo` | `""` (user controls durable) |
+| `""` (пропущено) | `""` (пропущено) | `name` | `name` (+ ServerGroup-суффикс) |
+| `""` | `"workers"` | `name` | `workers` (explicit побеждает) |
+| `"foo"` | `""` | `foo` | `""` (user контролирует durable) |
 | `"foo"` | `"bar"` | `foo` | `bar` |
 | `"ephemeral"` | `""` | `""` (true ephemeral) | `""` |
 | `"ephemeral"` | `"bar"` | `""` | `bar` |
 
-**Default = load-balanced**: subscriber with no explicit config gets a
-durable consumer bound to a queue group both named after the
-subscriber. N instances → N consumers in the same queue group → each
-message goes to exactly one.
+**По умолчанию = load-balanced**: subscriber без явного config'а получает
+durable-consumer, привязанный к queue-group, оба именованы по имени
+subscriber'а. N инстансов → N consumer'ов в одной queue-group → каждое
+сообщение идёт ровно одному.
 
-**Broadcast = explicit ephemeral**: `durable: ephemeral` opts each
-instance into its own ephemeral consumer. Every instance sees every
-message.
+**Broadcast = explicit ephemeral**: `durable: ephemeral` opts каждый
+инстанс в свой ephemeral-consumer. Каждый инстанс видит каждое сообщение.
 
-### ServerGroup pattern (cross-region)
+### Паттерн ServerGroup (cross-region)
 
-Set `service.WithServerGroup("dc1")` (or `SERVICE_SERVER_GROUP=dc1`
-env) to suffix auto-derived queue groups:
+Установите `service.WithServerGroup("dc1")` (или env `SERVICE_SERVER_GROUP=dc1`), чтобы суффиксить auto-derived queue-groups:
 
 ```
 subscriber name = invoice_sender
@@ -283,27 +281,28 @@ ServerGroup     = dc1
 queue group     = invoice_sender-dc1
 ```
 
-Instances in DC1 form `invoice_sender-dc1` queue group; DC2 instances
-form `invoice_sender-dc2`. Each region processes events independently.
+Инстансы в DC1 формируют queue-group `invoice_sender-dc1`; инстансы DC2
+формируют `invoice_sender-dc2`. Каждый регион обрабатывает события
+независимо.
 
-### `start_from` shapes
+### Формы `start_from`
 
-| Value | Meaning |
+| Значение | Смысл |
 |---|---|
-| `new` (default) | Only deliver messages published after the consumer is created |
-| `all` | Replay every message in the stream from the beginning |
-| `from_seq:<int>` | Start from the given JetStream sequence number |
-| `from_time:<RFC3339>` | Start from the first message at or after the given time (e.g. `from_time:2026-01-15T00:00:00Z`) |
+| `new` (по умолчанию) | Доставлять только сообщения, опубликованные после создания consumer'а |
+| `all` | Replay'ить каждое сообщение в stream'е с начала |
+| `from_seq:<int>` | Стартовать с заданной JetStream sequence-number |
+| `from_time:<RFC3339>` | Стартовать с первого сообщения на заданном времени или после (например, `from_time:2026-01-15T00:00:00Z`) |
 
-### `backoff` knobs
+### Knob'ы `backoff`
 
-| Field | Required | Notes |
+| Поле | Обязательно | Заметки |
 |---|---|---|
-| `type` | yes | `exponential` (default) or `fixed` |
-| `base` | yes | Initial delay; for `fixed` it's the only delay |
-| `max` | no | Upper cap for `exponential`; defaults to `base * 32`; ignored for `fixed` |
+| `type` | да | `exponential` (по умолчанию) или `fixed` |
+| `base` | да | Initial-delay; для `fixed` это единственный delay |
+| `max` | нет | Upper-cap для `exponential`; по умолчанию `base * 32`; игнорируется для `fixed` |
 
-## Public API
+## Публичный API
 
 ```go
 type Engine struct{ /* unexported */ }
@@ -312,19 +311,19 @@ type Option func(*options)
 
 // Engine lifecycle (build-once)
 func New() *Engine
-func (e *Engine) LoadFile(path string) error              // additive — call multiple times
-func (e *Engine) LoadBytes(b []byte) error                // additive — call multiple times
+func (e *Engine) LoadFile(path string) error              // additive — зовите несколько раз
+func (e *Engine) LoadBytes(b []byte) error                // additive — зовите несколько раз
 
-// Typed registration — panic on duplicate name or post-Build call
+// Типизированная регистрация — panic на дублирующем имени или post-Build вызове
 func RegisterHandler[T any](e *Engine, name string,
     h func(ctx context.Context, m natsclient.Msg[T]) error)
 func RegisterPublisher[T any](e *Engine, name string)
 
-// Build: validates everything, opens subscriptions, returns *Runtime.
-// Multiple validation failures are aggregated via errors.Join.
+// Build: валидирует всё, открывает subscriptions, возвращает *Runtime.
+// Несколько validation-failures агрегируются через errors.Join.
 func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option) (*Runtime, error)
 
-// Options
+// Опции
 func WithLogger(*slog.Logger) Option
 func WithMetrics(prometheus.Registerer) Option
 
@@ -332,18 +331,18 @@ func WithMetrics(prometheus.Registerer) Option
 func Publish[T any](ctx context.Context, r *Runtime, name string, payload T) error
 func PublishWithHeaders[T any](ctx context.Context, r *Runtime, name string,
     payload T, headers map[string][]string) error
-func (r *Runtime) Drain() error                            // idempotent
-func (r *Runtime) SubscriberNames() []string               // sorted
-func (r *Runtime) PublisherNames() []string                // sorted
+func (r *Runtime) Drain() error                            // идемпотентен
+func (r *Runtime) SubscriberNames() []string               // отсортирован
+func (r *Runtime) PublisherNames() []string                // отсортирован
 ```
 
-`PublishWithHeaders` merges per-call headers over the YAML-declared static headers; per-call entries win on collision.
+`PublishWithHeaders` мерджит per-call headers поверх YAML-declared статических headers; per-call записи побеждают на коллизии.
 
 ## Common patterns
 
-### Via `gokit/service`
+### Через `gokit/service`
 
-Set `NATSMAP_SUBSCRIBERS_PATH` / `NATSMAP_PUBLISHERS_PATH` in the environment (one or both is the opt-in trigger). Wire typed registrations with `service.WithNATSMapRegistration`:
+Установите `NATSMAP_SUBSCRIBERS_PATH` / `NATSMAP_PUBLISHERS_PATH` в окружении (один или оба — это opt-in trigger). Проведите типизированные регистрации с `service.WithNATSMapRegistration`:
 
 ```go
 svc, err := service.New[ReqCtx, MyClaims](ctx, cfg,
@@ -352,16 +351,16 @@ svc, err := service.New[ReqCtx, MyClaims](ctx, cfg,
         natsmap.RegisterPublisher[OrderCreated](e, "orders.created")
     }),
 )
-// svc.NATSMap is the *natsmap.Runtime; svc.Run() drains it on shutdown
-// before tearing down the underlying NATS connection.
+// svc.NATSMap — это *natsmap.Runtime; svc.Run() дренит его на shutdown'е
+// до того, как tears down лежащее снизу NATS-соединение.
 _ = svc.Run()
 ```
 
-### Standalone wiring
+### Standalone проводка
 
-`Connect → EnsureStream → New → LoadFile → Register* → Build` (see Quickstart above). No service framework required.
+`Connect → EnsureStream → New → LoadFile → Register* → Build` (см. Quickstart выше). Никакой service-фреймворк не требуется.
 
-### Queue groups for load balancing
+### Queue groups для load balancing
 
 ```yaml
 subscribers:
@@ -371,77 +370,77 @@ subscribers:
     durable: invoice-workers
 ```
 
-Multiple instances of the same service with `queue_group: invoice-workers` share the load: each message is delivered to exactly one queue member, round-robin. Pair `queue_group` with a shared `durable` name to make the consumer survive restarts.
+Несколько инстансов того же сервиса с `queue_group: invoice-workers` шарят нагрузку: каждое сообщение доставляется ровно одному queue-члену, round-robin. Пара `queue_group` с shared `durable`-именем делает consumer'а переживающим restart'ы.
 
-### Mixed YAML files
+### Mixed YAML-файлы
 
 ```go
 _ = eng.LoadFile("subscribers.yaml")
 _ = eng.LoadFile("publishers.yaml")
-// — or —
-_ = eng.LoadFile("events.yaml") // combined
+// — или —
+_ = eng.LoadFile("events.yaml") // комбинированный
 ```
 
-`LoadFile` accumulates into the same engine. Use whichever layout fits your repo.
+`LoadFile` аккумулирует в тот же engine. Используйте layout, который подходит вашему репо.
 
-### Type mismatch — startup vs runtime
+### Type-mismatch — startup vs runtime
 
-| Failure | When detected | Mechanism |
+| Failure | Когда detected | Механизм |
 |---|---|---|
-| Duplicate `RegisterHandler[T]` for one name | startup (registration) | panic with `natsmap_duplicate_subscriber` |
-| `Register*` after `Build` | startup (registration) | panic with `natsmap_already_built` |
-| YAML subscriber with no `RegisterHandler` | startup (Build) | error `natsmap_handler_not_registered` |
-| `RegisterHandler` for unknown YAML name | startup (Build) | error `natsmap_handler_unknown` |
-| `Publish[WrongType]` at runtime | runtime | error `natsmap_publisher_type_mismatch` |
+| Дубликат `RegisterHandler[T]` на одно имя | startup (регистрация) | panic с `natsmap_duplicate_subscriber` |
+| `Register*` после `Build` | startup (регистрация) | panic с `natsmap_already_built` |
+| YAML-subscriber без `RegisterHandler` | startup (Build) | ошибка `natsmap_handler_not_registered` |
+| `RegisterHandler` для unknown YAML-имени | startup (Build) | ошибка `natsmap_handler_unknown` |
+| `Publish[WrongType]` на runtime | runtime | ошибка `natsmap_publisher_type_mismatch` |
 
-The intent: every YAML-vs-code mismatch surfaces at Build, before any subscription opens. Wrong-type publishes still surface at the call site so test coverage catches them.
+Интент: каждый YAML-vs-code mismatch всплывает на Build, до того, как открывается subscription. Wrong-type публикации всё ещё всплывают на call-site, так что test-coverage их ловит.
 
-## Error model
+## Error-модель
 
-All errors are `*errs.Error` with stable `Code`.
+Все ошибки — `*errs.Error` со стабильным `Code`.
 
-### Build-time (collected via `errors.Join`)
+### Build-time (собранный через `errors.Join`)
 
-| Code | Kind | When |
+| Code | Kind | Когда |
 |---|---|---|
-| `natsmap_read_file` | Validation | `LoadFile` cannot read the file |
-| `natsmap_parse_yaml` | Validation | YAML decode failure |
-| `natsmap_env_var_unset` | Validation | `${VAR}` references unset env var |
-| `natsmap_env_var_malformed` | Validation | `${...}` doesn't match `[A-Z_][A-Z0-9_]*` |
-| `natsmap_no_entries` | Validation | YAML parsed but has no subscribers and no publishers |
-| `natsmap_missing_name` | Validation | subscriber/publisher entry without `name` |
-| `natsmap_missing_subject` | Validation | subscriber/publisher entry without `subject` |
-| `natsmap_duplicate_subscriber` | Validation | two subscribers share `name` |
-| `natsmap_duplicate_publisher` | Validation | two publishers share `name` |
+| `natsmap_read_file` | Validation | `LoadFile` не может прочитать файл |
+| `natsmap_parse_yaml` | Validation | YAML decode-failure |
+| `natsmap_env_var_unset` | Validation | `${VAR}` ссылается на unset env-var |
+| `natsmap_env_var_malformed` | Validation | `${...}` не соответствует `[A-Z_][A-Z0-9_]*` |
+| `natsmap_no_entries` | Validation | YAML распарсен, но нет subscribers и нет publishers |
+| `natsmap_missing_name` | Validation | subscriber/publisher-запись без `name` |
+| `natsmap_missing_subject` | Validation | subscriber/publisher-запись без `subject` |
+| `natsmap_duplicate_subscriber` | Validation | два subscribers шарят `name` |
+| `natsmap_duplicate_publisher` | Validation | два publishers шарят `name` |
 | `natsmap_invalid_max_in_flight` | Validation | `max_in_flight < 0` |
 | `natsmap_invalid_max_deliver` | Validation | `max_deliver < 0` |
 | `natsmap_invalid_ack_wait` | Validation | `ack_wait < 0` |
-| `natsmap_invalid_backoff` | Validation | `backoff.type` unknown, `base <= 0`, or `max < base` |
-| `natsmap_invalid_start_from` | Validation | `start_from` outside `new|all|from_seq:<int>|from_time:<RFC3339>` |
-| `natsmap_handler_not_registered` | Validation | YAML subscriber has no matching `RegisterHandler[T]` |
-| `natsmap_handler_unknown` | Validation | `RegisterHandler` for name not in YAML |
-| `natsmap_publisher_not_registered` | Validation | YAML publisher has no matching `RegisterPublisher[T]` |
-| `natsmap_publisher_unknown` | Validation | `RegisterPublisher` for name not in YAML |
-| `natsmap_subscribe_failed` | Unavailable | underlying `natsclient.SubscribeRaw` failed |
-| `natsmap_already_built` | Validation | `Build` called twice, or `Register*` after `Build` |
+| `natsmap_invalid_backoff` | Validation | `backoff.type` unknown, `base <= 0` или `max < base` |
+| `natsmap_invalid_start_from` | Validation | `start_from` вне `new|all|from_seq:<int>|from_time:<RFC3339>` |
+| `natsmap_handler_not_registered` | Validation | YAML-subscriber без matching `RegisterHandler[T]` |
+| `natsmap_handler_unknown` | Validation | `RegisterHandler` для имени, отсутствующего в YAML |
+| `natsmap_publisher_not_registered` | Validation | YAML-publisher без matching `RegisterPublisher[T]` |
+| `natsmap_publisher_unknown` | Validation | `RegisterPublisher` для имени, отсутствующего в YAML |
+| `natsmap_subscribe_failed` | Unavailable | лежащий снизу `natsclient.SubscribeRaw` зафейлился |
+| `natsmap_already_built` | Validation | `Build` вызван дважды, или `Register*` после `Build` |
 
-### Runtime (from `Publish` / `PublishWithHeaders`)
+### Runtime (из `Publish` / `PublishWithHeaders`)
 
-| Code | Kind | When |
+| Code | Kind | Когда |
 |---|---|---|
-| `natsmap_unknown_publisher` | NotFound | `name` not in YAML / not registered |
-| `natsmap_publisher_type_mismatch` | Validation | `Publish[T]` `T` differs from the registered type |
-| `natsmap_publish_failed` | Unavailable | underlying `natsclient` publish returned an error |
+| `natsmap_unknown_publisher` | NotFound | `name` не в YAML / не зарегистрирован |
+| `natsmap_publisher_type_mismatch` | Validation | `Publish[T]` `T` отличается от зарегистрированного типа |
+| `natsmap_publish_failed` | Unavailable | лежащая снизу `natsclient` публикация вернула ошибку |
 
 ## Observability
 
 ### `WithLogger`
 
-`WithLogger(*slog.Logger)` sets the logger natsmap uses for natsmap-level events (currently registration warnings; future hot-reload). Per-subscription handler logs — decode failures (→ Term), handler errors (→ Nak with backoff), max-deliver exceeded — are owned by `clients/nats`. Configure that one too by passing the same logger to `natsclient.Connect(..., natsclient.WithLogger(logger))`.
+`WithLogger(*slog.Logger)` устанавливает логгер, который natsmap использует для natsmap-level событий (в настоящее время registration-warning'и; будущий hot-reload). Per-subscription handler-логи — decode-failures (→ Term), handler-ошибки (→ Nak с backoff), max-deliver exceeded — принадлежат `clients/nats`. Сконфигурируйте и тот, передав тот же логгер в `natsclient.Connect(..., natsclient.WithLogger(logger))`.
 
 ### `WithMetrics`
 
-`WithMetrics(prometheus.Registerer)` is accepted for symmetry with `apimap`. natsmap itself currently exposes no collectors; subscription/publish metrics (in-flight gauge, handler success/error counter, decode-error counter, publish-duration histogram) come from `clients/nats.WithMetrics`.
+`WithMetrics(prometheus.Registerer)` принимается для симметрии с `apimap`. Сам natsmap в настоящее время не экспонирует collectors; subscription/publish-метрики (in-flight gauge, handler success/error counter, decode-error counter, publish-duration histogram) приходят из `clients/nats.WithMetrics`.
 
 ```go
 c, _ := natsclient.Connect(ctx, cfg,
@@ -449,40 +448,41 @@ c, _ := natsclient.Connect(ctx, cfg,
     natsclient.WithMetrics(promReg),
 )
 rt, _ := eng.Build(ctx, c,
-    natsmap.WithLogger(logger),   // for future natsmap-level events
-    natsmap.WithMetrics(promReg), // reserved
+    natsmap.WithLogger(logger),   // для будущих natsmap-level событий
+    natsmap.WithMetrics(promReg), // зарезервировано
 )
 ```
 
-## Testing
+## Тестирование
 
-Unit tests run without Docker:
+Unit-тесты работают без Docker:
 
 ```bash
 go test -short ./clients/natsmap/
 ```
 
-Integration smoke (`TestRuntime_PublishAndReceive`, `TestRuntime_BuildAggregatesValidationErrors`, `TestRuntime_BuildTwiceFails`) spins up `nats:2-alpine` with `-js` via `testcontainers-go/modules/nats` — Docker required:
+Integration smoke (`TestRuntime_PublishAndReceive`, `TestRuntime_BuildAggregatesValidationErrors`, `TestRuntime_BuildTwiceFails`) поднимает `nats:2-alpine` с `-js` через `testcontainers-go/modules/nats` — Docker требуется:
 
 ```bash
 go test ./clients/natsmap/
 ```
 
-For your own tests, follow the same pattern: spin up the testcontainer, `EnsureStream`, `LoadBytes` an inline YAML, `Register*`, `Build`, `defer rt.Drain()`.
+Для своих тестов следуйте тому же паттерну: поднимайте testcontainer, `EnsureStream`, `LoadBytes` inline-YAML, `Register*`, `Build`, `defer rt.Drain()`.
 
-## Limitations
+## Ограничения
 
-- **No hot-reload of YAML.** Loaded once at startup. A future `WithHotReload()` is planned.
-- **`Msg[T].Raw()` returns nil for natsmap-routed messages.** The reflection bridge decodes payloads into freshly-allocated `*T` and never retains the underlying `*nats.Msg`. If you need raw access (headers manipulation, manual Ack timing, JetStream metadata beyond what `Msg[T]` exposes), use `natsclient.Subscribe[T]` directly.
-- **One codec per `*natsclient.Client`.** Inherited from `clients/nats`. Heterogeneous wire formats across topics require multiple clients.
-- **No "web publisher" yet.** A future package will bridge a `fibermap` route to a NATS publish in YAML; out of scope here.
-- **`Build` opens every subscription synchronously.** A long subscriber list with slow JetStream creates a slow startup; failures aggregate via `errors.Join`.
-- **No subject-name validation against the stream.** If `subject:` doesn't match a stream configured on the server, the underlying `Subscribe` fails at Build with `natsmap_subscribe_failed`.
+- **Нет hot-reload YAML.** Грузится один раз на старте. Будущий `WithHotReload()` планируется.
+- **`Msg[T].Raw()` возвращает nil для natsmap-routed сообщений.** Reflection-bridge декодирует payloads в freshly-allocated `*T` и никогда не сохраняет лежащий снизу `*nats.Msg`. Если нужен raw-доступ (headers-manipulation, manual Ack-timing, JetStream-метаданные за пределами того, что выставляет `Msg[T]`), используйте `natsclient.Subscribe[T]` напрямую.
+- **Один codec на `*natsclient.Client`.** Унаследовано от `clients/nats`. Heterogeneous wire-format'ы по topic'ам требуют нескольких клиентов.
+- **Нет "web-publisher" пока.** Будущий пакет смост'ит `fibermap`-route с NATS-публикацией в YAML; вне scope'а здесь.
+- **`Build` открывает каждую subscription синхронно.** Длинный subscriber-список с медленным JetStream создаёт медленный startup; failures агрегируются через `errors.Join`.
+- **Нет subject-имени валидации против stream'а.** Если `subject:` не матчит stream, сконфигурированный на server'е, лежащий снизу `Subscribe` фейлится на Build с `natsmap_subscribe_failed`.
 
-## See also
+## См. также
 
-- [`clients/nats`](../nats/README.md) — typed JetStream wrapper underlying natsmap (Publisher[T], Subscribe[T], EnsureStream)
-- [`clients/apimap`](../apimap/README.md) — symmetric declarative HTTP layer (the inbound/outbound analogue)
-- [`service`](../../service/README.md) — auto-wires natsmap when `NATSMAP_SUBSCRIBERS_PATH` / `NATSMAP_PUBLISHERS_PATH` are set
-- [`errs`](../../errs/README.md) — error contract
-- [`examples/urlshort`](../../examples/urlshort/README.md) — uses natsmap for `urlshort.link.{created,visited}` publishers + subscribers
+- [`clients/nats`](../nats/README.md) — типизированная JetStream-обёртка, лежащая под natsmap'ом (Publisher[T], Subscribe[T], EnsureStream)
+- [`clients/apimap`](../apimap/README.md) — симметричный декларативный HTTP-слой (inbound/outbound аналог)
+- [`service`](../../service/README.md) — авто-подключает natsmap, когда `NATSMAP_SUBSCRIBERS_PATH` / `NATSMAP_PUBLISHERS_PATH` установлены
+- [`errs`](../../errs/README.md) — error-контракт
+- [`examples/urlshort`](../../examples/urlshort/README.md) — использует natsmap для `urlshort.link.{created,visited}` publisher'ов + subscriber'ов
+</content>

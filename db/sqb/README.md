@@ -1,11 +1,11 @@
 # db/sqb
 
-Opt-in [Masterminds/squirrel](https://github.com/Masterminds/squirrel) wrapper preconfigured for Postgres `$N` placeholders. `sqb.Builder` for query construction, `sqb.Query` and `sqb.Exec` to run a builder against any `db.Querier` (so it works against `*db.DB` AND `*db.Tx`).
+Опциональная обёртка над [Masterminds/squirrel](https://github.com/Masterminds/squirrel), преднастроенная под Postgres `$N` placeholders. `sqb.Builder` для построения запросов, `sqb.Query` и `sqb.Exec` для запуска builder'а против любого `db.Querier` (так что работает и с `*db.DB`, и с `*db.Tx`).
 
-**Parent:** [../README.md](../README.md)
-**Import:** `github.com/theizzatbek/gokit/db/sqb`
+**Родитель:** [../README.md](../README.md)
+**Импорт:** `github.com/theizzatbek/gokit/db/sqb`
 
-## Use
+## Использование
 
 ```go
 import (
@@ -13,29 +13,28 @@ import (
     "github.com/theizzatbek/gokit/db/sqb"
 )
 
-// SELECT with dynamic conditions
+// SELECT с динамическими условиями
 b := sqb.Builder.Select("id", "email").From("users").Where(sq.Eq{"org_id": orgID})
 if onlyActive {
     b = b.Where(sq.Eq{"deleted_at": nil})
 }
 rows, err := sqb.Query(ctx, d, b)
-// … iterate with rows.Next()
+// … итерируем rows.Next()
 
 // INSERT
 ins := sqb.Builder.Insert("users").Columns("email", "password_hash").Values(email, hash).Suffix("RETURNING id")
 tag, err := sqb.Exec(ctx, d, ins)
 
-// Inside a transaction
+// Внутри транзакции
 err := d.Tx(ctx, func(tx *db.Tx) error {
     _, err := sqb.Exec(ctx, tx, sqb.Builder.Update("users").Set("verified_at", time.Now()).Where(sq.Eq{"id": id}))
     return err
 })
 ```
 
-## Pagination
+## Пагинация
 
-`sqb.Page` is a stock query-param shape for list endpoints. Combined with
-`sqb.QueryAll[T]` (see below), a list handler is 4–5 lines of intent:
+`sqb.Page` — это стандартная форма query-параметров для list-эндпоинтов. В сочетании с `sqb.QueryAll[T]` (см. ниже) list-хендлер сводится к 4-5 строкам интента:
 
 ```go
 func (h *Handler) List(c *fibermap.Context[T], p sqb.Page) error {
@@ -43,7 +42,7 @@ func (h *Handler) List(c *fibermap.Context[T], p sqb.Page) error {
         Select(itemColumns...).
         From("items").
         Where(sq.Eq{"user_id": c.Data.UserID}).
-        OrderBy("created_at DESC")   // sort is the caller's call — allowlist columns
+        OrderBy("created_at DESC")   // sort решает caller — allowlist колонок
     items, err := sqb.QueryAll[Item](c.UserContext(), h.db, p.Apply(b), scanItem)
     if err != nil { return err }
     return c.JSON(items)
@@ -52,41 +51,35 @@ fibermap.RegisterHandlerWithQuery(eng, "items.list", h.List)
 // → GET /items?limit=50&offset=100
 ```
 
-(If you ALSO need a body / path params alongside pagination, use
-`RegisterHandlerWithInput` and embed `Query sqb.Page` in the Input struct.)
+(Если ещё нужен body / path-параметры рядом с пагинацией, используйте `RegisterHandlerWithInput` и заэмбедьте `Query sqb.Page` в Input struct.)
 
-| Field | Tag | Validation | Default |
+| Поле | Тэг | Валидация | По умолчанию |
 |---|---|---|---|
 | `Limit` | `query:"limit"` | `omitempty,min=1,max=100` | `sqb.PageDefaultLimit` (20) |
 | `Offset` | `query:"offset"` | `omitempty,min=0` | 0 |
 
-`Apply` is belt-and-suspenders: even if the engine validator is disabled, it
-clamps `Limit` to `sqb.PageMaxLimit` (100) and `Offset` to ≥0.
+`Apply` — belt-and-suspenders: даже если валидатор engine отключён, она клампит `Limit` до `sqb.PageMaxLimit` (100) и `Offset` до ≥0.
 
-**ORDER BY is intentionally NOT part of `Page`** — sort columns are an
-SQL-injection surface. Each list endpoint should decide its own allowlist and
-append `OrderBy("column DIR")` to the builder itself.
+**ORDER BY намеренно НЕ часть `Page`** — sort-колонки — это SQL-injection surface. Каждый list-эндпоинт должен решать свой собственный allowlist и добавлять `OrderBy("column DIR")` в builder сам.
 
-## Typed scan helpers — `QueryAll[T]` / `QueryOne[T]`
+## Типизированные scan-хелперы — `QueryAll[T]` / `QueryOne[T]`
 
-Generic helpers that fold the standard pgx scan boilerplate (`Query` →
-`defer Close` → `for rows.Next()` → `rows.Scan` → `rows.Err`) into one call:
+Generic-хелперы, которые сворачивают стандартный pgx scan boilerplate (`Query` → `defer Close` → `for rows.Next()` → `rows.Scan` → `rows.Err`) в один вызов:
 
 ```go
-// SELECT many rows.
+// SELECT много строк.
 items, err := sqb.QueryAll[Item](ctx, db,
     sqb.Builder.Select(...).From("items").Where(sq.Eq{"user_id": uid}),
     scanItem)
 
-// SELECT / INSERT … RETURNING / UPDATE … RETURNING one row.
+// SELECT / INSERT … RETURNING / UPDATE … RETURNING одна строка.
 user, err := sqb.QueryOne[User](ctx, db,
     sqb.Builder.Insert("users").Columns("email").Values(email).
         Suffix("RETURNING id, email, created_at"),
     scanUser)
 ```
 
-The scan function takes `pgx.Row` so the SAME helper works for both — and
-matches the signature pgx.Rows already provides:
+scan-функция принимает `pgx.Row`, так что ОДИН хелпер работает для обоих — и соответствует подписи, которую pgx.Rows уже предоставляет:
 
 ```go
 func scanItem(r pgx.Row, dst *Item) error {
@@ -94,18 +87,18 @@ func scanItem(r pgx.Row, dst *Item) error {
 }
 ```
 
-`QueryOne` surfaces pgx.ErrNoRows as `*errs.Error{KindNotFound}` through the
-underlying `db.Querier`.
+`QueryOne` поднимает pgx.ErrNoRows как `*errs.Error{KindNotFound}` через лежащий снизу `db.Querier`.
 
-## Notes
+## Заметки
 
-- **`sqb.Builder` (not `sq.StatementBuilder`).** It's already wired to `sq.Dollar` placeholders. Using bare squirrel produces `?`-placeholder SQL which Postgres rejects.
-- **`SqlBuilder` interface** (used by `Exec`) accepts any squirrel builder that exposes `.ToSql() (string, []any, error)` — `InsertBuilder`, `UpdateBuilder`, `DeleteBuilder`, `SelectBuilder`. `Query` is specialised to `SelectBuilder`.
-- **Errors flow through `db.Querier`** — pgx errors map to `*errs.Error` via the same `mapPgxErr` as direct `db.Query`/`Exec`. No double-wrapping.
-- **One-way dep:** core `db/` does NOT import `sqb`. If a service prefers raw SQL string concatenation (which is fine for static queries), skip this package entirely.
-- **No ORM here.** sqb is query-building only — scanning into structs is still your call (use `db.Query` → `rows.Scan(...)`).
+- **`sqb.Builder` (не `sq.StatementBuilder`).** Он уже подключён к `sq.Dollar` placeholders. Использование чистого squirrel производит SQL с `?`-placeholder'ами, которые Postgres отклоняет.
+- **Интерфейс `SqlBuilder`** (используемый `Exec`) принимает любой squirrel-builder, у которого есть `.ToSql() (string, []any, error)` — `InsertBuilder`, `UpdateBuilder`, `DeleteBuilder`, `SelectBuilder`. `Query` специализирован на `SelectBuilder`.
+- **Ошибки проходят через `db.Querier`** — pgx-ошибки маппятся в `*errs.Error` через тот же `mapPgxErr`, что и прямой `db.Query`/`Exec`. Без двойного оборачивания.
+- **One-way зависимость:** core `db/` НЕ импортирует `sqb`. Если сервис предпочитает сырое склеивание SQL-строк (что нормально для статических запросов), пропустите этот пакет целиком.
+- **Никакой ORM здесь.** sqb — это только query-building; scanning в struct'ы — всё ещё ваше дело (используйте `db.Query` → `rows.Scan(...)`).
 
-## See also
+## См. также
 
-- [`db`](../README.md) — the underlying pool + `Querier` interface
-- [Masterminds/squirrel docs](https://github.com/Masterminds/squirrel) for the full builder API
+- [`db`](../README.md) — лежащий снизу pool + интерфейс `Querier`
+- [Masterminds/squirrel docs](https://github.com/Masterminds/squirrel) для полного builder API
+</content>

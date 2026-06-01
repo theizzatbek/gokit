@@ -1,26 +1,25 @@
 # db/notify
 
-Goroutine-safe Postgres LISTEN/NOTIFY helper. The kit's outbox v2
-uses the same pattern internally; this package exposes it as a
-general-purpose primitive for the broader set of pub/sub-over-pg use
-cases:
+Goroutine-safe Postgres LISTEN/NOTIFY хелпер. outbox v2 кита использует
+тот же паттерн внутри; этот пакет экспонирует его как general-purpose
+примитив для широкого набора pub/sub-over-pg use case'ов:
 
-- Cache invalidation broadcast (Postgres trigger `pg_notify` → app
-  drops local cache).
-- Materialized view refresh signals.
-- Distributed locks notifications.
+- Broadcast cache invalidation (Postgres-триггер `pg_notify` → app
+  дропает локальный кеш).
+- Сигналы refresh materialized view.
+- Notifications для distributed locks.
 - Real-time projection updates.
 
-## Why use it
+## Зачем это нужно
 
-LISTEN/NOTIFY by itself requires a dedicated connection, careful
-reconnect on conn drop, and a handler dispatch loop. Every service
-that uses it reinvents these. This package gives you:
+Сам LISTEN/NOTIFY требует выделенного соединения, аккуратного
+reconnect'а на conn drop'е и handler dispatch loop'а. Каждый сервис,
+который это использует, переизобретает их. Этот пакет даёт вам:
 
-- Dedicated pool conn held for the notifier's lifetime.
-- Bounded-backoff reconnect on conn drop or LISTEN failure.
-- Single-goroutine handler dispatch in receipt order.
-- `Start` / `Stop` lifecycle matching the kit's conventions.
+- Выделенный pool conn, удерживаемый на всю жизнь notifier'а.
+- Bounded-backoff reconnect при conn drop или LISTEN failure.
+- Dispatch хендлера в одной горутине в порядке получения.
+- Lifecycle `Start` / `Stop`, соответствующий конвенциям кита.
 
 ## Quickstart
 
@@ -35,55 +34,56 @@ n := notify.NewNotifier(svc.DB, []string{"cache_invalidate"},
 _ = n.Start(ctx)
 svc.OnShutdown(n.Stop)
 
-// Anywhere else (same or different process):
+// Где-то ещё (тот же или другой процесс):
 _, _ = svc.DB.Exec(ctx, `SELECT pg_notify('cache_invalidate', $1)`, key)
 ```
 
-## API surface
+## API-поверхность
 
-| Symbol | Notes |
+| Символ | Заметки |
 |---|---|
-| `NewNotifier(d, channels, handler, opts...)` | Construct. Channels must be valid Postgres identifiers (`[A-Za-z_][A-Za-z0-9_]*`). |
-| `(*Notifier).Start(ctx)` | Spawns the listen goroutine. Idempotent. |
-| `(*Notifier).Stop()` | Cancels ctx + waits for the goroutine. Idempotent + nil-safe. |
-| `notify.WithLogger(l)` | Wire a slog.Logger for lifecycle + per-notification diagnostics. |
-| `notify.Notification` | `{Channel, Payload string}` — what your handler receives per `pg_notify` call. |
+| `NewNotifier(d, channels, handler, opts...)` | Конструкция. Каналы должны быть валидными Postgres-идентификаторами (`[A-Za-z_][A-Za-z0-9_]*`). |
+| `(*Notifier).Start(ctx)` | Спавнит listen-горутину. Идемпотентен. |
+| `(*Notifier).Stop()` | Отменяет ctx + ждёт горутину. Идемпотентен + nil-safe. |
+| `notify.WithLogger(l)` | Подключает slog.Logger для lifecycle + per-notification диагностики. |
+| `notify.Notification` | `{Channel, Payload string}` — то, что ваш handler получает на каждом `pg_notify` вызове. |
 
-## Semantics
+## Семантика
 
-- **Connection isolation**: the notifier holds ONE `*pgxpool.Conn`
-  for its lifetime. Pool `MaxConns >= 2` recommended so foreground
-  queries don't starve.
-- **No durability**: NOTIFY is fire-and-forget. Notifications sent
-  during the reconnect window are LOST. Callers that need
-  durability should pair this with a recovery mechanism — e.g. a
-  SELECT against an indexed table on reconnect to drain anything
-  missed.
-- **Single-goroutine handler**: notifications dispatch in receipt
-  order, one at a time. Blocking the handler queues subsequent
-  notifications at the server-side buffer. Fan out to a worker
-  pool from inside the handler for high-throughput sources.
-- **Handler errors**: logged at Warn (when WithLogger is set) and
-  ignored. Postgres has no nak/redeliver primitive — the operator
-  has to instrument retry separately.
+- **Изоляция соединения**: notifier держит ОДИН `*pgxpool.Conn` на
+  весь срок жизни. Рекомендуется `MaxConns >= 2` пула, чтобы
+  foreground-запросы не голодали.
+- **Без durability**: NOTIFY — fire-and-forget. Notifications,
+  отправленные в окно reconnect, ТЕРЯЮТСЯ. Caller'ы, которым нужна
+  durability, должны сочетать это с recovery-механизмом — например,
+  SELECT по индексной таблице при reconnect'е, чтобы дренить
+  пропущенное.
+- **Single-goroutine handler**: notifications dispatch'атся в
+  порядке получения, по одной за раз. Блокирующий handler queue'ит
+  последующие notifications в server-side буфере. Fan out в worker
+  pool изнутри handler'а для high-throughput источников.
+- **Ошибки хендлера**: логируются на Warn (когда WithLogger
+  установлен) и игнорируются. У Postgres нет nak/redeliver примитива
+  — оператор должен инструментировать retry отдельно.
 
-## Comparison with `db/outbox`
+## Сравнение с `db/outbox`
 
-The outbox uses LISTEN/NOTIFY internally for the worker's wake-up
-path. The two pieces serve different needs:
+outbox использует LISTEN/NOTIFY внутри для wake-up пути worker'а.
+Эти два куска служат разным нуждам:
 
 | | `db/outbox` | `db/notify` |
 |---|---|---|
-| **Durability** | At-least-once via Postgres rows. | Fire-and-forget — no DB state. |
-| **Use case** | Transactional event publish to a real bus (NATS / Kafka). | App-internal real-time signals. |
-| **Sender** | `outbox.Enqueue` inside the business Tx. | Plain `pg_notify(channel, payload)` from anywhere. |
+| **Durability** | At-least-once через Postgres-строки. | Fire-and-forget — нет DB-state. |
+| **Use case** | Транзакционный event publish на реальную шину (NATS / Kafka). | App-internal real-time сигналы. |
+| **Sender** | `outbox.Enqueue` внутри бизнес-Tx. | Plain `pg_notify(channel, payload)` откуда угодно. |
 
-Both can coexist — the outbox uses its own channel name
-(`outbox_new`), distinct from anything you'd register through
+Оба могут сосуществовать — outbox использует свой канал
+(`outbox_new`), отличный от чего-либо, что вы зарегистрируете через
 `notify.NewNotifier`.
 
-## See also
+## См. также
 
-- [`db`](../README.md) — the underlying pool wrapper.
-- [`db/outbox`](../outbox/README.md) — durable transactional outbox; uses the same LISTEN pattern internally.
-- Postgres docs on [LISTEN](https://www.postgresql.org/docs/current/sql-listen.html) / [NOTIFY](https://www.postgresql.org/docs/current/sql-notify.html).
+- [`db`](../README.md) — обёртка пула под капотом.
+- [`db/outbox`](../outbox/README.md) — durable transactional outbox; использует тот же LISTEN-паттерн внутри.
+- Postgres-документация по [LISTEN](https://www.postgresql.org/docs/current/sql-listen.html) / [NOTIFY](https://www.postgresql.org/docs/current/sql-notify.html).
+</content>

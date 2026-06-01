@@ -1,13 +1,13 @@
 # sentrykit
 
-Thin Sentry error-tracking bootstrap for kit-based services. One
-call initialises the Sentry SDK and returns a flush function;
-companion [`FiberMiddleware`](#fibermiddleware) clones a per-request
-hub and auto-captures panics; [`WrapErrorHandler`](#wraperrorhandler)
-turns 5xx responses into Sentry events.
+Тонкий Sentry error-tracking bootstrap для kit-based сервисов. Один
+вызов инициализирует Sentry SDK и возвращает flush-функцию;
+companion [`FiberMiddleware`](#fibermiddleware) клонирует per-request
+hub и auto-capture'ит panics; [`WrapErrorHandler`](#wraperrorhandler)
+превращает 5xx-ответы в Sentry-события.
 
-**Import:** `github.com/theizzatbek/gokit/sentrykit`
-**Depends on:** `github.com/getsentry/sentry-go`
+**Импорт:** `github.com/theizzatbek/gokit/sentrykit`
+**Зависит от:** `github.com/getsentry/sentry-go`
 
 ## Quickstart
 
@@ -26,53 +26,54 @@ defer func() {
 }()
 ```
 
-For the typical kit service, `service.WithSentry(dsn, ...)` wraps
-Setup + FiberMiddleware + shutdown wiring in one option — see
+Для типичного kit-сервиса `service.WithSentry(dsn, ...)` оборачивает
+Setup + FiberMiddleware + shutdown-проводку одной опцией — см.
 [service README](../service/README.md).
 
-## Options
+## Опции
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `Setup(ctx, dsn)` | — | dsn required; empty value returns an error |
-| `WithEnvironment(env)` | "" | `environment` tag on every event (production/staging/dev) |
-| `WithRelease(release)` | "" or [AutoRelease](#release-detection) when service.WithSentry is used | `release` tag — git SHA, image tag, semver. Overrides any value AutoRelease picked up. |
-| `WithSampleRate(r)` | 1.0 | Fraction of error events shipped (0..1) |
-| `WithTracesSampleRate(r)` | 0 | Sentry-native transactions. Keep at 0 when using otelkit for tracing. |
-| `WithBeforeSend(fn)` | nil | Hook to scrub PII, drop noisy events, attach extras |
-| `WithDebug(bool)` | false | Sentry SDK debug logs to stderr (local setup only) |
-| `WithFlushTimeout(d)` | 5s | Default deadline used by shutdown when ctx has none |
-| `WithServerName(name)` | auto | Overrides the auto-detected hostname tag |
-| `WithTag(key, value)` | — | Pre-populate a tag that lands on every event |
+| `Setup(ctx, dsn)` | — | dsn обязателен; пустое значение возвращает ошибку |
+| `WithEnvironment(env)` | "" | Тэг `environment` на каждом событии (production/staging/dev) |
+| `WithRelease(release)` | "" или [AutoRelease](#детекция-release), когда используется service.WithSentry | Тэг `release` — git SHA, image tag, semver. Override'ит любое значение, которое подобрал AutoRelease. |
+| `WithSampleRate(r)` | 1.0 | Доля error-событий, отправляемых (0..1) |
+| `WithTracesSampleRate(r)` | 0 | Sentry-native transactions. Держите на 0 при использовании otelkit для tracing'а. |
+| `WithBeforeSend(fn)` | nil | Hook для очистки PII, drop'а шумных событий, прикрепления extras |
+| `WithDebug(bool)` | false | Sentry SDK debug-логи в stderr (только local-setup) |
+| `WithFlushTimeout(d)` | 5s | Default deadline, используемый shutdown'ом, когда у ctx нет своего |
+| `WithServerName(name)` | auto | Override'ит авто-определённый hostname-тэг |
+| `WithTag(key, value)` | — | Pre-populate тэга, попадающего на каждое событие |
 
-The SDK reads `SENTRY_DSN` and friends from the environment when those
-are unset in code — same convention as the rest of the kit.
+SDK читает `SENTRY_DSN` и friends из окружения, когда они не установлены
+в коде — та же конвенция, что и у остального кита.
 
-## Release detection
+## Детекция Release
 
-`sentrykit.AutoRelease()` resolves the release tag with no
-configuration on the caller's part. Priority chain:
+`sentrykit.AutoRelease()` резолвит release-тэг без конфигурации со
+стороны caller'а. Priority-цепочка:
 
-1. `SENTRY_RELEASE` environment variable.
-2. `OTEL_RESOURCE_ATTRIBUTES` `service.version=X` (so a single
-   `service.WithOtel(svc, otelkit.WithServiceVersion(v))` declaration
-   feeds both pipelines).
-3. `runtime/debug.ReadBuildInfo().Main.Version` when it isn't
-   `(devel)` — typically a semver from `go install <module>@vX.Y.Z`.
-4. `vcs.revision` build setting truncated to 12 chars (matches the
-   short-SHA convention Sentry uses for unversioned commits).
-5. Empty string — sentry-go accepts that and ships events without a
-   release attribution.
+1. Env-переменная `SENTRY_RELEASE`.
+2. `OTEL_RESOURCE_ATTRIBUTES` `service.version=X` (так что одно
+   объявление `service.WithOtel(svc, otelkit.WithServiceVersion(v))`
+   питает обе пайплайны).
+3. `runtime/debug.ReadBuildInfo().Main.Version`, когда оно не
+   `(devel)` — обычно semver из `go install <module>@vX.Y.Z`.
+4. `vcs.revision` build-setting, обрезанный до 12 chars (матчит
+   short-SHA конвенцию, которую Sentry использует для unversioned
+   коммитов).
+5. Пустая строка — sentry-go это принимает и shipping'ит события без
+   release-attribution.
 
-`service.setupSentry` prepends `WithRelease(AutoRelease())` to the
-caller's `sentrykit.Option` list, so an explicit
-`sentrykit.WithRelease(...)` from the caller still wins via
+`service.setupSentry` prepend'ит `WithRelease(AutoRelease())` к
+caller'скому списку `sentrykit.Option`, так что explicit
+`sentrykit.WithRelease(...)` от caller'а всё ещё побеждает через
 last-write-wins.
 
-For untrimmed local `go run` builds (no vcs metadata), set
-`SENTRY_RELEASE=local-dev` in your shell to avoid sending events
-without an attribution; production builds with `go build -trimpath`
-auto-pick up the vcs revision.
+Для untrimmed local `go run` сборок (без vcs-метаданных), установите
+`SENTRY_RELEASE=local-dev` в своём shell'е, чтобы избежать отправки
+событий без attribution; production-сборки с `go build -trimpath`
+авто-подхватывают vcs-revision.
 
 ## FiberMiddleware
 
@@ -80,23 +81,24 @@ auto-pick up the vcs revision.
 app.Use(sentrykit.FiberMiddleware())
 ```
 
-For each request:
+На каждый запрос:
 
-1. Clones `sentry.CurrentHub()` into a request-scoped `*sentry.Hub`.
-2. Populates the hub's scope with HTTP context: method, headers, IP,
-   request_id (when [`fibermap.RequestID`](../fibermap/README.md) is
+1. Клонирует `sentry.CurrentHub()` в request-scoped `*sentry.Hub`.
+2. Populate'ит scope hub'а HTTP-контекстом: method, headers, IP,
+   request_id (когда [`fibermap.RequestID`](../fibermap/README.md)
    upstream).
-3. Stores the hub at `c.Locals(hubKey{})` — readable via
+3. Хранит hub в `c.Locals(hubKey{})` — читается через
    `sentrykit.HubFromContext(c)`.
-4. Defers a `recover()`: on panic, captures the exception with
-   request scope and **re-panics**. The outer `fibermap.Recover`
-   still writes the 500 response — no behaviour change for the wire.
+4. Defer'ит `recover()`: на panic capture'ит exception с
+   request-scope'ом и **re-panic'ит**. Внешний `fibermap.Recover`
+   всё ещё пишет 500-ответ — никакого изменения поведения для wire.
 
-`http.route` (Fiber's route template, e.g. `/users/:id`) is lazily
-attached: Fiber resolves the matched route only after the global
-middleware chain advances past `FiberMiddleware`, so the tag is set
-either when a handler calls `HubFromContext` or in the deferred panic
-path before `RecoverWithContext` runs.
+`http.route` (Fiber route-template, например, `/users/:id`) лениво
+прикрепляется: Fiber резолвит matched-route только после того, как
+глобальная middleware-цепочка продвинется мимо `FiberMiddleware`,
+так что тэг устанавливается либо когда handler зовёт
+`HubFromContext`, либо в deferred-panic пути до того, как запустится
+`RecoverWithContext`.
 
 ## HubFromContext
 
@@ -105,10 +107,10 @@ sentrykit.HubFromContext(c).CaptureException(err)
 sentrykit.HubFromContext(c).Scope().SetUser(sentry.User{ID: subject})
 ```
 
-Returns the request-scoped hub stored by `FiberMiddleware`. Falls
-back to `sentry.CurrentHub()` (process-global) when the middleware
-isn't in the chain — callers can always emit, they just lose the
-request-scoped tags.
+Возвращает request-scoped hub, сохранённый `FiberMiddleware`'ой.
+Fallback'ится на `sentry.CurrentHub()` (process-global), когда
+middleware не в цепочке — caller'ы всегда могут эмитить, они просто
+теряют request-scoped тэги.
 
 ## WrapErrorHandler
 
@@ -118,21 +120,22 @@ app := fiber.New(fiber.Config{
 })
 ```
 
-Captures the supplied error to the per-request hub when
-`errs.HTTP(err)` resolves to status >= 500, then delegates to
-`inner`. 4xx errors pass through unchanged — validation failures and
-auth rejections are not Sentry-worthy by default.
+Capture'ит переданную error в per-request hub, когда `errs.HTTP(err)`
+резолвится в статус >= 500, потом делегирует в `inner`. 4xx-ошибки
+проходят без изменений — validation-failures и auth-rejections
+по умолчанию не Sentry-worthy.
 
-`service.WithSentry` does NOT auto-wrap because not every service
-sets a custom error handler. Wire it explicitly via
+`service.WithSentry` НЕ auto-wrap'ит, потому что не каждый сервис
+устанавливает кастомный error-handler. Подключите явно через
 `service.WithRunOptions(fibermap.WithFiberConfig(...))`.
 
-## Subsystem breadcrumbs (slog bridge)
+## Subsystem breadcrumbs (slog мост)
 
-`sentrykit.SlogHandler(inner, opts...)` wraps any `slog.Handler` so
-every log record passing through it also becomes a Sentry breadcrumb
-on the request hub. The inner handler still receives every record —
-console / JSON logging keeps working.
+`sentrykit.SlogHandler(inner, opts...)` оборачивает любой
+`slog.Handler`, так что каждая log-запись, проходящая через него,
+также становится Sentry-breadcrumb'ом на request-hub'е. Inner-handler
+всё ещё получает каждую запись — console / JSON-логирование
+продолжает работать.
 
 ```go
 inner := slog.NewJSONHandler(os.Stdout, nil)
@@ -142,46 +145,47 @@ logger := slog.New(sentrykit.SlogHandler(inner,
 ))
 ```
 
-Hub resolution: `sentry.GetHubFromContext(ctx)` first, then
-`sentry.CurrentHub()`. `FiberMiddleware` puts the request hub on
-`c.UserContext()` (via `sentry.SetHubOnContext`) so any subsystem
-logger that uses `*Context` variants picks up the correct per-request
-hub automatically — db's pgx tracer (`LogAttrs(ctx, ...)`), auth's
-security logger (`InfoContext(c.UserContext(), ...)`), httpc's retry
-log (`WarnContext(req.Context(), ...)`) all qualify out of the box.
+Резолв hub'а: `sentry.GetHubFromContext(ctx)` сначала, потом
+`sentry.CurrentHub()`. `FiberMiddleware` кладёт request-hub на
+`c.UserContext()` (через `sentry.SetHubOnContext`), так что любой
+subsystem-логгер, использующий `*Context` варианты, автоматически
+подхватывает правильный per-request hub — pgx-tracer от db
+(`LogAttrs(ctx, ...)`), security-логгер от auth
+(`InfoContext(c.UserContext(), ...)`), retry-лог от httpc
+(`WarnContext(req.Context(), ...)`) — все qualify out of the box.
 
-Level mapping:
+Маппинг уровней:
 
-| slog | Sentry breadcrumb level | Default |
+| slog | Sentry breadcrumb-level | По умолчанию |
 |---|---|---|
-| Debug | "debug" | **skipped** (use `WithDebugBreadcrumbs`) |
+| Debug | "debug" | **пропущено** (используйте `WithDebugBreadcrumbs`) |
 | Info | "info" | on |
 | Warn | "warning" | on |
-| Error | "error" | on (breadcrumb only — `CaptureException` is opt-in) |
+| Error | "error" | on (только breadcrumb — `CaptureException` опциональный) |
 
-Debug is skipped by default because pgx's query tracer logs every
-successful query at Debug level — letting them in would flood the
-100-item breadcrumb buffer inside one transactional handler.
+Debug пропущен по умолчанию, потому что pgx-query-tracer логирует
+каждый успешный query на Debug-уровне — пуская их, мы залили бы
+100-item breadcrumb-буфер внутри одного transactional-handler'а.
 
-Category resolution: explicit attr (default key `category`) → first
-word/`:`-prefix of the message lowercased → literal `"log"`. So
-`logger.Info("httpc retry", ...)` lands as `category="httpc"`
-without code changes.
+Резолв категории: explicit attr (default-ключ `category`) → first
+word/`:`-prefix лоуэркейснутого message → literal `"log"`. Так что
+`logger.Info("httpc retry", ...)` падает как `category="httpc"`
+без изменений в коде.
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `WithDebugBreadcrumbs()` | off | Include Debug logs |
-| `WithCategoryAttr(key)` | "category" | Slog attr to promote to breadcrumb.Category |
-| `WithMaxBreadcrumbValueLen(n)` | 512 | Cap stringified attr values; n ≤ 0 disables |
-| `WithAttrFilter(fn)` | nil | Drop attr keys for which fn returns false |
-| `WithCaptureLevel(level)` | off | Records ≥ level capture as Sentry events (in addition to breadcrumb) |
-| `WithCaptureErrorAttrKeys(keys...)` | err / error / cause | Attr keys consulted for an `error` value → CaptureException; otherwise CaptureMessage |
-| `WithCaptureDedupeWindow(d)` | 60s | Suppress duplicate events for same `(level, category, message)` within d; 0 disables |
+| `WithDebugBreadcrumbs()` | off | Включить Debug-логи |
+| `WithCategoryAttr(key)` | "category" | Slog-attr для promote в breadcrumb.Category |
+| `WithMaxBreadcrumbValueLen(n)` | 512 | Cap stringified attr-значений; n ≤ 0 отключает |
+| `WithAttrFilter(fn)` | nil | Дропать attr-ключи, для которых fn возвращает false |
+| `WithCaptureLevel(level)` | off | Записи ≥ level capture'ятся как Sentry-события (в дополнение к breadcrumb) |
+| `WithCaptureErrorAttrKeys(keys...)` | err / error / cause | Attr-ключи, consult'ируемые для `error`-значения → CaptureException; иначе CaptureMessage |
+| `WithCaptureDedupeWindow(d)` | 60s | Подавить duplicate-события для того же `(level, category, message)` внутри d; 0 отключает |
 
 ### Error → event auto-capture
 
-`WithCaptureLevel(slog.LevelError)` turns the handler into a Sentry
-sink for high-severity log records:
+`WithCaptureLevel(slog.LevelError)` превращает handler в Sentry-sink
+для high-severity log-записей:
 
 ```go
 sentrykit.SlogHandler(inner,
@@ -189,34 +193,35 @@ sentrykit.SlogHandler(inner,
 )
 ```
 
-- Records ≥ threshold ship as events. The breadcrumb is added FIRST
-  (so the event timeline includes it).
-- If an attr in `err` / `error` / `cause` (configurable via
-  `WithCaptureErrorAttrKeys`) carries an `error` value, the event is
-  a Sentry **Exception** (stack frames + `error.Error()` as
-  `Exception.Value`). Otherwise it's a **Message** event with
+- Записи ≥ threshold ship'ятся как события. Breadcrumb добавляется
+  СНАЧАЛА (так что event-timeline включает его).
+- Если attr в `err` / `error` / `cause` (конфигурируется через
+  `WithCaptureErrorAttrKeys`) несёт `error`-значение, событие — это
+  Sentry **Exception** (stack-frames + `error.Error()` как
+  `Exception.Value`). Иначе — **Message**-событие с
   `record.Message`.
-- Attrs are packed into a single `log` Sentry context block, keeping
-  the global tag facet clean.
-- Dedupe by fingerprint `(level, category, message)`. The fingerprint
-  intentionally ignores attr values — the same `db query failed` shouldn't
-  produce a fresh event per concrete query.
+- Attrs пакуются в один `log` Sentry-context block, оставляя
+  global-tag-facet чистым.
+- Dedupe по fingerprint'у `(level, category, message)`. Fingerprint
+  намеренно игнорирует attr-значения — тот же `db query failed`
+  не должен производить свежее событие per concrete-query.
 
-`service.WithSentryErrorCapture(slog.LevelError)` is the service-level
-shortcut.
+`service.WithSentryErrorCapture(slog.LevelError)` — service-level
+шорткат.
 
-`service.WithSentry` auto-wraps the kit-built logger with this
-handler. User-supplied loggers (via `service.WithLogger`) are
-respected unchanged — opt in manually if you want breadcrumb
-coverage there. Use `service.WithSentryBreadcrumbs(...)` to forward
-handler options into the auto-wrap path.
+`service.WithSentry` auto-wrap'ит kit-built логгер этим handler'ом.
+User-supplied логгеры (через `service.WithLogger`) уважаются без
+изменений — opt in руками, если хотите breadcrumb-coverage там.
+Используйте `service.WithSentryBreadcrumbs(...)`, чтобы пробросить
+handler-опции в auto-wrap путь.
 
 ## Cron monitoring
 
-Sentry Crons turns periodic schedulers into monitored objects:
-expected schedule + last outcome shown in the UI, alerts on missing
-heartbeats, alerts on consecutive errors. `sentrykit` exposes three
-helpers; `service.WithRefreshGC` auto-wires them.
+Sentry Crons превращает periodic-scheduler'ы в мониторящиеся
+объекты: ожидаемое расписание + last outcome показывается в UI,
+alert'ы на missing heartbeats, alert'ы на consecutive errors.
+`sentrykit` выставляет три хелпера; `service.WithRefreshGC`
+авто-подключает их.
 
 ```go
 err := sentrykit.MonitorCronWithConfig(ctx, "kit-refresh-gc",
@@ -224,69 +229,69 @@ err := sentrykit.MonitorCronWithConfig(ctx, "kit-refresh-gc",
     func(ctx context.Context) error { return store.GarbageCollect(ctx, time.Now()) })
 ```
 
-Per invocation: send `in_progress`, run fn, send `ok` (nil return)
-or `error` (non-nil) with the actual duration. The check-in IDs are
-chained so Sentry pairs the start + end events.
+На каждое invocation: отправить `in_progress`, run fn, отправить
+`ok` (nil return) или `error` (non-nil) с актуальной duration.
+Check-in ID'шники сцеплены, так что Sentry пейр'ит start + end
+события.
 
-| Helper | Use when |
+| Хелпер | Когда использовать |
 |---|---|
-| `MonitorCron(ctx, slug, fn)` | The monitor is already configured in the Sentry UI; you just want heartbeats. |
-| `MonitorCronWithConfig(ctx, slug, cfg, fn)` | Code-defined schedule. Each check-in upserts the config so operators don't maintain it separately. |
-| `IntervalMonitorConfig(d)` | Sensible default `MonitorConfig` for ticker-style jobs: minute-grained schedule, checkInMargin + maxRuntime = 2×interval capped at 30. |
+| `MonitorCron(ctx, slug, fn)` | Monitor уже сконфигурирован в Sentry UI; вы просто хотите heartbeats. |
+| `MonitorCronWithConfig(ctx, slug, cfg, fn)` | Code-defined schedule. Каждый check-in upsert'ит config, так что операторы не поддерживают его отдельно. |
+| `IntervalMonitorConfig(d)` | Sensible default `MonitorConfig` для ticker-style job'ов: minute-grained schedule, checkInMargin + maxRuntime = 2×interval capped at 30. |
 
-When `sentrykit.Setup` hasn't run (no DSN, no `WithSentry`), the
-wrappers are a transparent pass-through — fn runs once, no check-in
-dispatched. This is so schedulers can call `MonitorCron(...)`
-unconditionally without conditional code paths.
+Когда `sentrykit.Setup` не запускался (нет DSN, нет `WithSentry`),
+обёртки — прозрачный pass-through — fn запускается один раз, никакой
+check-in не dispatch'ится. Это сделано, чтобы scheduler'ы могли звать
+`MonitorCron(...)` безусловно без conditional-code-путей.
 
-Panics in fn propagate; the `ok`/`error` check-in is NOT sent in
-that case. The wider crash path will surface the panic via the
-global hub.
+Panics в fn пропагируют; `ok`/`error` check-in НЕ отправляется в
+этом случае. Более широкий crash-путь поднимет panic через
+global-hub.
 
-`service.WithRefreshGC` automatically uses
-`MonitorCronWithConfig("kit-refresh-gc", IntervalMonitorConfig(interval), ...)`
-when both `WithSentry` and `WithRefreshGC` are set. Override the
-slug via `service.WithSentryRefreshGCSlug(...)`; disable cron
-monitoring entirely (while keeping the rest of Sentry) via
+`service.WithRefreshGC` автоматически использует
+`MonitorCronWithConfig("kit-refresh-gc", IntervalMonitorConfig(interval), ...)`,
+когда и `WithSentry`, и `WithRefreshGC` установлены. Override slug'а
+через `service.WithSentryRefreshGCSlug(...)`; отключите cron-monitoring
+полностью (сохранив остальное от Sentry) через
 `service.WithoutSentryRefreshGCMonitor()`.
 
-## Capture truth table
+## Таблица истины capture
 
-| Trigger | FiberMiddleware? | WrapErrorHandler? | Captured? |
+| Триггер | FiberMiddleware? | WrapErrorHandler? | Capture'ится? |
 |---|---|---|---|
-| handler panic (error value) | yes | n/a | yes (Exception event) |
-| handler panic (string) | yes | n/a | yes (Message event) |
-| handler returns `errs.Internal(...)` | yes | yes | yes |
-| handler returns `errs.Internal(...)` | yes | no | no (default fiber ErrorHandler has no hook) |
-| handler returns `errs.NotFound(...)` | yes | yes | no (status < 500) |
-| `HubFromContext(c).CaptureException(err)` explicit | yes | n/a | yes |
-| `sentry.CaptureException(err)` package-level (no ctx) | any | n/a | yes (process-global hub, no request scope) |
+| handler panic (error-значение) | да | n/a | да (Exception-событие) |
+| handler panic (string) | да | n/a | да (Message-событие) |
+| handler возвращает `errs.Internal(...)` | да | да | да |
+| handler возвращает `errs.Internal(...)` | да | нет | нет (default fiber ErrorHandler без hook'а) |
+| handler возвращает `errs.NotFound(...)` | да | да | нет (status < 500) |
+| `HubFromContext(c).CaptureException(err)` explicit | да | n/a | да |
+| `sentry.CaptureException(err)` package-level (без ctx) | любой | n/a | да (process-global hub, без request-scope'а) |
 
-## Limitations
+## Ограничения
 
-- **Traces+metrics out of scope.** Performance belongs to
-  [`otelkit`](../otelkit/README.md); Sentry can ingest those via OTLP
-  if you point the OTel exporter at Sentry's endpoint.
-- **No stack frames from wrapped errors.** When the `err` attr
-  carries an `errs.Error` with a `Cause`, the captured Exception
-  uses the running goroutine's stack — not the stack the cause was
-  produced on. Wiring a `runtime.Frame` extractor onto `errs.Cause`
-  is a future follow-up if needed.
-- **No CPU profiling.** `sentry-go` v0.46.2 doesn't expose a stable
-  profiling client option. Will land in a follow-up once the SDK
-  ships `ProfilesSampleRate` (or successor) in its `ClientOptions`.
-- **No release auto-detection.** `WithRelease` must be passed
-  explicitly (or `SENTRY_RELEASE` env). Follow-up wires the value
-  from `service.Service.NodeName` / `service.version` resource attr.
-- **No per-request user scope from JWT.** Handlers can set it
-  themselves via `HubFromContext(c).Scope().SetUser(...)` — follow-up
-  reads `auth.From(c)` automatically.
+- **Traces+metrics вне scope'а.** Performance принадлежит
+  [`otelkit`](../otelkit/README.md); Sentry может ingest'ить их через
+  OTLP, если вы направите OTel-exporter на Sentry-endpoint.
+- **Нет stack-frames из обёрнутых ошибок.** Когда attr `err` несёт
+  `errs.Error` с `Cause`, captured Exception использует stack
+  работающей goroutine'ы — не stack, на котором был произведён
+  cause. Проводка `runtime.Frame`-extractor'а в `errs.Cause` — это
+  future follow-up, если нужно.
+- **Нет CPU-профилирования.** `sentry-go` v0.46.2 не выставляет
+  стабильную profiling-client опцию. Приземлится в follow-up'е, как
+  только SDK shipping'ит `ProfilesSampleRate` (или преемник) в своих
+  `ClientOptions`.
+- **Нет авто-детекции release.** `WithRelease` должна передаваться
+  явно (или env `SENTRY_RELEASE`). Follow-up подключит значение из
+  `service.Service.NodeName` / `service.version` resource-attr.
+- **Нет per-request user-scope'а из JWT.** Handler'ы могут установить
+  его сами через `HubFromContext(c).Scope().SetUser(...)` —
+  follow-up читает `auth.From(c)` автоматически.
 
-## See also
+## См. также
 
-- [`service`](../service/README.md) — `WithSentry(dsn, ...)` wires
-  Setup + FiberMiddleware + shutdown in one option
-- [`otelkit`](../otelkit/README.md) — performance tracing + metrics
-  pipeline; when both are on, Sentry events share the OTel trace_id
-- [`errs`](../errs/README.md) — `errs.HTTP(err)` resolves the wire
-  status used by `WrapErrorHandler`
+- [`service`](../service/README.md) — `WithSentry(dsn, ...)` подключает Setup + FiberMiddleware + shutdown одной опцией
+- [`otelkit`](../otelkit/README.md) — performance tracing + metrics-пайплайн; когда оба on, Sentry-события шарят OTel trace_id
+- [`errs`](../errs/README.md) — `errs.HTTP(err)` резолвит wire-status, используемый `WrapErrorHandler`'ом
+</content>

@@ -1,11 +1,11 @@
 # fibermap/bind
 
-Generic request-decoding helpers — `Body[T]`, `Query[T]`, `Params[T]`, `Header[T]` — backed by Fiber's parsers + an optional `Validator`. Used directly by `fibermap.RegisterHandlerWithBody/Query/Params/Headers` to auto-decode + validate before invoking your typed handler.
+Generic-хелперы декодирования запроса — `Body[T]`, `Query[T]`, `Params[T]`, `Header[T]` — поверх Fiber-парсеров + опционального `Validator`. Используются напрямую через `fibermap.RegisterHandlerWithBody/Query/Params/Headers` для авто-декодирования + валидации перед вызовом вашего типизированного хендлера.
 
-**Parent:** [../README.md](../README.md)
-**Import:** `github.com/theizzatbek/gokit/fibermap/bind`
+**Родитель:** [../README.md](../README.md)
+**Импорт:** `github.com/theizzatbek/gokit/fibermap/bind`
 
-## Use
+## Использование
 
 ```go
 import (
@@ -21,31 +21,32 @@ type CreateRequest struct {
 func handler(c *fiber.Ctx) error {
     body, err := bind.Body[CreateRequest](c, validator.New())
     if err != nil {
-        return err   // *errs.Error{Kind: Validation} — maps to 400 via fibermap.ErrorHandler
+        return err   // *errs.Error{Kind: Validation} — маппится в 400 через fibermap.ErrorHandler
     }
-    // body.Title is decoded + validated
+    // body.Title декодирован + валидирован
 }
 ```
 
-`Validator` is an interface (`Struct(any) error`) — pass `nil` to skip validation (still decodes). Sibling helpers:
+`Validator` — это интерфейс (`Struct(any) error`) — передайте `nil`, чтобы пропустить валидацию (всё равно декодирует). Sibling-хелперы:
 
-| Helper | Reads from | Tag |
+| Хелпер | Читает из | Тэг |
 |---|---|---|
-| `bind.Body[T](c, v)` | request body (JSON/form/multipart per Content-Type) | `json:"..."` |
+| `bind.Body[T](c, v)` | request body (JSON/form/multipart согласно Content-Type) | `json:"..."` |
 | `bind.Query[T](c, v)` | URL query string | `query:"..."` |
-| `bind.Params[T](c, v)` | path parameters (`:name`) | `params:"..."` |
-| `bind.Header[T](c, v)` | request headers | `header:"X-Name"` |
+| `bind.Params[T](c, v)` | path-параметры (`:name`) | `params:"..."` |
+| `bind.Header[T](c, v)` | заголовки запроса | `header:"X-Name"` |
 
-## Notes
+## Заметки
 
-- **Validator is opt-in.** Pass `nil` if you want decoding without validation rules — useful in tests or for raw passthrough.
-- **First-class `*errs.Error`.** Both decode and validation failures return typed errors with `KindValidation` so `fibermap.ErrorHandler` maps them to 400 with a `FieldError`-populated body.
-- **The generic `T` is your struct.** Define one per request, keep tags + validate rules colocated with the type.
-- **Typically you don't call these directly** — `fibermap.RegisterHandlerWithBody` and friends wrap them and the engine's `SetValidator(v)` is the canonical place to set the validator once.
-- **Custom error mapping** via `Engine.SetBindErrorHandler(fn)` — replace the default `*errs.Error` shape with your own.
+- **Валидатор опциональный.** Передайте `nil`, если вам нужно декодирование без валидации — полезно в тестах или для raw passthrough.
+- **First-class `*errs.Error`.** И ошибки декодирования, и валидации возвращают типизированные ошибки с `KindValidation`, так что `fibermap.ErrorHandler` маппит их в 400 с body, заполненным `FieldError`.
+- **Generic `T` — это ваша структура.** Определите по одной на запрос, держите тэги + правила валидации рядом с типом.
+- **Обычно вы не вызываете их напрямую** — `fibermap.RegisterHandlerWithBody` и друзья оборачивают их, и `SetValidator(v)` на engine — каноническое место, где валидатор устанавливается один раз.
+- **Кастомный маппинг ошибок** через `Engine.SetBindErrorHandler(fn)` — заменяет дефолтную форму `*errs.Error` на свою.
 
-## See also
+## См. также
 
-- [`fibermap`](../README.md) — RegisterHandlerWithBody/Query/Params/Headers wrap these helpers
-- [`errs`](../../errs/README.md) — the `*errs.Error{Kind: Validation}` shape returned on failure
-- [`errs/errsval`](../../errs/errsval/README.md) — convert `validator.ValidationErrors` into `*errs.Error.Details`
+- [`fibermap`](../README.md) — RegisterHandlerWithBody/Query/Params/Headers оборачивает эти хелперы
+- [`errs`](../../errs/README.md) — форма `*errs.Error{Kind: Validation}`, возвращаемая при ошибке
+- [`errs/errsval`](../../errs/errsval/README.md) — конвертирует `validator.ValidationErrors` в `*errs.Error.Details`
+</content>

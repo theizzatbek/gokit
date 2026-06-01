@@ -1,11 +1,11 @@
 # fibermap/factory
 
-Pre-built `MiddlewareFactoryFunc[T]` helpers for the common YAML-parameterised middlewares: `RequireRole`, `RequireAnyScope`, and adapters that wrap raw Fiber handlers into the fibermap factory shape.
+Готовые хелперы `MiddlewareFactoryFunc[T]` для самых частых параметризуемых через YAML middleware: `RequireRole`, `RequireAnyScope` и адаптеры, которые оборачивают сырые Fiber-хендлеры в форму fibermap factory.
 
-**Parent:** [../README.md](../README.md)
-**Import:** `github.com/theizzatbek/gokit/fibermap/factory`
+**Родитель:** [../README.md](../README.md)
+**Импорт:** `github.com/theizzatbek/gokit/fibermap/factory`
 
-## Use
+## Использование
 
 ```go
 import (
@@ -29,7 +29,7 @@ fibermap.RegisterMiddlewareFactory(eng, "require_scope",
     ))
 ```
 
-Now in `routes.yaml`:
+Теперь в `routes.yaml`:
 
 ```yaml
 middleware:
@@ -37,14 +37,15 @@ middleware:
   - require_scope: [orders:write, orders:admin]
 ```
 
-## Notes
+## Заметки
 
-- **Both factories accept opt-in `WithDenyHandler(h)`.** By default a deny returns `*errs.Error{Kind: Permission}` → 403; override for custom shapes.
-- **`Adapter[T](h fiber.Handler)`** lifts a raw `*fiber.Ctx` handler into a `MiddlewareFunc[T]` that ignores `Context[T].Data` — useful for plain Fiber middlewares (CORS, helmet, rate-limit).
-- **`AdapterFactory[T](newFn)`** is the factory variant — `newFn(args []string) (fiber.Handler, error)` produces a raw Fiber handler per YAML invocation; the adapter wraps it into the typed factory shape.
-- **The auth/fibermount package uses `Adapter`/`AdapterFactory` internally** to register `bearer`/`require_scope`/`require_role` factories from `*auth.Auth[C]`. Use that instead of writing role/scope factories from scratch if you're already using `gokit/auth`.
+- **Обе factory принимают опциональную `WithDenyHandler(h)`.** По умолчанию отказ возвращает `*errs.Error{Kind: Permission}` → 403; override для кастомной формы.
+- **`Adapter[T](h fiber.Handler)`** поднимает сырой `*fiber.Ctx` хендлер в `MiddlewareFunc[T]`, который игнорирует `Context[T].Data` — полезно для plain Fiber middlewares (CORS, helmet, rate-limit).
+- **`AdapterFactory[T](newFn)`** — factory-вариант: `newFn(args []string) (fiber.Handler, error)` производит сырой Fiber-хендлер на каждый YAML-вызов; адаптер заворачивает его в типизированную форму factory.
+- **Пакет auth/fibermount использует `Adapter`/`AdapterFactory` внутри** для регистрации factory `bearer`/`require_scope`/`require_role` из `*auth.Auth[C]`. Используйте его вместо того, чтобы писать role/scope factory с нуля, если вы уже на `gokit/auth`.
 
-## See also
+## См. также
 
-- [`fibermap`](../README.md) — RegisterMiddlewareFactory contract
-- [`auth/fibermount`](../../auth/fibermount/README.md) — turnkey bearer + require_scope + require_role mount for `*auth.Auth[C]`
+- [`fibermap`](../README.md) — контракт RegisterMiddlewareFactory
+- [`auth/fibermount`](../../auth/fibermount/README.md) — turnkey bearer + require_scope + require_role mount для `*auth.Auth[C]`
+</content>

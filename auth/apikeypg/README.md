@@ -1,21 +1,21 @@
 # auth/apikeypg
 
-Postgres-backed [`auth.KeyStore`](../README.md#api-key-authentication) for the kit's API-key middleware. Thin wrapper over `db.Querier` — pool ownership stays with the caller.
+Postgres-backed [`auth.KeyStore`](../README.md#api-key-authentication) для API-key middleware кита. Тонкая обёртка над `db.Querier` — владение пулом остаётся за caller'ом.
 
 ## Quickstart
 
 ```go
-// 1. Apply schema (or fold into your migration runner).
+// 1. Применить схему (или запихать в свой migration runner).
 _, _ = svc.DB.Exec(ctx, apikeypg.Schema())
 
-// 2. Construct the store.
+// 2. Сконструировать store.
 store := apikeypg.New(svc.DB)
 
-// 3. Plug into auth.APIKey + fibermount.
+// 3. Подключить к auth.APIKey + fibermount.
 app.Use(authObj.APIKey(store))
 fibermount.MountAPIKeyFactory(svc.Engine, authObj, store)
 
-// Admin path: mint a fresh key.
+// Admin-путь: выпустить новый ключ.
 plain := "ak_" + randomToken()
 hash  := auth.HashAPIKey(plain, cfg.APIKeyHashSecret)
 id, _ := store.Insert(ctx, apikeypg.InsertParams{
@@ -24,60 +24,61 @@ id, _ := store.Insert(ctx, apikeypg.InsertParams{
     ExpiresAt: time.Now().Add(90*24*time.Hour),
     Description: "issued by admin@example.com on 2026-05-31",
 })
-// Hand `plain` back to the caller ONCE — only the hash is stored.
+// Отдать `plain` caller'у ОДИН раз — только хеш хранится.
 ```
 
-## API surface
+## API-поверхность
 
-| Method | Returns | Notes |
+| Метод | Возвращает | Заметки |
 |---|---|---|
-| `New(q db.Querier) *Store` | — | Construct over any Querier (typically `*db.DB`). |
-| `Schema() string` | embedded DDL | Run via migration tool or `db.Exec` at boot. |
-| `Lookup(ctx, hash) (*KeyRecord, error)` | record or NotFound | Hot path; single `SELECT`. |
-| `Insert(ctx, InsertParams) (id, error)` | new row id | Returns `*errs.Error{KindAlreadyExists}` on key-hash collision. |
-| `RevokeByID(ctx, id) error` | nil on success | Sets `revoked_at = NOW()`. Idempotent against re-revokes (returns `NotFound`). |
+| `New(q db.Querier) *Store` | — | Конструкция над любым Querier (типично `*db.DB`). |
+| `Schema() string` | embedded DDL | Запустите через migration tool или `db.Exec` на boot. |
+| `Lookup(ctx, hash) (*KeyRecord, error)` | record или NotFound | Hot path; один `SELECT`. |
+| `Insert(ctx, InsertParams) (id, error)` | id новой строки | Возвращает `*errs.Error{KindAlreadyExists}` на коллизии key-hash. |
+| `RevokeByID(ctx, id) error` | nil при успехе | Ставит `revoked_at = NOW()`. Идемпотентен против повторного revoke (возвращает `NotFound`). |
 
-## Schema
+## Схема
 
-`auth_api_keys` columns:
+Колонки `auth_api_keys`:
 
-| Column | Type | Notes |
+| Колонка | Тип | Заметки |
 |---|---|---|
-| `id` | `uuid PRIMARY KEY DEFAULT gen_random_uuid()` | Public identifier. Surfaces in `Principal.JTI`. |
-| `key_hash` | `bytea NOT NULL UNIQUE` | HMAC-SHA256 hash; the lookup index. |
+| `id` | `uuid PRIMARY KEY DEFAULT gen_random_uuid()` | Публичный идентификатор. Появляется в `Principal.JTI`. |
+| `key_hash` | `bytea NOT NULL UNIQUE` | HMAC-SHA256 хеш; lookup-индекс. |
 | `subject` | `text NOT NULL` | Principal subject (service / user id). |
-| `scopes` | `text[] NOT NULL DEFAULT '{}'` | Auth scopes the key carries. |
-| `role` | `text NOT NULL DEFAULT ''` | Optional broad role. |
-| `description` | `text NOT NULL DEFAULT ''` | Free-text for admin/audit. |
-| `created_at` | `timestamptz NOT NULL DEFAULT NOW()` | Mint time. |
-| `expires_at` | `timestamptz` | NULL = no expiry. |
+| `scopes` | `text[] NOT NULL DEFAULT '{}'` | Auth scopes, которые несёт ключ. |
+| `role` | `text NOT NULL DEFAULT ''` | Опциональная широкая роль. |
+| `description` | `text NOT NULL DEFAULT ''` | Свободный текст для admin/audit. |
+| `created_at` | `timestamptz NOT NULL DEFAULT NOW()` | Время выпуска. |
+| `expires_at` | `timestamptz` | NULL = без expiry. |
 | `revoked_at` | `timestamptz` | NULL = active. |
-| `last_used_at` | `timestamptz` | Optional — kit doesn't bump on every Lookup (would turn the read into a write). Wire an async writer if needed. |
+| `last_used_at` | `timestamptz` | Опционально — кит не бампит на каждом Lookup'е (это превратило бы read в write). При необходимости подключите async writer. |
 
-Two indexes:
+Два индекса:
 
 - `auth_api_keys_subject_idx (subject)` — admin lookups / revoke-all-for-subject.
-- `auth_api_keys_expires_at_idx (expires_at) WHERE expires_at IS NOT NULL AND revoked_at IS NULL` — partial index for nightly expiry-cleanup cron.
+- `auth_api_keys_expires_at_idx (expires_at) WHERE expires_at IS NOT NULL AND revoked_at IS NULL` — partial index для nightly expiry-cleanup cron'а.
 
 ## Error codes
 
-| Code | Where | Meaning |
+| Code | Где | Смысл |
 |---|---|---|
-| `api_key_invalid` | `Lookup`, `RevokeByID` | No matching row (NotFound). The auth middleware maps this to 401. |
+| `api_key_invalid` | `Lookup`, `RevokeByID` | Нет совпадающей строки (NotFound). Auth-middleware маппит в 401. |
 | `apikeypg_insert_failed` | `Insert` | Non-conflict INSERT failure. |
 | `apikeypg_lookup_failed` | `Lookup` | Non-NotFound SELECT failure (network / server down). |
-| `apikeypg_revoke_failed` | `RevokeByID` | UPDATE failed for non-NotFound reason. |
+| `apikeypg_revoke_failed` | `RevokeByID` | UPDATE failed по причине, отличной от NotFound. |
 
-## Testing
+## Тестирование
 
-Tests use `testcontainers-go/modules/postgres` (Docker required). Skips under `-short`.
+Тесты используют `testcontainers-go/modules/postgres` (нужен Docker). Под `-short` пропускаются.
 
 ```bash
 go test ./auth/apikeypg/...
 ```
 
-## See also
+## См. также
 
-- [`auth`](../README.md) — the parent package; `auth.APIKey` middleware + `auth.KeyStore` interface
-- [`db`](../../db/README.md) — `db.Querier` is what `apikeypg.Store` consumes
-- [`auth/refreshpg`](../refreshpg/README.md) — sibling Postgres adapter for the refresh-token side
+- [`auth`](../README.md) — родительский пакет; middleware `auth.APIKey` + интерфейс `auth.KeyStore`
+- [`db`](../../db/README.md) — `db.Querier` — то, что `apikeypg.Store` потребляет
+- [`auth/refreshpg`](../refreshpg/README.md) — sibling Postgres-адаптер для refresh-token стороны
+</content>

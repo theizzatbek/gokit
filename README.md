@@ -1,47 +1,47 @@
 # gokit
 
-A composable Go service kit. Nine independently importable packages that cover
-what every HTTP API service hand-rolls: routing, errors, database, auth,
-outbound HTTP, declarative outbound APIs, NATS event streaming, declarative
-NATS subscribers + publishers.
+Композируемый Go service kit. Девять независимо импортируемых пакетов, которые
+покрывают то, что каждый HTTP API сервис делает руками: роутинг, ошибки, базу
+данных, авторизацию, исходящий HTTP, декларативные исходящие API, NATS event
+streaming, декларативные NATS-подписчики и публишеры.
 
-Each package can be adopted standalone. Together they take you from
-`main.go` to a production-shaped service.
+Каждый пакет можно использовать отдельно. Вместе они уводят вас от `main.go`
+к сервису production-shape.
 
-**Status:** 0.x — API unstable.
+**Статус:** 0.x — API нестабильно.
 
-## Packages
+## Пакеты
 
-| Path | What it does |
+| Путь | Что делает |
 |------|---|
-| `fibermap/` | YAML-declarative router for Fiber v2. Handlers/middleware by name. Typed per-request context. OpenAPI generation. |
-| `errs/` | Typed domain errors (`Kind`, `Code`, `Details`, `Cause`) with HTTP mapping. Stdlib-only. |
-| `db/` | pgx-based pool wrapper. Transactions with savepoints. Healthcheck. `*errs.Error` mapping. |
-| `db/sqb/` | Opt-in squirrel wrapper preconfigured for `$N` placeholders. |
-| `auth/` | JWT issue/verify (EdDSA/ES256). Argon2id hashing. Refresh-token rotation. Ready-to-mount Fiber middleware. |
-| `clients/httpc/` | Outbound `*http.Client` builder. Retry, per-attempt timeout, slog + Prometheus observability. |
-| `clients/apimap/` | Declarative outbound: describe upstream APIs in YAML, call them by name. Auth and `${ENV_VAR}` secrets in YAML. |
-| `clients/nats/` | Typed JetStream wrapper. Generic `Publisher[T]` / `Subscribe[T]`. Auto-ack handler model. |
-| `clients/natsmap/` | Declarative NATS subscribers + publishers via YAML. Typed handlers + publishers by name, `*Runtime.Drain()` for graceful shutdown. |
-| `service/` | Optional all-in-one helper. `service.New(ctx, cfg)` bundles every other subpackage into a `Service[T, C]` runtime with auto-detect optionality, auto-mounted auth handlers, and the Bearer-optional layer fix. Shrinks `main.go` for typical services from ~270 → ~80 lines. |
+| `fibermap/` | YAML-декларативный роутер для Fiber v2. Хендлеры и middleware по именам. Типизированный per-request контекст. Генерация OpenAPI. |
+| `errs/` | Типизированные доменные ошибки (`Kind`, `Code`, `Details`, `Cause`) с маппингом в HTTP. Только stdlib. |
+| `db/` | Обёртка над pgx pool. Транзакции с savepoint'ами. Healthcheck. Маппинг ошибок в `*errs.Error`. |
+| `db/sqb/` | Опциональная обёртка над squirrel, преднастроенная на `$N` placeholders. |
+| `auth/` | Выпуск / верификация JWT (EdDSA/ES256). Хеширование паролей через Argon2id. Ротация refresh-токенов. Готовая к монтированию Fiber middleware. |
+| `clients/httpc/` | Конструктор исходящего `*http.Client`. Retry, per-attempt timeout, slog + Prometheus observability. |
+| `clients/apimap/` | Декларативные исходящие вызовы: описание upstream API в YAML, вызов по имени. Auth и `${ENV_VAR}` secrets прямо в YAML. |
+| `clients/nats/` | Типизированная обёртка над JetStream. Generic `Publisher[T]` / `Subscribe[T]`. Auto-ack handler model. |
+| `clients/natsmap/` | Декларативные NATS-подписчики и публишеры через YAML. Типизированные хендлеры и публишеры по имени, `*Runtime.Drain()` для graceful shutdown. |
+| `service/` | Опциональный all-in-one хелпер. `service.New(ctx, cfg)` собирает все остальные подпакеты в `Service[T, C]` runtime с auto-detect optionality, авто-смонтированными auth-хендлерами и Bearer-optional слоем. Сжимает `main.go` для типичного сервиса с ~270 строк до ~80. |
 
-## Dependency rules
+## Правила зависимостей
 
 ```
-errs                      → stdlib only
+errs                      → только stdlib
 db, db/sqb                → errs + pgx
 clients/httpc             → errs + prometheus
 clients/apimap            → errs + clients/httpc + yaml.v3
 clients/nats              → errs + nats.go + prometheus
 clients/natsmap           → errs + clients/nats + yaml.v3
 auth                      → errs + crypto + jwt + fiber
-fibermap                  → errs + fiber (router-adjacent sub-packages only)
+fibermap                  → errs + fiber (только router-смежные подпакеты)
 ```
 
-Root `gokit` package is empty — no exported symbols. Importing one
-subpackage does not pull the others.
+Корневой пакет `gokit` пустой — без экспортируемых символов. Импорт одного
+подпакета не тянет остальные.
 
-## Install
+## Установка
 
 ```bash
 go get github.com/theizzatbek/gokit/fibermap
@@ -53,13 +53,13 @@ go get github.com/theizzatbek/gokit/clients/apimap
 go get github.com/theizzatbek/gokit/clients/nats
 go get github.com/theizzatbek/gokit/clients/natsmap
 
-# optional: standalone CLI for routes.yaml linting and schema export
+# опционально: автономный CLI для linting'а routes.yaml и экспорта schema
 go install github.com/theizzatbek/gokit/cmd/fibermap@latest
 ```
 
-Requires Go 1.23+ and (for `fibermap/`) Fiber v2.
+Требуется Go 1.23+ и (для `fibermap/`) Fiber v2.
 
-## Quickstart — fibermap router
+## Quickstart — fibermap роутер
 
 ```yaml
 # routes.yaml
@@ -105,37 +105,38 @@ func main() {
 }
 ```
 
-## Editor support for `routes.yaml`
+## Поддержка редактора для `routes.yaml`
 
-Add this line at the top of your `routes.yaml`:
+Добавьте эту строку в начало вашего `routes.yaml`:
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/gokit/main/fibermap/schema/routes.schema.json
 ```
 
-VS Code (with [redhat.vscode-yaml]), GoLand, and Vim with `coc-yaml`
-give autocomplete for `method` / `middleware_sets` / etc, hover docs,
-and inline diagnostics — typos in `middleware:` get highlighted before
-you ever run `go test`.
+VS Code (с [redhat.vscode-yaml]), GoLand и Vim с `coc-yaml` дают
+автодополнение для `method` / `middleware_sets` / и т.д., hover-документацию
+и inline-диагностику — опечатки в `middleware:` подсвечиваются до того,
+как вы вообще запустите `go test`.
 
 [redhat.vscode-yaml]: https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml
 
 ## CLI
 
 ```bash
-fibermap validate routes.yaml    # schema-lint; non-zero exit on issues
-fibermap dump-schema             # print the bundled JSON Schema
+fibermap validate routes.yaml    # schema-lint; ненулевой exit при проблемах
+fibermap dump-schema             # печатает встроенную JSON Schema
 ```
 
-`validate` runs schema-level checks (required fields, valid HTTP methods,
-middleware_set cycles, middleware shape). It does NOT verify that
-handler/middleware/factory names are registered — your Go binary is the
-only place those live. For full validation (including registrations),
-call `Engine.Validate()` in a Go test or boot script.
+`validate` запускает проверки уровня схемы (обязательные поля, валидные HTTP
+методы, циклы в middleware_set, форма middleware). Он НЕ проверяет, что
+имена handler / middleware / factory зарегистрированы — ваш Go-бинарь это
+единственное место, где они живут. Для полной валидации (включая
+регистрации) вызовите `Engine.Validate()` в Go-тесте или boot-скрипте.
 
-## Examples
+## Примеры
 
-- `examples/quickstart/` — minimal Hello-world
+- `examples/quickstart/` — минимальный Hello-world
 - `examples/auth/` — JWT login + Bearer middleware
-- `examples/nats/` — typed publisher / subscriber
-- `examples/tasks/` — fuller service (config, db, auth, OpenAPI)
+- `examples/nats/` — типизированный publisher / subscriber
+- `examples/tasks/` — более полный сервис (config, db, auth, OpenAPI)
+</content>

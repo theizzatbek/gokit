@@ -1,11 +1,11 @@
 # auth/refreshpg
 
-Postgres-backed `auth.RefreshStore` over `db.Querier`. Atomic `Consume` via single `UPDATE … RETURNING`; reuse detection triggers a family-wide `RevokeFamily` before returning `*errs.Error{Code: "refresh_reused"}`. DDL lives in `schema.sql` — the package itself does not run migrations.
+Postgres-backed `auth.RefreshStore` поверх `db.Querier`. Атомарный `Consume` через единый `UPDATE … RETURNING`; reuse detection триггерит family-wide `RevokeFamily` перед возвратом `*errs.Error{Code: "refresh_reused"}`. DDL живёт в `schema.sql` — сам пакет миграции не выполняет.
 
-**Parent:** [../README.md](../README.md)
-**Import:** `github.com/theizzatbek/gokit/auth/refreshpg`
+**Родитель:** [../README.md](../README.md)
+**Импорт:** `github.com/theizzatbek/gokit/auth/refreshpg`
 
-## Use
+## Использование
 
 ```go
 import (
@@ -21,11 +21,11 @@ authObj, _ := auth.New[MyClaims](auth.Config{
 }, auth.WithRefreshStore(refreshpg.New(d)))
 ```
 
-`refreshpg.New(d)` accepts any `db.Querier` — `*db.DB` or `*db.Tx`. Tests can pass a transaction so changes roll back at test end.
+`refreshpg.New(d)` принимает любой `db.Querier` — `*db.DB` или `*db.Tx`. Тесты могут передать транзакцию, чтобы изменения откатывались на конце теста.
 
-## Schema
+## Схема
 
-Apply `schema.sql` (or copy the DDL into your migration) before first use:
+Примените `schema.sql` (или скопируйте DDL в свою миграцию) перед первым использованием:
 
 ```sql
 CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
@@ -45,19 +45,19 @@ CREATE INDEX IF NOT EXISTS auth_refresh_tokens_subject_idx   ON auth_refresh_tok
 CREATE INDEX IF NOT EXISTS auth_refresh_tokens_expires_at_idx ON auth_refresh_tokens (expires_at);
 ```
 
-`examples/urlshort/migrations/0001_init.sql` includes this DDL verbatim alongside the service's own tables.
+`examples/urlshort/migrations/0001_init.sql` включает этот DDL дословно рядом с собственными таблицами сервиса.
 
-## Notes
+## Заметки
 
-- **Token hashes, not tokens.** The raw refresh token never lands in the DB — only `sha256(token)` does. A DB leak doesn't compromise active refresh tokens.
-- **Family revoke on reuse.** When `Consume` sees a token whose `consumed_at IS NOT NULL`, it `RevokeFamily(family_id)` before returning the error. This is the canonical "stolen-token detected" response: invalidate every descendant of the compromised root token.
-- **No background expiry cleanup.** Expired rows stay in the table. Run a periodic `DELETE FROM auth_refresh_tokens WHERE expires_at < now() - interval '7 days'` if you want to reclaim space.
-- **Atomic via `UPDATE … RETURNING`.** No SELECT-then-UPDATE race window. Diagnostic `SELECT` on miss path classifies whether the token never existed vs. was already consumed.
-- **`SecurityLogger`** on `*auth.Auth` (via `auth.WithSecurityLogger`) emits structured WARN events for reuse-triggered revocations — wire to your SIEM/alerting.
+- **Хеши токенов, а не сами токены.** Сырой refresh token никогда не попадает в БД — только `sha256(token)`. Утечка БД не компрометирует активные refresh-токены.
+- **Family revoke при reuse.** Когда `Consume` видит токен, у которого `consumed_at IS NOT NULL`, он делает `RevokeFamily(family_id)` перед возвратом ошибки. Это каноническая реакция на "stolen-token detected": invalidate каждого потомка скомпрометированного root-токена.
+- **Никакой фоновой чистки expired.** Истёкшие строки остаются в таблице. Запускайте periodic `DELETE FROM auth_refresh_tokens WHERE expires_at < now() - interval '7 days'`, если хотите освобождать место.
+- **Атомарно через `UPDATE … RETURNING`.** Никакого race window SELECT-then-UPDATE. Диагностический `SELECT` на miss-пути классифицирует, существовал ли токен вообще или уже был consumed.
+- **`SecurityLogger`** на `*auth.Auth` (через `auth.WithSecurityLogger`) эмитит структурированные WARN-события для reuse-triggered revocations — подключите к вашему SIEM/alerting.
 
-## Testing
+## Тестирование
 
-Use [testcontainers-go/modules/postgres](https://golang.testcontainers.org/modules/postgres/). Pattern from gokit's own `store_test.go`:
+Используйте [testcontainers-go/modules/postgres](https://golang.testcontainers.org/modules/postgres/). Паттерн из `store_test.go` самого gokit:
 
 ```go
 ctx := context.Background()
@@ -67,12 +67,13 @@ c, _ := tcpostgres.Run(ctx, "postgres:16-alpine",
 defer testcontainers.TerminateContainer(c)
 
 d, _ := db.Connect(ctx, /* derive cfg from c */)
-_, _ = d.Exec(ctx, refreshpg.SchemaSQL())  // or inline the DDL
+_, _ = d.Exec(ctx, refreshpg.SchemaSQL())  // или inline DDL
 store := refreshpg.New(d)
 ```
 
-## See also
+## См. также
 
-- [`auth`](../README.md) — parent: `WithRefreshStore` consumes this
-- [`auth/refreshredis`](../refreshredis/README.md) — same contract, Redis-backed
-- [`db`](../../db/README.md) — provides the `Querier` interface
+- [`auth`](../README.md) — родитель: `WithRefreshStore` потребляет это
+- [`auth/refreshredis`](../refreshredis/README.md) — тот же контракт, Redis-backed
+- [`db`](../../db/README.md) — предоставляет интерфейс `Querier`
+</content>

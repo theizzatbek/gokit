@@ -1,13 +1,13 @@
 # db
 
-pgx-based Postgres pool wrapper. `Connect(ctx, cfg, opts...) (*DB, error)` returns a `*DB` exposing `Query`/`QueryRow`/`Exec` (errors mapped to `*errs.Error`), `Tx(ctx, fn)` for functional transactions (savepoints on nested calls), `Healthcheck`, and a `Pool()` escape hatch.
+pgx-based обёртка над Postgres pool. `Connect(ctx, cfg, opts...) (*DB, error)` возвращает `*DB`, выставляющий `Query`/`QueryRow`/`Exec` (ошибки маппятся в `*errs.Error`), `Tx(ctx, fn)` для функциональных транзакций (savepoint'ы при вложенных вызовах), `Healthcheck` и escape hatch `Pool()`.
 
-**Import:** `github.com/theizzatbek/gokit/db`
-**Depends on:** `jackc/pgx/v5`, `prometheus/client_golang`, `github.com/theizzatbek/gokit/errs`
+**Импорт:** `github.com/theizzatbek/gokit/db`
+**Зависит от:** `jackc/pgx/v5`, `prometheus/client_golang`, `github.com/theizzatbek/gokit/errs`
 
-## Why use it
+## Зачем это нужно
 
-`pgxpool` is great but every project then re-implements the same things: env-driven `Config`, slow-query logging, a transaction helper that propagates ctx, and pgx-error-to-domain-error mapping. `db.DB` is that bundle, with the gokit `*errs.Error` contract baked in so a service handler can `return db.Exec(...)` and the right HTTP status comes out.
+`pgxpool` отличный, но каждый проект потом переизобретает одно и то же: env-driven `Config`, slow-query логирование, transaction-хелпер, который пропагирует ctx, и pgx-error-to-domain-error маппинг. `db.DB` — это такой бандл, с контрактом `*errs.Error` от gokit, встроенным внутрь, так что service-handler может `return db.Exec(...)`, и правильный HTTP-статус выходит наружу.
 
 ## Quickstart
 
@@ -36,92 +36,82 @@ func main() {
 
     var id string
     err = d.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, "a@b.com").Scan(&id)
-    // err is *errs.Error{Kind: NotFound} when no rows, etc.
+    // err — *errs.Error{Kind: NotFound} когда нет строк, и т.д.
 }
 ```
 
-## Configuration
+## Конфигурация
 
-`db.Config` (env-driven via `caarlos0/env/v11` — compose with your service Config under `envPrefix:"DB_"`):
+`db.Config` (env-driven через `caarlos0/env/v11` — компонуйте с вашим service-Config под `envPrefix:"DB_"`):
 
-| Field | Env | Default | Notes |
+| Поле | Env | По умолчанию | Заметки |
 |---|---|---|---|
-| `URL` | `DB_URL` | "" | full connection string; when set, identity fields below are ignored. See [Connection string via `URL`](#connection-string-via-url). |
-| `Host` | `DB_HOST` | `localhost` | ignored if `URL` is set |
-| `Port` | `DB_PORT` | `5432` | ignored if `URL` is set |
-| `User` | `DB_USER` | — (required if no `URL`) | ignored if `URL` is set |
-| `Password` | `DB_PASSWORD` | "" | empty for trust auth; ignored if `URL` is set |
-| `Database` | `DB_NAME` | — (required if no `URL`) | ignored if `URL` is set |
-| `SSLMode` | `DB_SSLMODE` | `disable` | `require`/`verify-full`/etc.; ignored if `URL` is set |
-| `AppName` | `DB_APP_NAME` | "" | shown in `pg_stat_activity`; auto-set from `Service.NodeName` under `service.New`. See [Application name in `pg_stat_activity`](#application-name-in-pg_stat_activity). |
-| `HasReadReplica` | `DB_HAS_READ_REPLICA` | `false` | opens a second pool against standbys. See [Read replicas](#read-replicas). |
+| `URL` | `DB_URL` | "" | полная connection-строка; когда установлена, identity-поля ниже игнорируются. См. [Connection string через `URL`](#connection-string-через-url). |
+| `Host` | `DB_HOST` | `localhost` | игнорируется если `URL` установлен |
+| `Port` | `DB_PORT` | `5432` | игнорируется если `URL` установлен |
+| `User` | `DB_USER` | — (обязательно если без `URL`) | игнорируется если `URL` установлен |
+| `Password` | `DB_PASSWORD` | "" | пусто для trust-auth; игнорируется если `URL` установлен |
+| `Database` | `DB_NAME` | — (обязательно если без `URL`) | игнорируется если `URL` установлен |
+| `SSLMode` | `DB_SSLMODE` | `disable` | `require`/`verify-full`/и т.д.; игнорируется если `URL` установлен |
+| `AppName` | `DB_APP_NAME` | "" | показывается в `pg_stat_activity`; авто-устанавливается из `Service.NodeName` под `service.New`. См. [Application name в `pg_stat_activity`](#application-name-в-pg_stat_activity). |
+| `HasReadReplica` | `DB_HAS_READ_REPLICA` | `false` | открывает второй пул против standby. См. [Read replicas](#read-replicas). |
 | `MaxConns` | `DB_MAX_CONNS` | 10 | |
 | `MinConns` | `DB_MIN_CONNS` | 0 | |
 | `MaxConnLifetime` | `DB_MAX_LIFETIME` | 1h | |
 | `MaxConnIdle` | `DB_MAX_IDLE` | 30m | |
-| `ConnectTimeout` | `DB_CONN_TIMEOUT` | 5s | applied to initial connect |
-| `ConnectMaxRetries` | `DB_CONNECT_MAX_RETRIES` | `0` (no retry) | K8s boot resilience |
-| `ConnectBackoffBase` | `DB_CONNECT_BACKOFF_BASE` | `0` | K8s boot resilience |
-| `ConnectBackoffMax` | `DB_CONNECT_BACKOFF_MAX` | `0` | K8s boot resilience |
+| `ConnectTimeout` | `DB_CONN_TIMEOUT` | 5s | применяется к initial-connect |
+| `ConnectMaxRetries` | `DB_CONNECT_MAX_RETRIES` | `0` (no retry) | K8s boot-resilience |
+| `ConnectBackoffBase` | `DB_CONNECT_BACKOFF_BASE` | `0` | K8s boot-resilience |
+| `ConnectBackoffMax` | `DB_CONNECT_BACKOFF_MAX` | `0` | K8s boot-resilience |
 
-### Connect retry (K8s boot resilience)
+### Connect retry (K8s boot-resilience)
 
-Three optional Config fields cap initial-Connect retry behaviour:
+Три опциональных Config-поля cap'ят initial-Connect retry-поведение:
 
-| Field | Env | Default |
+| Поле | Env | По умолчанию |
 |---|---|---|
 | `ConnectMaxRetries` | `DB_CONNECT_MAX_RETRIES` | `0` (no retry) |
 | `ConnectBackoffBase` | `DB_CONNECT_BACKOFF_BASE` | `0` (kit fail-fast) |
 | `ConnectBackoffMax` | `DB_CONNECT_BACKOFF_MAX` | `0` |
 
-Kit default is fail-fast (1 attempt). When using `gokit/service`,
-the service auto-injects K8s-friendly defaults: 5 retries with 1s
-base / 16s cap (~31s total). To disable, set
-`DB_CONNECT_MAX_RETRIES=-1` or call `service.WithoutConnectRetry()`.
+Дефолт кита — fail-fast (1 попытка). При использовании `gokit/service`,
+service авто-инжектит K8s-friendly defaults: 5 retries с 1s base / 16s cap (~31s total). Чтобы отключить, установите `DB_CONNECT_MAX_RETRIES=-1` или вызовите `service.WithoutConnectRetry()`.
 
-The retry loop respects `ctx.Done()` — a deadline-bounded ctx
-aborts mid-backoff rather than hanging.
+Retry-loop уважает `ctx.Done()` — deadline-bounded ctx abort'ит mid-backoff, а не висит.
 
-### Connection string via `URL`
+### Connection string через `URL`
 
-`Config.URL` (env `DB_URL`) is the full postgres connection string. When set,
-the individual fields (`Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`)
-are ignored.
+`Config.URL` (env `DB_URL`) — полная postgres connection-строка. Когда
+установлена, индивидуальные поля (`Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`) игнорируются.
 
 ```
 DB_URL=postgres://app:s3cret@postgres-svc.default:5432/appdb?sslmode=disable
 ```
 
-**Multi-host failover** is built into pgx — comma-separate the hosts inside the URL:
+**Multi-host failover** встроен в pgx — comma-separate хосты внутри URL:
 
 ```
 DB_URL=postgres://app:s3cret@h1,h2,h3:5432/appdb
 ```
 
-pgx connects to whichever host satisfies `target_session_attrs=read-write`
-(the kit always appends this to the primary pool's URL). On a master failover,
-the pool reconnects to the new master automatically.
+pgx соединяется с тем хостом, который удовлетворяет `target_session_attrs=read-write` (кит всегда append'ит это к URL'у primary-пула). На master-failover'е пул переподключается к новому master'у автоматически.
 
-Note: `AppName` and `ConnectTimeout` are still merged into the URL as query
-params when not already present — only the identity fields are fully ignored.
+Note: `AppName` и `ConnectTimeout` всё равно мерджатся в URL как query-параметры, когда ещё не присутствуют — только identity-поля полностью игнорируются.
 
-### Application name in `pg_stat_activity`
+### Application name в `pg_stat_activity`
 
-`Config.AppName` (env `DB_APP_NAME`) is sent to PostgreSQL during Connect and
-appears in `pg_stat_activity.application_name`. When building a `*db.DB`
-through `service.New`, the kit auto-sets this to `Service.NodeName` if you
-left it empty — every pod is identifiable to DBAs as its K8s hostname.
+`Config.AppName` (env `DB_APP_NAME`) отправляется в PostgreSQL во время Connect и появляется в `pg_stat_activity.application_name`. При сборке `*db.DB` через `service.New`, кит авто-устанавливает это в `Service.NodeName`, если вы оставили его пустым — каждый pod идентифицируем DBA как его K8s-hostname.
 
-To override per-environment, set `DB_APP_NAME=custom-name`.
+Чтобы override'нуть per-environment, установите `DB_APP_NAME=custom-name`.
 
-### Options
+### Опции
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `WithLogger(*slog.Logger)` | silent | Logs errors + slow queries (when threshold set). nil = silent. |
-| `WithSlowQueryThreshold(d)` | 0 (off) | Queries exceeding `d` are logged at WARN with full SQL + duration |
-| `WithMetrics(prometheus.Registerer)` | no metrics | Registers `db_query_duration_seconds{outcome}` (histogram), `db_pool_size_total{pool,state}` (gauge), `db_tx_total{kind,outcome}` (counter), `db_tx_duration_seconds{kind,outcome}` (histogram), `db_slow_query_total` (counter; populated only when `WithSlowQueryThreshold > 0`). `pool=primary\|standby` distinguishes the read-replica gauges; `kind=tx\|savepoint` and `outcome=commit\|rollback\|panic` cover top-level vs nested. |
-| `WithTracer(pgx.QueryTracer)` | none | Plugs an external pgx tracer alongside the kit's internal logger/metrics tracer. The kit composes multiple tracers via an internal multi-tracer so the logger and the external one (e.g. `otelkit.NewPgxTracer()`) coexist. `service.WithOtel` auto-wires the OTel pgx tracer when DB is also configured; reach for `WithTracer` directly only when plugging a non-OTel tracing backend. |
+| `WithLogger(*slog.Logger)` | silent | Логирует ошибки + slow queries (когда threshold установлен). nil = silent. |
+| `WithSlowQueryThreshold(d)` | 0 (off) | Запросы, превышающие `d`, логируются на WARN с полным SQL + duration |
+| `WithMetrics(prometheus.Registerer)` | нет метрик | Регистрирует `db_query_duration_seconds{outcome}` (histogram), `db_pool_size_total{pool,state}` (gauge), `db_tx_total{kind,outcome}` (counter), `db_tx_duration_seconds{kind,outcome}` (histogram), `db_slow_query_total` (counter; populated только когда `WithSlowQueryThreshold > 0`). `pool=primary\|standby` различает read-replica gauge'ы; `kind=tx\|savepoint` и `outcome=commit\|rollback\|panic` покрывают top-level vs nested. |
+| `WithTracer(pgx.QueryTracer)` | none | Подключает external pgx-tracer рядом с внутренним logger/metrics tracer'ом кита. Кит композирует несколько tracer'ов через внутренний multi-tracer, так что логгер и внешний (например, `otelkit.NewPgxTracer()`) сосуществуют. `service.WithOtel` авто-подключает OTel pgx-tracer, когда DB также сконфигурирована; обращайтесь к `WithTracer` напрямую, только когда подключаете не-OTel tracing backend. |
 
 ## Common patterns
 
@@ -132,7 +122,7 @@ var u User
 err := d.QueryRow(ctx,
     `SELECT id, email, created_at FROM users WHERE email = $1`, email,
 ).Scan(&u.ID, &u.Email, &u.CreatedAt)
-// err is *errs.Error{Kind: NotFound, Code: "not_found"} on zero rows.
+// err — *errs.Error{Kind: NotFound, Code: "not_found"} при zero rows.
 ```
 
 ### Multiple rows
@@ -161,10 +151,10 @@ err := d.QueryRow(ctx, `
     RETURNING id, email, created_at`,
     email, hash,
 ).Scan(&inserted.ID, &inserted.Email, &inserted.CreatedAt)
-// Unique-violation surfaces as *errs.Error{Kind: AlreadyExists, Code: "already_exists"}.
+// Unique-violation всплывает как *errs.Error{Kind: AlreadyExists, Code: "already_exists"}.
 ```
 
-### Transactions
+### Транзакции
 
 ```go
 err := d.Tx(ctx, func(tx *db.Tx) error {
@@ -176,12 +166,12 @@ err := d.Tx(ctx, func(tx *db.Tx) error {
     }
     return nil  // commit
 })
-// Any returned error rolls back; *errs.Error preserved.
+// Любая возвращённая ошибка roll back'ит; *errs.Error сохраняется.
 ```
 
-Nested `Tx` calls open a savepoint instead of a new transaction — composable from within already-transactional code.
+Вложенные вызовы `Tx` открывают savepoint вместо новой транзакции — компонуется из уже-транзакционного кода.
 
-### Healthcheck (for `/healthz`)
+### Healthcheck (для `/healthz`)
 
 ```go
 if err := d.Healthcheck(ctx); err != nil {
@@ -193,49 +183,43 @@ if err := d.Healthcheck(ctx); err != nil {
 
 ```go
 pool := d.Pool()  // *pgxpool.Pool
-// Use pool.Acquire / pool.SendBatch / etc. directly. Errors are NOT mapped here.
+// Используйте pool.Acquire / pool.SendBatch / и т.д. напрямую. Ошибки тут НЕ маппятся.
 ```
 
 ## Read replicas
 
-Set `Config.HasReadReplica = true` (env `DB_HAS_READ_REPLICA=true`) and the kit
-opens a **second** internal pool against the same connection string with
-`target_session_attrs=standby`. The single `*db.DB` you get back exposes two
-sets of methods:
+Установите `Config.HasReadReplica = true` (env `DB_HAS_READ_REPLICA=true`), и
+кит откроет **второй** внутренний пул против той же connection-строки с
+`target_session_attrs=standby`. Один `*db.DB`, который вы получите назад, выставляет два набора методов:
 
-| Method | Pool | When to use |
+| Метод | Пул | Когда использовать |
 |---|---|---|
 | `Query` / `QueryRow` / `Exec` / `Tx` | primary (write) | mutations, reads-after-writes, `SELECT FOR UPDATE`, `INSERT/UPDATE/DELETE RETURNING` |
-| `ReadQuery` / `ReadQueryRow` | read replica (falls back to primary when not configured) | replica-lag-tolerant reads: listings, search, analytics, plain GETs |
+| `ReadQuery` / `ReadQueryRow` | read replica (fallback на primary, когда не сконфигурирован) | replica-lag-tolerant reads: listings, search, analytics, plain GET'ы |
 
-Example:
+Пример:
 
 ```go
-// Write — always primary
+// Write — всегда primary
 row := db.QueryRow(ctx, `INSERT INTO links(...) VALUES (...) RETURNING id`, ...)
 
-// Read that tolerates lag — read pool if configured, primary otherwise
+// Read, который tolerates lag — read pool если сконфигурирован, иначе primary
 rows, err := db.ReadQuery(ctx, `SELECT * FROM links WHERE user_id = $1`, userID)
 ```
 
-**Requirements:** PostgreSQL **14+** (`target_session_attrs=standby` is PG 14+;
-older PG only has `read-only`). The primary URL stays `target_session_attrs=read-write`.
+**Требования:** PostgreSQL **14+** (`target_session_attrs=standby` появился в PG 14; более старые PG имеют только `read-only`). Primary-URL остаётся `target_session_attrs=read-write`.
 
-**Boot-time retry budget:** when `HasReadReplica=true`, the kit runs the connect-retry loop against each pool sequentially. Total wait at boot can be roughly **2× the single-pool budget** (with default `ConnectMaxRetries=5` / `ConnectBackoffMax=16s`, ≈30s → ≈60s worst case). Size your K8s readiness probe `failureThreshold` × `periodSeconds` accordingly, or lower `DB_CONNECT_MAX_RETRIES` if you'd rather restart-and-retry than wait at boot.
+**Boot-time retry budget:** когда `HasReadReplica=true`, кит запускает connect-retry loop против каждого пула последовательно. Total wait на boot'е может быть примерно **2× single-pool budget'а** (с дефолтным `ConnectMaxRetries=5` / `ConnectBackoffMax=16s`, ≈30s → ≈60s в худшем случае). Размерьте `failureThreshold` × `periodSeconds` в K8s readiness probe соответственно, или понизьте `DB_CONNECT_MAX_RETRIES`, если предпочитаете restart-and-retry, а не wait на boot'е.
 
-**Behaviour on master failover:** pgx reconnects the primary pool to whichever
-host in your multi-host URL now reports itself as read-write. No service
-restart or env change needed. The read pool keeps targeting standbys.
+**Поведение при master-failover'е:** pgx переподключает primary-пул к тому хосту в вашем multi-host URL, который теперь репортит себя как read-write. Restart сервиса или env-изменение не нужны. Read-пул продолжает таргетить standby'и.
 
-**Behaviour when the standby pool can't connect at boot:** kit fails loud —
-`db.Connect` returns `*errs.Error{Kind:KindUnavailable, Code:"db_unavailable"}`
-and closes the primary pool before returning. Set `HasReadReplica=false` to opt out.
+**Поведение, когда standby-пул не может подключиться на boot'е:** кит фейлится loud — `db.Connect` возвращает `*errs.Error{Kind:KindUnavailable, Code:"db_unavailable"}` и закрывает primary-пул перед возвратом. Установите `HasReadReplica=false`, чтобы отказаться.
 
-## Error model
+## Error-модель
 
-Every method funnels its pgx error through `mapPgxErr` before returning:
+Каждый метод прогоняет свою pgx-ошибку через `mapPgxErr` перед возвратом:
 
-| pgx situation | `*errs.Error` |
+| pgx-ситуация | `*errs.Error` |
 |---|---|
 | `pgx.ErrNoRows` | `KindNotFound`, `Code: "not_found"` |
 | `context.DeadlineExceeded` / `Canceled` | `KindTimeout`, `Code: "db_timeout"` |
@@ -245,18 +229,18 @@ Every method funnels its pgx error through `mapPgxErr` before returning:
 | SQLSTATE `40P01` (deadlock) | `KindConflict`, `Code: "tx_conflict"` (retry-safe) |
 | SQLSTATE `57014` (query cancelled by server) | `KindTimeout`, `Code: "db_timeout"` |
 | SQLSTATE `08*` (connection errors) | `KindUnavailable`, `Code: "db_unavailable"` |
-| Anything else | `KindInternal`, `Code: "db_failure"` |
+| Всё остальное | `KindInternal`, `Code: "db_failure"` |
 
-The original `*pgconn.PgError` is preserved as `Cause`; use `errors.As` if you need its details (e.g. for ConstraintName-based branching).
+Оригинальный `*pgconn.PgError` сохраняется как `Cause`; используйте `errors.As`, если нужны детали (например, для ConstraintName-based branching).
 
 ## Observability
 
-- **slog:** `WithLogger` enables ERROR on every wrapped failure (with SQL truncated to 1KB) and WARN on slow queries when `WithSlowQueryThreshold` is set.
-- **Prometheus:** `WithMetrics(reg)` registers counters + histogram for queries and pool gauges. No metrics → zero collector overhead.
+- **slog:** `WithLogger` включает ERROR на каждую обёрнутую failure (с SQL, обрезанным до 1KB) и WARN на slow queries, когда `WithSlowQueryThreshold` установлен.
+- **Prometheus:** `WithMetrics(reg)` регистрирует counters + histogram для запросов и pool-gauges. Нет метрик → zero collector overhead.
 
-## Testing
+## Тестирование
 
-Use [testcontainers-go/modules/postgres](https://golang.testcontainers.org/modules/postgres/) for integration tests against a real Postgres. Pattern from gokit's own tests (`db/testdb_test.go`):
+Используйте [testcontainers-go/modules/postgres](https://golang.testcontainers.org/modules/postgres/) для интеграционных тестов против реального Postgres. Паттерн из собственных тестов gokit (`db/testdb_test.go`):
 
 ```go
 func startTestDB(t *testing.T) *db.DB {
@@ -278,20 +262,21 @@ func startTestDB(t *testing.T) *db.DB {
 }
 ```
 
-For per-test isolation, create a schema and `SET search_path` inside the test.
+Для per-test изоляции создавайте schema и `SET search_path` внутри теста.
 
-## Limitations
+## Ограничения
 
-- **Postgres-only.** Hard dependency on pgx; no MySQL/SQLite adapter.
-- **No ORM, no codegen.** Use `sqlc` separately if you want generated types.
-- **No migration runner shipped.** Use `goose`, `tern`, or the naive `db.Exec(string(fileBytes))` pattern (see `examples/urlshort/main.go::applyMigrations`).
-- **`Tx` rollback errors are logged, not returned.** A failed rollback after a failed commit is rare and not actionable; the original error wins.
-- **`mapPgxErr` is opinionated.** SQLSTATE codes not in the switch fall through to `db_failure`. If you need a specific mapping, branch on `errors.As(err, &pgErr)`.
+- **Только Postgres.** Hard-зависимость от pgx; нет MySQL/SQLite адаптера.
+- **Никакого ORM, никакого codegen.** Используйте `sqlc` отдельно, если хотите generated types.
+- **Migration runner не поставляется.** Используйте `goose`, `tern` или наивный паттерн `db.Exec(string(fileBytes))` (см. `examples/urlshort/main.go::applyMigrations`).
+- **Ошибки `Tx`-rollback логируются, а не возвращаются.** Failed rollback после failed commit редок и не actionable; оригинальная ошибка побеждает.
+- **`mapPgxErr` opinionated.** SQLSTATE-коды не из switch проваливаются в `db_failure`. Если нужен специфический mapping, ветвитесь по `errors.As(err, &pgErr)`.
 
-## See also
+## См. также
 
-- [`db/sqb`](sqb/README.md) — opt-in squirrel wrapper with `$N` placeholders preconfigured
-- [`db/outbox`](outbox/README.md) — transactional-outbox pattern over Postgres for at-least-once event publish
-- [`errs`](../errs/README.md) — the error contract `db` returns
-- [`auth/refreshpg`](../auth/refreshpg/README.md) — refresh-token store backed by `db.Querier`
-- [`examples/urlshort`](../examples/urlshort/README.md) — full integration with migrations + handlers
+- [`db/sqb`](sqb/README.md) — опциональная squirrel-обёртка с `$N` placeholders предконфигурированными
+- [`db/outbox`](outbox/README.md) — паттерн transactional-outbox поверх Postgres для at-least-once event publish
+- [`errs`](../errs/README.md) — error-контракт, который возвращает `db`
+- [`auth/refreshpg`](../auth/refreshpg/README.md) — refresh-token store, backed by `db.Querier`
+- [`examples/urlshort`](../examples/urlshort/README.md) — полная интеграция с миграциями + хендлерами
+</content>

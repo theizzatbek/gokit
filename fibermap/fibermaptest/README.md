@@ -1,11 +1,11 @@
 # fibermap/fibermaptest
 
-Test helpers for asserting over `Engine.Routes()` — verify your routes.yaml registered the right methods, paths, handlers, middlewares, and tags. Pairs naturally with snapshot-style "route inventory" tests so deploys catch missing or renamed routes.
+Тестовые хелперы для assertions над `Engine.Routes()` — проверяет, что ваш routes.yaml зарегистрировал правильные методы, пути, хендлеры, middleware и тэги. Естественно сочетается со snapshot-style "route inventory" тестами, чтобы деплой ловил отсутствующие или переименованные роуты.
 
-**Parent:** [../README.md](../README.md)
-**Import:** `github.com/theizzatbek/gokit/fibermap/fibermaptest`
+**Родитель:** [../README.md](../README.md)
+**Импорт:** `github.com/theizzatbek/gokit/fibermap/fibermaptest`
 
-## Use
+## Использование
 
 ```go
 import (
@@ -32,14 +32,15 @@ func TestRoutes(t *testing.T) {
 }
 ```
 
-## Notes
+## Заметки
 
-- **`Engine.Routes()` is the source of truth.** These helpers walk that list — they don't drive HTTP requests. For request-level tests use `Engine.Mount(app)` + `app.Test(req)`.
-- **`AssertRouteCount`** is a guard against silently-added routes. Set it once with `len(eng.Routes())` and re-run after intended changes.
-- **`WithMiddleware(names ...)` matches as a substring set.** The route's middleware list must CONTAIN every name passed (order-agnostic, exact-name match). Use to catch a missing auth middleware on a protected route.
-- **`WithHandler(name)`** matches the registered handler name (from `RegisterHandler` + the `handler:` field in YAML).
-- **`TB` interface** accepts `*testing.T`, `*testing.B`, and anything else with `Errorf`/`Fatalf`/`Helper` — drop into benchmarks too.
+- **`Engine.Routes()` — это source of truth.** Эти хелперы обходят этот список — они не гоняют HTTP-запросы. Для request-level тестов используйте `Engine.Mount(app)` + `app.Test(req)`.
+- **`AssertRouteCount`** — это guard против молча добавленных роутов. Установите однажды через `len(eng.Routes())` и перезапускайте после намеренных изменений.
+- **`WithMiddleware(names ...)` матчит как substring-set.** Список middleware роута ДОЛЖЕН СОДЕРЖАТЬ каждое переданное имя (order-agnostic, exact-name match). Используйте, чтобы поймать отсутствующий auth middleware на защищённом роуте.
+- **`WithHandler(name)`** матчит зарегистрированное имя хендлера (из `RegisterHandler` + поле `handler:` в YAML).
+- **Интерфейс `TB`** принимает `*testing.T`, `*testing.B` и всё остальное с `Errorf`/`Fatalf`/`Helper` — подходит и для бенчмарков.
 
-## See also
+## См. также
 
-- [`fibermap`](../README.md) — `Engine.Routes()` is what this asserts over
+- [`fibermap`](../README.md) — `Engine.Routes()` — это то, над чем assertion'ит этот пакет
+</content>

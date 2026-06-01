@@ -1,13 +1,13 @@
 # clients/httpc
 
-Outbound HTTP client builder. `httpc.New(cfg, opts...)` returns a stdlib `*http.Client` whose transport chain wraps the user-supplied or `http.DefaultTransport` with per-attempt timeout, full-jitter exponential retry on transient failures, and opt-in slog/Prometheus observability. Returns a stdlib `*http.Client` so it composes with any library that wants that type (AWS SDK, Stripe, OAuth libs, …).
+Builder исходящего HTTP-клиента. `httpc.New(cfg, opts...)` возвращает stdlib-овский `*http.Client`, transport-цепочка которого оборачивает caller-supplied или `http.DefaultTransport` per-attempt таймаутом, full-jitter exponential retry'ями на транзиентные failures и опциональной slog/Prometheus observability. Возвращает stdlib-овский `*http.Client`, так что компонуется с любой библиотекой, которая хочет этот тип (AWS SDK, Stripe, OAuth-библиотеки, …).
 
-**Import:** `github.com/theizzatbek/gokit/clients/httpc`
-**Depends on:** stdlib + `prometheus/client_golang` + `github.com/theizzatbek/gokit/errs`
+**Импорт:** `github.com/theizzatbek/gokit/clients/httpc`
+**Зависит от:** stdlib + `prometheus/client_golang` + `github.com/theizzatbek/gokit/errs`
 
-## Why use it
+## Зачем это нужно
 
-Outbound HTTP boilerplate is the same in every service: a `Timeout`-bounded `*http.Client`, retry with backoff on transient failures, honour `Retry-After`, log at the right level, expose metrics. `httpc` is that bundle, exposed via `Config` + functional options. Returns the standard `*http.Client` so any SDK that accepts one works unchanged.
+Boilerplate исходящего HTTP одинаков в каждом сервисе: `*http.Client` с `Timeout`-границами, retry с backoff'ом на транзиентных failures, чтить `Retry-After`, логировать на правильном уровне, экспонировать метрики. `httpc` — это такой бандл, выставленный через `Config` + функциональные опции. Возвращает стандартный `*http.Client`, так что любой SDK, принимающий такой, работает без изменений.
 
 ## Quickstart
 
@@ -28,43 +28,43 @@ if err != nil { return err }
 resp, err := c.Get("https://api.example.com/users/42")
 ```
 
-Everything works as if it were `http.DefaultClient` — retries happen transparently for idempotent methods on transient failures; the response is plain `*http.Response`.
+Всё работает так, будто это `http.DefaultClient` — retry'и происходят прозрачно для идемпотентных методов на транзиентных failures; response — обычный `*http.Response`.
 
-## Configuration
+## Конфигурация
 
 ### `httpc.Config`
 
-| Field | Default | Notes |
+| Поле | По умолчанию | Заметки |
 |---|---|---|
-| `Timeout` | 10s | Per-attempt deadline (via `context.WithTimeout`). Wall-clock budget across retries is the caller's `req.Context()` deadline. |
-| `MaxRetries` | 3 (when omitted) | Number of *additional* attempts after the first. Pass `-1` to disable retries entirely. |
-| `BackoffBase` | 100ms | Initial exponential delay. Jitter is `rand.Float64() * min(base * 2^attempt, max)` |
-| `BackoffMax` | 5s | Cap on the exponential growth |
+| `Timeout` | 10s | Per-attempt deadline (через `context.WithTimeout`). Wall-clock budget по всем retry'ям — это deadline `req.Context()` caller'а. |
+| `MaxRetries` | 3 (когда не указан) | Количество *дополнительных* попыток после первой. Передайте `-1`, чтобы выключить retry'и полностью. |
+| `BackoffBase` | 100ms | Начальная экспоненциальная задержка. Jitter — `rand.Float64() * min(base * 2^attempt, max)` |
+| `BackoffMax` | 5s | Cap на exponential рост |
 
-### Options
+### Опции
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `WithLogger(*slog.Logger)` | silent | Debug per retry decision, Warn on retry exhaustion |
-| `WithMetrics(prometheus.Registerer)` | no collectors | Registers requests_total / request_duration_seconds / retries_total / retries_exhausted_total |
-| `WithBaseTransport(http.RoundTripper)` | `http.DefaultTransport` | Override the bottom of the chain — layer otel-instrumented or auth-injecting RoundTrippers underneath the retry logic |
+| `WithLogger(*slog.Logger)` | silent | Debug на каждом retry-решении, Warn на исчерпании retry'ев |
+| `WithMetrics(prometheus.Registerer)` | нет коллекторов | Регистрирует requests_total / request_duration_seconds / retries_total / retries_exhausted_total |
+| `WithBaseTransport(http.RoundTripper)` | `http.DefaultTransport` | Override низа цепочки — кладите otel-instrumented или auth-injecting RoundTripper'ы под retry-логику |
 
-## Retry semantics (hard-coded — no overrides)
+## Retry-семантика (hard-coded — no overrides)
 
-- **Idempotent methods only:** GET, HEAD, PUT, DELETE, OPTIONS retry. POST and PATCH return after attempt 0 — never silently double-write.
-- **Retryable statuses:** 408, 429, 500, 502, 503, 504. Anything else (incl. 4xx) returns immediately.
-- **Network errors:** any error from the inner `RoundTrip` (DNS failure, connect refused, EOF mid-stream) retries.
-- **Backoff:** `delay = rand.Float64() * min(BackoffBase * 2^attempt, BackoffMax)`. Full jitter — minimises thundering herd.
-- **`Retry-After`:** parsed (integer seconds or HTTP-date). If present, used instead of jittered backoff, capped at `4 * BackoffMax`.
-- **Body replay:** only when `req.GetBody != nil`. `http.NewRequest` with `bytes.Reader`/`bytes.Buffer`/`strings.Reader` sets it automatically. Streaming bodies (manually constructed `Request{Body: …}`) skip retry after attempt 0.
-- **Context cancellation:** preempts both attempts AND backoff sleeps.
-- **Exhausted retries:** return the last `(resp, err)` as-is. Caller sees standard `*http.Response` (or stdlib `net.Error`), not `*errs.Error`. Metric `httpc_retries_exhausted_total` increments.
+- **Только идемпотентные методы:** GET, HEAD, PUT, DELETE, OPTIONS ретраятся. POST и PATCH возвращают после attempt 0 — никогда молча не double-write'ят.
+- **Retryable статусы:** 408, 429, 500, 502, 503, 504. Всё остальное (включая 4xx) возвращает немедленно.
+- **Network ошибки:** любая ошибка из inner `RoundTrip` (DNS failure, connect refused, EOF mid-stream) ретраится.
+- **Backoff:** `delay = rand.Float64() * min(BackoffBase * 2^attempt, BackoffMax)`. Full jitter — минимизирует thundering herd.
+- **`Retry-After`:** парсится (integer seconds или HTTP-date). Если присутствует, используется вместо jittered backoff'а, capped at `4 * BackoffMax`.
+- **Body replay:** только когда `req.GetBody != nil`. `http.NewRequest` с `bytes.Reader`/`bytes.Buffer`/`strings.Reader` устанавливает его автоматически. Streaming-body (manually-constructed `Request{Body: …}`) пропускают retry после attempt 0.
+- **Context cancellation:** preempt'ит и попытки, И backoff-sleep'ы.
+- **Exhausted retries:** возвращают последние `(resp, err)` as-is. Caller видит стандартный `*http.Response` (или stdlib-овскую `net.Error`), не `*errs.Error`. Метрика `httpc_retries_exhausted_total` инкрементится.
 
 ## Common patterns
 
 ### Cancellable per-call timeout
 
-`Config.Timeout` is per-attempt. For a total budget across retries, use `context.WithTimeout` at the call site:
+`Config.Timeout` — per-attempt. Для total budget по retry'ям используйте `context.WithTimeout` на call-site:
 
 ```go
 ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
@@ -76,31 +76,31 @@ resp, err := c.Do(req)
 ### Custom base transport (otel, auth)
 
 ```go
-// Outermost: otel instrumentation
-// Middle:    httpc retry/timeout
-// Innermost: auth header injection
+// Самый внешний: otel instrumentation
+// Средний:    httpc retry/timeout
+// Самый внутренний: auth header injection
 auth := authRoundTripper{token: token}
 base := otelhttp.NewTransport(auth, otelhttp.WithSpanNameFormatter(...))
 
 c, _ := httpc.New(httpc.Config{Timeout: 5*time.Second, MaxRetries: 2},
     httpc.WithBaseTransport(base),
 )
-// Or get just the transport for embedding into your own *http.Client:
+// Или возьмите только transport для embedding'а в свой *http.Client:
 rt, _ := httpc.NewTransport(cfg, httpc.WithBaseTransport(base))
 myClient := &http.Client{Transport: rt}
 ```
 
-### Disabling retries
+### Отключение retry'ев
 
 ```go
 httpc.New(httpc.Config{Timeout: 5*time.Second, MaxRetries: -1})
 ```
 
-`-1` is the sentinel for "no retries — single attempt only". The zero value (`0`) defaults to 3 because the most common mistake is forgetting to set it; opt out explicitly with `-1`.
+`-1` — sentinel для "no retries — single attempt only". Zero value (`0`) дефолтится в 3, потому что самая частая ошибка — забыть его установить; opt out явно через `-1`.
 
-### Drop-in for SDKs
+### Drop-in для SDK'ов
 
-Anything that takes a `*http.Client` works:
+Всё, что принимает `*http.Client`, работает:
 
 ```go
 c, _ := httpc.New(httpc.Config{...})
@@ -109,17 +109,17 @@ s3 := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 })
 ```
 
-## Error model
+## Error-модель
 
-`*errs.Error` only on config validation from `New`/`NewTransport`:
+`*errs.Error` только на валидации конфигурации в `New`/`NewTransport`:
 
-| Code | When |
+| Code | Когда |
 |---|---|
 | `httpc_invalid_timeout` | `Timeout < 0` |
 | `httpc_invalid_max_retries` | `MaxRetries < -1` |
-| `httpc_invalid_backoff` | `BackoffBase` / `BackoffMax` invalid or `BackoffMax < BackoffBase` |
+| `httpc_invalid_backoff` | `BackoffBase` / `BackoffMax` невалидны или `BackoffMax < BackoffBase` |
 
-Runtime errors are stdlib (`*url.Error`, `net.Error`, etc.) — that's the *point* of returning `*http.Client`. If your handler wants to convert "retry exhausted on 503" into a domain error, wrap manually:
+Runtime-ошибки — stdlib (`*url.Error`, `net.Error` и т.д.) — это и есть *смысл* возврата `*http.Client`. Если ваш handler хочет конвертировать "retry exhausted on 503" в domain-ошибку, оборачивайте руками:
 
 ```go
 resp, err := c.Get(url)
@@ -133,35 +133,35 @@ if resp.StatusCode >= 500 {
 
 ### slog
 
-- `Debug "httpc retry"` — per retry decision: `method`, `url`, `attempt`, `delay_ms`, `status`/`err`/`reason="retry_after"`
-- `Warn "httpc retries exhausted"` — at end of exhausted attempts
+- `Debug "httpc retry"` — на каждое retry-решение: `method`, `url`, `attempt`, `delay_ms`, `status`/`err`/`reason="retry_after"`
+- `Warn "httpc retries exhausted"` — в конце исчерпанных попыток
 
-Successful responses are NOT logged (otel's job).
+Успешные ответы НЕ логируются (это работа otel).
 
-### Prometheus (opt-in via `WithMetrics`)
+### Prometheus (опционально через `WithMetrics`)
 
-| Metric | Type | Labels |
+| Метрика | Тип | Labels |
 |---|---|---|
-| `httpc_requests_total` | counter | `method`, `status` (status="error" for network failures) |
+| `httpc_requests_total` | counter | `method`, `status` (status="error" для network-failures) |
 | `httpc_request_duration_seconds` | histogram (DefBuckets) | `method`, `status` |
 | `httpc_retries_total` | counter | `method`, `classification` (`5xx`/`429`/`408`/`network`/`retry_after`) |
 | `httpc_retries_exhausted_total` | counter | `method` |
 
-`path` is deliberately omitted — high-cardinality. Wrap your own per-endpoint middleware if needed.
+`path` намеренно опущен — high-cardinality. Оберните своё per-endpoint middleware, если нужно.
 
-## Why net/http and not fasthttp?
+## Почему net/http, а не fasthttp?
 
-Even though fiber (and thus fibermap) is built on fasthttp, outbound stays on `net/http`:
+Хотя fiber (и значит fibermap) построен на fasthttp, исходящий остаётся на `net/http`:
 
-1. **Interop:** AWS SDK, Stripe, every OAuth/JWKS library accepts `*http.Client`. Returning `*fasthttp.Client` would force you to choose between our retry layer and every SDK.
-2. **RoundTripper ecosystem:** otel HTTP instrumentation, Prometheus middleware, auth round-trippers — all `http.RoundTripper`. Fasthttp has no equivalent.
-3. **Use case:** fasthttp optimises for high-throughput inbound. Client-side throughput for typical microservice outbound is rarely the bottleneck.
+1. **Interop:** AWS SDK, Stripe, каждая OAuth/JWKS библиотека принимают `*http.Client`. Возврат `*fasthttp.Client` заставил бы выбирать между нашим retry-слоем и каждым SDK.
+2. **Экосистема RoundTripper:** otel HTTP-инструментация, Prometheus middleware, auth round-tripper'ы — всё `http.RoundTripper`. У fasthttp нет эквивалента.
+3. **Use case:** fasthttp оптимизирует high-throughput inbound. Client-side throughput для типичного microservice-исходящего редко bottleneck.
 
-Server-side fasthttp (fiber) is an asymmetry that's fine — different problems.
+Server-side fasthttp (fiber) — это асимметрия, и это нормально — другие задачи.
 
-## Testing
+## Тестирование
 
-Test against `httptest.NewServer`:
+Тестируйте против `httptest.NewServer`:
 
 ```go
 func TestRetryOn503(t *testing.T) {
@@ -185,18 +185,19 @@ func TestRetryOn503(t *testing.T) {
 }
 ```
 
-Use small `BackoffBase`/`BackoffMax` in tests to keep them fast.
+Используйте маленькие `BackoffBase`/`BackoffMax` в тестах, чтобы они оставались быстрыми.
 
-## Limitations
+## Ограничения
 
-- **Retry policy is hard-coded.** Idempotent-only, fixed status set. No `WithRetryClassifier` yet — would land as additive feature if needed.
-- **No JSON helpers.** Decode in your handler (`json.NewDecoder(resp.Body).Decode(&out)`). The package stays a transport.
-- **No circuit breaker.** Use a separate library or wrap your own RoundTripper.
-- **Per-host concurrency caps live on `http.Transport`.** Configure via `WithBaseTransport(custom)` if you need them.
-- **Body buffering for streaming bodies without `GetBody` is the caller's job.** httpc won't silently consume + buffer arbitrary upload streams.
+- **Retry-политика hard-coded.** Только идемпотентные, фиксированный набор статусов. Никакого `WithRetryClassifier` пока нет — приедет как additive-feature, если понадобится.
+- **Нет JSON-хелперов.** Декодируйте в своём handler'е (`json.NewDecoder(resp.Body).Decode(&out)`). Пакет остаётся transport'ом.
+- **Нет circuit breaker'а.** Используйте отдельную библиотеку или оборачивайте свой RoundTripper.
+- **Per-host concurrency cap'ы живут на `http.Transport`.** Конфигурируйте через `WithBaseTransport(custom)`, если нужны.
+- **Body-buffering для streaming-body без `GetBody` — задача caller'а.** httpc не будет молча потреблять + буферить произвольные upload-стримы.
 
-## See also
+## См. также
 
-- [`clients/apimap`](../apimap/README.md) — declarative outbound layer built on top of httpc
-- [`errs`](../../errs/README.md) — error contract for validation failures
-- [`examples/urlshort`](../../examples/urlshort/README.md) — uses httpc for arbitrary URL fetching in the enrich package
+- [`clients/apimap`](../apimap/README.md) — декларативный outbound-слой, построенный поверх httpc
+- [`errs`](../../errs/README.md) — error-контракт для валидационных failures
+- [`examples/urlshort`](../../examples/urlshort/README.md) — использует httpc для произвольного URL-fetching'а в пакете enrich
+</content>

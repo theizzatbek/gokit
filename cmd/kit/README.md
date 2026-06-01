@@ -1,16 +1,16 @@
 # cmd/kit
 
-`kit` is the gokit operator CLI — schema migrations, Ed25519 key
-generation, API-key minting, transactional-outbox inspection. One
-binary that wraps the kit's library entry points for ops use.
+`kit` — это операторская CLI для gokit: миграции схемы, генерация
+Ed25519-ключей, выпуск API-ключей, инспекция транзакционного outbox'а.
+Один бинарь, который оборачивает library entry points кита для ops-использования.
 
-## Install
+## Установка
 
 ```bash
 go install github.com/theizzatbek/gokit/cmd/kit@latest
 ```
 
-## Commands
+## Команды
 
 ### `kit version`
 
@@ -18,30 +18,30 @@ go install github.com/theizzatbek/gokit/cmd/kit@latest
 kit version
 ```
 
-Prints the binary version + VCS revision from `runtime/debug.ReadBuildInfo`.
+Печатает версию бинаря + VCS revision из `runtime/debug.ReadBuildInfo`.
 
 ### `kit migrate`
 
-Wraps [`db/migrate`](../../db/migrate/README.md). Useful as a
-pre-deployment init step in K8s when migrations are slow enough
-that running them at app start would balloon pod-startup time.
+Обёртка над [`db/migrate`](../../db/migrate/README.md). Полезно как
+pre-deployment init-step в K8s, когда миграции достаточно медленные,
+что их запуск на старте app раздул бы pod-startup время.
 
 ```bash
-# Apply pending migrations from ./migrations/.
+# Применить pending миграции из ./migrations/.
 kit migrate up --dir migrations/ --dsn postgres://...
 
-# Roll back the 2 most recent.
+# Откатить 2 самые недавние.
 kit migrate down --steps 2 --dir migrations/
 
-# Inspect applied / pending status.
+# Инспектировать applied / pending статус.
 kit migrate status --dir migrations/
 
-# Print just the current version (or empty for "none applied").
+# Печатает текущую версию (или пусто для "ничего не применено").
 kit migrate version
 ```
 
-DSN may also come from the `DATABASE_URL` env. Migrations follow the
-`NNNN_name.sql` + optional `NNNN_name.down.sql` convention.
+DSN также может приехать из env `DATABASE_URL`. Миграции следуют
+конвенции `NNNN_name.sql` + опциональный `NNNN_name.down.sql`.
 
 ### `kit auth keygen`
 
@@ -49,16 +49,16 @@ DSN may also come from the `DATABASE_URL` env. Migrations follow the
 kit auth keygen --kid k1 > keys.pem
 ```
 
-Prints PKCS8 Ed25519 private + SPKI public PEMs to stdout. Pipe to
-a file and split into the env vars your service expects (the kit
-convention: `AUTH_PRIVATE_KEY` for the private half).
+Печатает PKCS8 Ed25519 private + SPKI public PEM в stdout. Pipe в
+файл и разнесите в env-переменные, которые ваш сервис ожидает
+(конвенция кита: `AUTH_PRIVATE_KEY` для private-половины).
 
 ### `kit auth apikey new`
 
-Mints a fresh API key tied to a subject + scopes + role,
-HMAC-SHA256s with the kit secret, INSERTs through
-[`auth/apikeypg`](../../auth/apikeypg/README.md), prints the plain
-key ONCE.
+Выпускает свежий API-ключ, привязанный к subject + scopes + role,
+HMAC-SHA256'ит kit-секретом, INSERT'ит через
+[`auth/apikeypg`](../../auth/apikeypg/README.md), печатает plain key
+ОДИН раз.
 
 ```bash
 export API_KEY_HASH_SECRET=$(openssl rand -hex 32)
@@ -71,7 +71,7 @@ kit auth apikey new \
     --description "issued by admin@example.com on 2026-06-01" \
     --dsn postgres://...
 
-# Output:
+# Вывод:
 # # --- API key (printed ONCE — copy it now) ---
 # kit_g7v2y...
 #
@@ -82,17 +82,17 @@ kit auth apikey new \
 # # expires_at:  2026-09-01T09:11:24Z
 ```
 
-The `kit_` prefix lets callers grep the key out of logs cleanly.
-The plain key is never persisted server-side; only its HMAC lives
-in the `auth_api_keys` table. Lose the plain key and the operator
-has to mint a new one.
+Префикс `kit_` позволяет caller'ам чисто grep'ать ключ из логов.
+Plain key никогда не persist'ится server-side; только его HMAC живёт
+в таблице `auth_api_keys`. Потеряете plain key — оператору придётся
+выпустить новый.
 
 ### `kit outbox status`
 
 ```bash
 kit outbox status --dsn postgres://...
 
-# Output:
+# Вывод:
 # pending:        12
 # oldest_pending: 2026-06-01T09:05:11Z (1m37s ago)
 # with_retries:   3
@@ -104,26 +104,26 @@ kit outbox status --dsn postgres://...
 #   ...
 ```
 
-First port of call when `/readyz` reports the outbox check failing.
-Shows queue depth, the age of the oldest pending row, the top-5
-most-attempted failed rows with their error messages.
+Первая точка обращения, когда `/readyz` сообщает о фейле outbox-проверки.
+Показывает queue-глубину, возраст самой старой pending-строки, топ-5
+самых неоднократно зафейлившихся строк с их сообщениями об ошибках.
 
-## DSN format
+## DSN-формат
 
-All DB-bound commands accept `--dsn postgres://user:pw@host:port/db?sslmode=disable`
-or read `DATABASE_URL` env. Both flag styles work — env wins when
-both are unset (i.e. the flag is empty).
+Все DB-связанные команды принимают `--dsn postgres://user:pw@host:port/db?sslmode=disable`
+или читают env `DATABASE_URL`. Оба стиля работают — env побеждает,
+когда оба не установлены (т.е. флаг пуст).
 
-## Why no cobra / urfave/cli
+## Почему без cobra / urfave/cli
 
-Subcommand dispatch lives in plain stdlib `flag`. Adding a CLI
-framework would pull in a dependency tree that's larger than the
-CLI itself. The trade-off: no auto-generated tab-completion or
-fancy help, but startup is instant and the binary stays under 10
-MiB.
+Subcommand dispatch живёт в plain stdlib `flag`. Добавление CLI-фреймворка
+притащило бы дерево зависимостей больше самой CLI. Trade-off:
+никакого автогенерируемого tab-completion'а или fancy help, зато
+startup мгновенный и бинарь остаётся под 10 MiB.
 
-## See also
+## См. также
 
-- [`db/migrate`](../../db/migrate/README.md) — the library wrapped by `kit migrate`.
-- [`auth/apikeypg`](../../auth/apikeypg/README.md) — the KeyStore `kit auth apikey new` inserts into.
-- [`db/outbox`](../../db/outbox/README.md) — the table `kit outbox status` reads.
+- [`db/migrate`](../../db/migrate/README.md) — библиотека, которую оборачивает `kit migrate`.
+- [`auth/apikeypg`](../../auth/apikeypg/README.md) — KeyStore, в который `kit auth apikey new` INSERT'ит.
+- [`db/outbox`](../../db/outbox/README.md) — таблица, которую читает `kit outbox status`.
+</content>

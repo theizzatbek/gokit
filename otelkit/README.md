@@ -1,12 +1,12 @@
 # otelkit
 
-Thin OpenTelemetry tracing bootstrap for kit-based services. One call
-sets up a TracerProvider exporting via OTLP/HTTP, wires it as the
-process-global tracer + propagator, and returns a shutdown function
-callers register with their cleanup path.
+Тонкий OpenTelemetry tracing bootstrap для kit-based сервисов. Один
+вызов настраивает TracerProvider, экспортирующий через OTLP/HTTP,
+подключает его как process-global tracer + propagator и возвращает
+shutdown-функцию, которую caller'ы регистрируют в своём cleanup-пути.
 
-**Import:** `github.com/theizzatbek/gokit/otelkit`
-**Depends on:** `go.opentelemetry.io/otel/{sdk,exporters/otlp/otlptrace/otlptracehttp,propagation,...}`
+**Импорт:** `github.com/theizzatbek/gokit/otelkit`
+**Зависит от:** `go.opentelemetry.io/otel/{sdk,exporters/otlp/otlptrace/otlptracehttp,propagation,...}`
 
 ## Quickstart
 
@@ -25,47 +25,46 @@ defer func() {
 }()
 ```
 
-For the typical kit service, `service.WithOtel(serviceName, ...)` wraps
-this plus otelfiber + otelhttp transport wiring in one line — see
+Для типичного kit-сервиса `service.WithOtel(serviceName, ...)` оборачивает это плюс otelfiber + otelhttp transport одним вызовом — см.
 [service README](../service/README.md).
 
-## Configuration
+## Конфигурация
 
-The OTLP/HTTP exporter reads the standard OTel environment variables —
-no kit-specific knobs:
+OTLP/HTTP экспортер читает стандартные OTel environment-переменные —
+никаких kit-specific knob'ов:
 
-| Env | Purpose |
+| Env | Назначение |
 |---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector endpoint (e.g. `http://otel-collector:4318`) |
-| `OTEL_EXPORTER_OTLP_HEADERS` | Extra headers (auth tokens, tenant ids) |
-| `OTEL_EXPORTER_OTLP_COMPRESSION` | `gzip` or `none` |
-| `OTEL_RESOURCE_ATTRIBUTES` | Resource attrs merged into every span |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint коллектора (напр. `http://otel-collector:4318`) |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Дополнительные заголовки (auth-токены, tenant id) |
+| `OTEL_EXPORTER_OTLP_COMPRESSION` | `gzip` или `none` |
+| `OTEL_RESOURCE_ATTRIBUTES` | Resource-атрибуты, мерджащиеся в каждый span |
 
-For values the kit reads directly:
+Для значений, которые кит читает напрямую:
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `Setup(ctx, serviceName)` | — | Required. Populates `service.name`. Empty value returns an error. |
-| `WithServiceVersion(v)` | "" | Sets `service.version` on the resource |
+| `Setup(ctx, serviceName)` | — | Обязательна. Заполняет `service.name`. Пустое значение возвращает ошибку. |
+| `WithServiceVersion(v)` | "" | Устанавливает `service.version` на ресурсе |
 | `WithSampleRatio(r)` | 1.0 | Head-based sampling ratio (0..1) |
-| `WithResourceAttribute(k, v)` | — | Append a constant attribute (region, az, cluster) |
-| `WithExporterOption(opt)` | — | Forward an `otlptracehttp.Option` for endpoint/headers in code |
+| `WithResourceAttribute(k, v)` | — | Добавить константный атрибут (region, az, cluster) |
+| `WithExporterOption(opt)` | — | Прокинуть `otlptracehttp.Option` для endpoint/headers из кода |
 
-## Behaviour
+## Поведение
 
-- **Propagation:** W3C TraceContext + W3C Baggage. Inbound requests carrying `traceparent` continue the trace; outbound calls inject it via `otelhttp`.
-- **Sampler:** ratio-based when < 1.0; `AlwaysSample` when ≥ 1.0.
-- **Batcher:** 5s flush window. Pending spans flush during `shutdown(ctx)` — bound a finite deadline before calling, otherwise an unresponsive collector blocks indefinitely.
-- **Idempotent shutdown:** the returned function is `sync.Once`-guarded.
+- **Propagation:** W3C TraceContext + W3C Baggage. Входящие запросы, несущие `traceparent`, продолжают трассу; исходящие вызовы инжектят его через `otelhttp`.
+- **Sampler:** ratio-based когда < 1.0; `AlwaysSample` когда ≥ 1.0.
+- **Batcher:** 5s flush window. Pending span'ы flush'атся во время `shutdown(ctx)` — bound'ите конечный deadline перед вызовом, иначе нереспонсивный коллектор блокирует indefinitely.
+- **Идемпотентный shutdown:** возвращаемая функция guard'ена `sync.Once`.
 
-## Metrics
+## Метрики
 
-`otelkit.SetupMetrics(ctx, serviceName, promRegistry, opts...)` opens a
-second OTLP/HTTP pipeline that **bridges** the kit's Prometheus
-collectors onto OTel periodic push. This way the existing
+`otelkit.SetupMetrics(ctx, serviceName, promRegistry, opts...)` открывает
+вторую OTLP/HTTP-пайплайн, которая **мостит** Prometheus-коллекторы
+кита на OTel periodic push. Так существующая инструментация
 `db_*`/`httpc_*`/`nats_*`/`apimap_*`/`auth_*`/`fibermap_http_*`
-instrumentation lands at the same OTel collector as the traces — no
-need to rewrite the kit's metric instrumentation in OTel APIs.
+приходит на тот же OTel-коллектор, что и трассы — без необходимости
+переписывать инструментацию кита в OTel API.
 
 ```go
 shutdown, err := otelkit.SetupMetrics(ctx, "urlshort", svc.Metrics().(prometheus.Gatherer),
@@ -74,22 +73,18 @@ shutdown, err := otelkit.SetupMetrics(ctx, "urlshort", svc.Metrics().(prometheus
 )
 ```
 
-| Option | Default | Notes |
+| Опция | По умолчанию | Заметки |
 |---|---|---|
-| `WithMetricsServiceVersion(v)` | "" | `service.version` on the metric resource |
-| `WithMetricsResourceAttribute(k, v)` | — | Append a constant attribute (region, az, cluster) |
-| `WithMetricsExporterOption(opt)` | — | Forward an `otlpmetrichttp.Option` for endpoint/headers in code |
+| `WithMetricsServiceVersion(v)` | "" | `service.version` на metric-ресурсе |
+| `WithMetricsResourceAttribute(k, v)` | — | Добавить константный атрибут (region, az, cluster) |
+| `WithMetricsExporterOption(opt)` | — | Прокинуть `otlpmetrichttp.Option` для endpoint/headers из кода |
 | `WithMetricsInterval(d)` | 60s | PeriodicReader push interval |
 
-`service.WithOtel` auto-wires `SetupMetrics` whenever the service
-registry is a `prometheus.Gatherer` (the default
-`prometheus.NewRegistry()` is). Disable via
-`service.WithoutOtelMetrics()` when the deployment already scrapes
-`/metrics` and doesn't want a parallel push pipeline.
+`service.WithOtel` авто-подключает `SetupMetrics` всякий раз, когда service-registry — это `prometheus.Gatherer` (дефолтный `prometheus.NewRegistry()` — да). Отключите через `service.WithoutOtelMetrics()`, когда deployment уже скрейпит `/metrics` и не хочет параллельной push-пайплайн.
 
 ## pgx tracer
 
-`otelkit.NewPgxTracer(opts...)` returns a `pgx.QueryTracer` that opens a CLIENT span per query, attaches `db.system=postgresql` + `db.query.text` (sanitised SQL truncated at 4096 chars by default) at start, and records the resulting status at end. Plug it into `db.Connect`:
+`otelkit.NewPgxTracer(opts...)` возвращает `pgx.QueryTracer`, который открывает CLIENT span на каждый query, прикрепляет `db.system=postgresql` + `db.query.text` (sanitised SQL, обрезанный по умолчанию на 4096 chars) на старте и записывает результирующий статус на конце. Подключайте к `db.Connect`:
 
 ```go
 pgxTracer := otelkit.NewPgxTracer(
@@ -98,23 +93,24 @@ pgxTracer := otelkit.NewPgxTracer(
 dbConn, _ := db.Connect(ctx, cfg, db.WithTracer(pgxTracer))
 ```
 
-| Option | Notes |
+| Опция | Заметки |
 |---|---|
-| `WithPgxTracerName(name)` | Override the tracer name appearing in instrumentation library metadata. Default: kit package path. |
-| `WithPgxSpanNamer(fn)` | Custom span-name builder from SQL. Default returns the constant `"db.query"` — PII-free, low-cardinality. |
-| `WithoutPgxSQL()` | Suppress the `db.query.text` attribute (multi-tenant predicates / audit constraints). |
-| `WithPgxMaxSQLLength(n)` | Truncate the statement at n bytes. Default 4096; 0 disables truncation. |
+| `WithPgxTracerName(name)` | Override имени tracer'а, появляющегося в метаданных instrumentation library. По умолчанию: путь kit-пакета. |
+| `WithPgxSpanNamer(fn)` | Кастомный builder span-имени из SQL. По умолчанию возвращает константу `"db.query"` — PII-free, low-cardinality. |
+| `WithoutPgxSQL()` | Подавить атрибут `db.query.text` (multi-tenant предикаты / audit-ограничения). |
+| `WithPgxMaxSQLLength(n)` | Обрезать statement на n байт. По умолчанию 4096; 0 отключает обрезку. |
 
-`service.WithOtel` auto-wires this on the kit's DB pool whenever DB is configured — `service.WithOtelPgxOptions(...)` forwards options, `service.WithoutOtelPgxTracer()` disables.
+`service.WithOtel` авто-подключает это к kit-овому DB-пулу всякий раз, когда DB сконфигурирована — `service.WithOtelPgxOptions(...)` прокидывает опции, `service.WithoutOtelPgxTracer()` отключает.
 
-## Limitations
+## Ограничения
 
-- **Logs pipeline out of scope.** Add manually if needed.
-- **OTLP/HTTP only.** No gRPC exporter (would add `google.golang.org/grpc` to direct deps). Wire it manually via `WithExporterOption` / `WithMetricsExporterOption` if you really need it.
-- **No SDK-level customisation.** SpanProcessor stack is fixed at one Batcher; metric pipeline is fixed at one PeriodicReader. For multi-pipeline setups, construct your own `TracerProvider` / `MeterProvider` and call `otel.SetTracerProvider` / `otel.SetMeterProvider` directly.
+- **Logs pipeline вне scope'а.** Добавляйте руками если нужно.
+- **Только OTLP/HTTP.** Никакого gRPC-экспортера (добавил бы `google.golang.org/grpc` в прямые зависимости). Подключите руками через `WithExporterOption` / `WithMetricsExporterOption`, если очень нужно.
+- **Нет SDK-level кастомизации.** Стек SpanProcessor зафиксирован на одном Batcher; metric-пайплайн зафиксирован на одном PeriodicReader. Для multi-pipeline конфигураций конструируйте свой `TracerProvider` / `MeterProvider` и зовите `otel.SetTracerProvider` / `otel.SetMeterProvider` напрямую.
 
-## See also
+## См. также
 
-- [`service`](../service/README.md) — `WithOtel(serviceName, ...)` wires otelkit + otelfiber + otelhttp in one option
-- [`clients/httpc`](../clients/httpc/README.md) — outbound HTTP transport that otelhttp wraps via `WithBaseTransport`
-- [`fibermap`](../fibermap/README.md) — inbound routing layer; otelfiber middleware mounts at the App level
+- [`service`](../service/README.md) — `WithOtel(serviceName, ...)` подключает otelkit + otelfiber + otelhttp в одной опции
+- [`clients/httpc`](../clients/httpc/README.md) — outbound HTTP transport, который otelhttp оборачивает через `WithBaseTransport`
+- [`fibermap`](../fibermap/README.md) — inbound routing-слой; middleware otelfiber монтится на уровне App
+</content>

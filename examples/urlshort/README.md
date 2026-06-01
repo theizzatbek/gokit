@@ -1,41 +1,41 @@
-# urlshort — gokit integration example
+# urlshort — gokit интеграционный пример
 
-A URL-shortener that uses every gokit package in its natural role. Copy
-`examples/urlshort/` as a template when starting a new service. All
-wiring is visible in `main.go` — no hidden DI container.
+URL-shortener, использующий каждый пакет gokit в его естественной роли.
+Скопируйте `examples/urlshort/` как шаблон при старте нового сервиса.
+Вся проводка видна в `main.go` — никакого скрытого DI-контейнера.
 
-## What it does
+## Что он делает
 
-- `POST /auth/register` — create a user (email + password, argon2id)
-- `POST /auth/login` — issue access JWT + refresh-cookie (refresh persisted in Postgres)
-- `POST /auth/refresh` — rotate the refresh token, get a fresh access JWT
-- `POST /auth/logout` — revoke the refresh token
-- `POST /links` — shorten a URL. Fetches `<title>` via `httpc`, plus description + image via `apimap` calling MicroLink. Publishes `urlshort.link.created` to NATS.
-- `GET /{code}` — 302-redirect, increment visit count, publish `urlshort.link.visited`
-- `GET /links` — list my links (auth)
-- `GET /links/{code}/stats` — owner-only visit stats (auth)
+- `POST /auth/register` — создать пользователя (email + пароль, argon2id)
+- `POST /auth/login` — выдать access JWT + refresh-cookie (refresh persist'ится в Postgres)
+- `POST /auth/refresh` — ротировать refresh-токен, получить свежий access JWT
+- `POST /auth/logout` — отозвать refresh-токен
+- `POST /links` — сократить URL. Получает `<title>` через `httpc`, плюс description + image через `apimap`, зовущий MicroLink. Публикует `urlshort.link.created` в NATS.
+- `GET /{code}` — 302-redirect, инкремент visit-count'а, публикует `urlshort.link.visited`
+- `GET /links` — список моих ссылок (auth)
+- `GET /links/{code}/stats` — owner-only visit-stats (auth)
 - `DELETE /links/{code}` — owner-only delete (auth)
-- `GET /healthz`, `GET /metrics` — ops endpoints (auto-wired by `fibermap.Run`)
-- `GET /openapi.json`, `GET /docs` — generated OpenAPI spec + Scalar UI
+- `GET /healthz`, `GET /metrics` — ops-эндпоинты (авто-подключены через `fibermap.Run`)
+- `GET /openapi.json`, `GET /docs` — сгенерированный OpenAPI spec + Scalar UI
 
-## How to run
+## Как запустить
 
 ```bash
-# 1. Generate a JWT signing key (PEM Ed25519)
+# 1. Сгенерируйте JWT signing key (PEM Ed25519)
 openssl genpkey -algorithm ED25519
 
-# 2. Copy .env.example to .env and paste the PEM into JWT_PRIVATE_KEY_PEM
+# 2. Скопируйте .env.example в .env и вставьте PEM в JWT_PRIVATE_KEY_PEM
 cp .env.example .env
 
-# 3. Start local infrastructure (Postgres + NATS)
+# 3. Запустите локальную инфру (Postgres + NATS)
 make up
 
-# 4. Run the service
+# 4. Запустите сервис
 set -a; source .env; set +a
 make run
 ```
 
-### Sample interaction
+### Пример взаимодействия
 
 ```bash
 # Register
@@ -43,7 +43,7 @@ curl -X POST http://localhost:3000/auth/register \
   -H 'content-type: application/json' \
   -d '{"email":"a@b.com","password":"hunter2hunter2"}'
 
-# Login → capture access token
+# Login → схватите access-токен
 TOKEN=$(curl -s -X POST http://localhost:3000/auth/login \
   -H 'content-type: application/json' \
   -d '{"login":"a@b.com","password":"hunter2hunter2"}' | jq -r .access_token)
@@ -54,36 +54,36 @@ curl -X POST http://localhost:3000/links \
   -H 'content-type: application/json' \
   -d '{"url":"https://go.dev"}'
 
-# Follow the redirect
+# Перейдите по редиректу
 curl -I http://localhost:3000/<code>
 
 # Stats
 curl -H "authorization: Bearer $TOKEN" http://localhost:3000/links/<code>/stats
 ```
 
-## Which gokit package does what here
+## Какой пакет gokit что делает здесь
 
-| Package | Role |
+| Пакет | Роль |
 |---|---|
-| `gokit/fibermap` | HTTP routes declared in `routes.yaml`; `ContextBuilder` injects `AppCtx{UserID, Log}` |
-| `gokit/fibermap/openapi` | `GET /openapi.json` + `GET /docs` served from `Generator.Mount()` |
-| `gokit/fibermap/bind` | Request body decoding + validation for register/shorten |
-| `gokit/errs` | All service errors are `*errs.Error`; `fibermap.ErrorHandler` maps to wire shape |
-| `gokit/db` | Postgres pool + `Query/Exec`; unique-violation surfaces as `errs.AlreadyExists`. `links.ListByUser` uses `ReadQuery` so the listing rides a replica when `DB_HAS_READ_REPLICA=true` (lag-tolerant read). |
-| `gokit/db/sqb` | Squirrel builders + `sqb.Query/QueryRow/Exec`; every SQL in `users/service.go` and `links/service.go` flows through it (no heredoc strings). |
-| `gokit/auth` | JWT issue/verify, argon2id hashing, `auth.Auth.IssueLogin/IssueRefresh/Logout` (your handler parses the body and calls them) |
-| `gokit/auth/refreshpg` | Refresh tokens persisted in Postgres (`auth_refresh_tokens` table) |
-| `gokit/auth/fibermount` | Mounts `bearer`/`require_scope`/`require_role` factory middleware into the engine |
-| `gokit/clients/httpc` | `enrich.Fetcher` does arbitrary-URL fetch to parse `<title>` from HTML |
-| `gokit/clients/apimap` | Declarative `microlink` client; `base_url` from `${MICROLINK_BASE_URL}` env |
-| `gokit/clients/nats` | JetStream publish of `urlshort.link.{created,visited}` on stream `URLSHORT` |
-| `gokit/db/outbox` | v2 outbox: `LinkCreated` enqueued via `outbox.EnqueueTyped` INSIDE the Create transaction; `service.WithOutbox` auto-wires the worker; `pg_notify` wakes the dispatcher within ~ms of commit; 7-day retention sweeps published rows. |
-| `gokit/db/migrate` | `service.WithMigrations(embed.FS)` runs `0001_init.sql` + `0002_idempotent_links.sql` automatically before any subsystem reads schema — no more manual `os.ReadFile`/`db.Exec` loop in `main.go`. |
-| `gokit/service.WithCron` / `AddSingletonCron` | `daily-stats` job logs link + visit totals at 03:00 UTC via `pg_try_advisory_lock`-backed singleton — only ONE replica fires the job per tick in a multi-replica deployment. |
-| `gokit/cmd/kit` | Operator CLI: `kit migrate up/down/status`, `kit auth keygen`, `kit auth apikey new`, `kit outbox status`. Pre-deployment migrations + post-incident outbox inspection without writing one-off Go binaries. |
-| `gokit/fibermap.LoggerInjector` | Auto-installed by `service.New`. `links.Create` calls `fibermap.LoggerFrom(c).Info(...)` to emit logs that already carry method, path, request_id, user_id, and route — no manual attribute-threading. |
+| `gokit/fibermap` | HTTP-роуты, объявленные в `routes.yaml`; `ContextBuilder` инжектит `AppCtx{UserID, Log}` |
+| `gokit/fibermap/openapi` | `GET /openapi.json` + `GET /docs` подаются из `Generator.Mount()` |
+| `gokit/fibermap/bind` | Декодирование request body + валидация для register/shorten |
+| `gokit/errs` | Все service-ошибки — `*errs.Error`; `fibermap.ErrorHandler` маппит в wire-форму |
+| `gokit/db` | Postgres-пул + `Query/Exec`; unique-violation всплывает как `errs.AlreadyExists`. `links.ListByUser` использует `ReadQuery`, так что listing едет по реплике, когда `DB_HAS_READ_REPLICA=true` (lag-tolerant read). |
+| `gokit/db/sqb` | Squirrel-builder'ы + `sqb.Query/QueryRow/Exec`; каждый SQL в `users/service.go` и `links/service.go` проходит через него (никаких heredoc-строк). |
+| `gokit/auth` | JWT issue/verify, argon2id хеширование, `auth.Auth.IssueLogin/IssueRefresh/Logout` (ваш handler парсит body и зовёт их) |
+| `gokit/auth/refreshpg` | Refresh-токены persist'ятся в Postgres (таблица `auth_refresh_tokens`) |
+| `gokit/auth/fibermount` | Монтирует `bearer`/`require_scope`/`require_role` factory-middleware в engine |
+| `gokit/clients/httpc` | `enrich.Fetcher` делает произвольный URL-fetch, чтобы парсить `<title>` из HTML |
+| `gokit/clients/apimap` | Декларативный `microlink` клиент; `base_url` из env `${MICROLINK_BASE_URL}` |
+| `gokit/clients/nats` | JetStream-публикация `urlshort.link.{created,visited}` на streame `URLSHORT` |
+| `gokit/db/outbox` | v2 outbox: `LinkCreated` enqueue'ится через `outbox.EnqueueTyped` ВНУТРИ Create-транзакции; `service.WithOutbox` авто-подключает worker; `pg_notify` будит dispatcher в ~ms от commit'а; 7-day retention sweep'ит published-строки. |
+| `gokit/db/migrate` | `service.WithMigrations(embed.FS)` запускает `0001_init.sql` + `0002_idempotent_links.sql` автоматически до того, как любая подсистема прочитает схему — никакого больше ручного `os.ReadFile`/`db.Exec` цикла в `main.go`. |
+| `gokit/service.WithCron` / `AddSingletonCron` | Job `daily-stats` логирует link + visit-totals в 03:00 UTC через `pg_try_advisory_lock`-backed singleton — только ОДНА реплика выполняет job на каждый tick в multi-replica деплое. |
+| `gokit/cmd/kit` | Операторская CLI: `kit migrate up/down/status`, `kit auth keygen`, `kit auth apikey new`, `kit outbox status`. Pre-deployment миграции + post-incident outbox-инспекция без написания одноразовых Go-бинарей. |
+| `gokit/fibermap.LoggerInjector` | Авто-устанавливается `service.New`. `links.Create` зовёт `fibermap.LoggerFrom(c).Info(...)`, чтобы эмитить логи, которые уже несут method, path, request_id, user_id и route — никакого ручного attribute-threading'а. |
 
-## Architecture
+## Архитектура
 
 ```
                        ┌────────────────────────────────┐
@@ -115,19 +115,19 @@ curl -H "authorization: Bearer $TOKEN" http://localhost:3000/links/<code>/stats
       + MicroLink          (URLSHORT stream)
 ```
 
-The Bearer-optional layer at `fiber.App.Use` populates `Locals` before
-the engine's `ContextBuilder` runs — without it `AppCtx.UserID` would
-be empty in handlers (because per-route `bearer: []` middleware runs
-AFTER `contextInit`). Per-route `bearer: []` still enforces 401 on
-protected paths.
+Bearer-optional слой на `fiber.App.Use` populate'ит `Locals` до того,
+как запустится engine'овый `ContextBuilder` — без него `AppCtx.UserID`
+был бы пустой в handler'ах (потому что per-route `bearer: []` middleware
+запускается ПОСЛЕ `contextInit`). Per-route `bearer: []` всё ещё
+enforces 401 на защищённых путях.
 
-### Redirect hot path
+### Hot path редиректа
 
 ```
 GET /:code
   │
   ▼
-fibermap.Engine (rate_limit 50/100/IP via auth factory)
+fibermap.Engine (rate_limit 50/100/IP через auth-factory)
   │
   ▼
 links.Service.Resolve
@@ -138,42 +138,39 @@ links.Service.Resolve
   ├─ Postgres SELECT … WHERE code = $1
   │     hit  → cache.Set(code), continue
   │     miss → cache.SetNotFound(code), return 404
-  ├─ pub.LinkVisited (fire-and-forget JetStream publish)
+  ├─ pub.LinkVisited (fire-and-forget JetStream-публикация)
   ▼
 302 Location: original_url
 ```
 
-Three layers absorb scanner / hot-code traffic before it reaches
+Три слоя поглощают scanner / hot-code трафик до того, как он достигнет
 Postgres:
 
-1. **Rate limit** at the route — 50 rps sustained per source IP,
-   burst 100. Returns 429 with `Retry-After`.
-2. **Negative cache** — the first 404 for an unknown code stores a
-   60s sentinel in Redis. Subsequent hits to that code return 404
-   without a DB round-trip.
-3. **Positive cache** — code → `{ID, UserID, OriginalURL}` cached
-   for 1h. `visit_count` + `last_visited_at` deliberately NOT
-   cached (they mutate every click; caching them would defeat the
-   purpose).
+1. **Rate limit** на роуте — 50 rps sustained на source IP,
+   burst 100. Возвращает 429 с `Retry-After`.
+2. **Negative cache** — первая 404 для неизвестного кода сохраняет
+   60s sentinel в Redis. Последующие хиты на этот код возвращают 404
+   без DB round-trip.
+3. **Positive cache** — code → `{ID, UserID, OriginalURL}` cache'ится
+   на 1h. `visit_count` + `last_visited_at` намеренно НЕ cache'атся
+   (они мутируют на каждый клик; cache'ить их defeat purpose).
 
-Invalidation: `Update` / `Delete` drop the cache entry after the DB
-write succeeds, so the next `Resolve` refetches.
+Invalidation: `Update` / `Delete` дропают cache-запись после успешной
+DB-записи, так что следующий `Resolve` refetch'ит.
 
-`REDIS_URL` env enables the cache; leaving it empty falls back to a
-direct-Postgres path so the example still runs in dev.
+env `REDIS_URL` включает кеш; оставив его пустым, fallback'итесь на
+прямой Postgres-путь, чтобы пример всё ещё запускался в dev.
 
 ### Batched visit counting
 
-`urlshort.link.visited` is consumed via natsmap's batched-handler
-mode: `subscribers.yaml` declares
-`batch_size: 1000` + `batch_interval: 1s`, and
-`natsmap.RegisterBatchedHandler[events.LinkVisited]` binds the
-`link_visit_counter` subscriber to `links.VisitCounter.Handle`.
-Under the hood natsmap opens a JetStream Pull subscription, fetches
-up to 1000 messages with a 1s deadline, and hands them to Handle as
-one slice. The handler aggregates events by code (domain-side
-decision: many visits on a popular code collapse into one row) and
-runs ONE statement:
+`urlshort.link.visited` потребляется через batched-handler mode
+natsmap'а: `subscribers.yaml` объявляет `batch_size: 1000` +
+`batch_interval: 1s`, и `natsmap.RegisterBatchedHandler[events.LinkVisited]`
+привязывает подписчик `link_visit_counter` к `links.VisitCounter.Handle`.
+Под капотом natsmap открывает JetStream Pull-подписку, забирает до 1000
+сообщений с 1s-deadline и отдаёт их Handle одним срезом. Handler
+агрегирует события по code (domain-side решение: много визитов на
+популярный код collapse'ятся в одну строку) и запускает ОДИН statement:
 
 ```sql
 UPDATE links AS l
@@ -189,84 +186,85 @@ FROM (VALUES
 WHERE l.code = v.code;
 ```
 
-One DB round-trip per second, regardless of click rate. Hot codes
-no longer serialise on a single row-level write lock — the redirect
-returns in ~1ms even under load.
+Один DB round-trip в секунду, независимо от click-rate. Hot-коды
+больше не сериализуются на single row-level write-lock'е — редирект
+возвращается за ~1ms даже под нагрузкой.
 
-`subscribers.yaml` declares the binding by name only; natsmap
-auto-derives `durable = "link_visit_counter"` and `queue_group =
-"link_visit_counter"` (see `resolveDurableQueueGroup` in
-`clients/natsmap/engine.go`), so horizontal scaling never
-double-counts.
+`subscribers.yaml` объявляет binding только по имени; natsmap
+авто-выводит `durable = "link_visit_counter"` и `queue_group =
+"link_visit_counter"` (см. `resolveDurableQueueGroup` в
+`clients/natsmap/engine.go`), так что горизонтальное масштабирование
+никогда не double-count'ит.
 
-**Delivery semantics — at-least-once via JetStream Pull + atomic
-ack.** natsmap's batched dispatcher runs in Pull mode; messages
-are NOT auto-acked on receipt. The handler's return drives the
-entire batch's ack/nak status:
+**Семантика доставки — at-least-once через JetStream Pull + атомарный
+ack.** Batched dispatcher natsmap'а работает в Pull-mode; сообщения
+НЕ auto-ack'аются на receipt'е. Возврат handler'а драйвит весь
+ack/nak-статус батча:
 
-- `Handle` returns nil → kit Acks every message in the slice
-  (atomic with the DB UPDATE — both succeed together).
-- `Handle` returns err → kit Naks every message; JetStream
-  redelivers the whole batch on the next fetch.
+- `Handle` возвращает nil → кит Ack'ает каждое сообщение в срезе
+  (атомарно с DB UPDATE — оба успешны вместе).
+- `Handle` возвращает err → кит Nak'ает каждое сообщение; JetStream
+  re-deliver'ит весь батч на следующем fetch'е.
 
-A crash mid-Handle (after `db.Exec` but before the kit's ack walk)
-results in redelivery — the DB UPDATE was committed but the ack
-wasn't sent. The handler is idempotent enough for this not to
-matter for visit counts (a re-applied UPDATE bumps the count
-again — over-count, never under-count). Strict-once
-deployments would need a separate dedup table keyed by NATS
-sequence number; out of scope for this example.
+Крэш mid-Handle (после `db.Exec`, но до kit'ового ack-walk'а)
+результирует в redelivery — DB UPDATE был commit'нут, но ack не был
+отправлен. Handler идемпотентен достаточно, чтобы это не имело
+значения для visit-count'ов (re-applied UPDATE bump'ает count'у
+снова — over-count, никогда не under-count). Strict-once
+деплои нуждались бы в отдельной dedup-таблице, keyed by NATS
+sequence number; вне scope'а этого примера.
 
-Subscription lifecycle is owned by natsmap — `service.Close` calls
-`Runtime.Drain` which stops the pull loop and unsubscribes
-gracefully. No explicit `VisitCounter.Close`.
+Subscription lifecycle owned by natsmap — `service.Close` зовёт
+`Runtime.Drain`, которая останавливает pull-loop и unsubscribe'ит
+gracefully. Никакого явного `VisitCounter.Close`.
 
-### Idempotent Create
+### Идемпотентный Create
 
-Migration `0002_idempotent_links.sql` adds `UNIQUE (user_id,
-original_url)`. `links.Service.Create` pre-checks via SELECT and
-falls back to fetch-on-conflict if a concurrent request wins the
-race — two posts of the same URL from one user return the same code
-without duplicate rows.
+Миграция `0002_idempotent_links.sql` добавляет `UNIQUE (user_id,
+original_url)`. `links.Service.Create` pre-check'ит через SELECT и
+fallback'ится на fetch-on-conflict, если конкурентный запрос
+побеждает гонку — два post'а одного URL от одного пользователя
+возвращают тот же code без дубликатных строк.
 
 ### Security hardening
 
-The deployed surface ships with kit-default OWASP-baseline protections; this example tightens a few extras on top:
+Деплоимая поверхность shippится с kit-default OWASP-baseline защитами; этот пример затягивает несколько дополнительных сверху:
 
-- **`/readyz`** — auto-mounted by `service.New`; runs DB + NATS + Redis ping in parallel under a 5s deadline. K8s readiness probe target. Distinct from `/healthz` which is always 200.
-- **Security headers** — `service.New` auto-installs `fibermap.SecurityHeaders`: HSTS (1y), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, an API-friendly CSP.
-- **64 KiB body limit** — `service.WithBodyLimit(64*1024)` in `main.go`. Fiber returns 413 above the cap before the handler allocates a request buffer.
-- **Per-route rate limits** declared in `configs/routes.yaml` via the auth `rate_limit` factory:
-  - `POST /auth/register` — 1 rps / burst 5 per IP (mass-signup guard).
-  - `POST /auth/login` — 2 rps / burst 10 per IP (credential stuffing).
-  - `POST /auth/refresh` — 1 rps / burst 5 per IP (cookie probing).
-  - `POST /links` — 5 rps / burst 20 per IP (authenticated abuse cap).
-  - `GET /:code` — 50 rps / burst 100 per IP (scanner absorption; already documented above).
+- **`/readyz`** — авто-монтируется через `service.New`; запускает DB + NATS + Redis ping параллельно под 5s deadline. Цель K8s readiness probe. Отличается от `/healthz`, который всегда 200.
+- **Security headers** — `service.New` авто-устанавливает `fibermap.SecurityHeaders`: HSTS (1y), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, API-friendly CSP.
+- **64 KiB body limit** — `service.WithBodyLimit(64*1024)` в `main.go`. Fiber возвращает 413 над cap'ом до того, как handler аллоцирует request-буфер.
+- **Per-route rate limits** объявлены в `configs/routes.yaml` через auth-factory `rate_limit`:
+  - `POST /auth/register` — 1 rps / burst 5 на IP (mass-signup guard).
+  - `POST /auth/login` — 2 rps / burst 10 на IP (credential stuffing).
+  - `POST /auth/refresh` — 1 rps / burst 5 на IP (cookie probing).
+  - `POST /links` — 5 rps / burst 20 на IP (authenticated abuse cap).
+  - `GET /:code` — 50 rps / burst 100 на IP (scanner absorption; уже задокументировано выше).
 
-429s from the rate limiter expose the stable `rate_limited` Code so the client UI can show a "slow down" message instead of leaking a "wrong password" hint to an attacker.
+429 от rate limiter'а exposes стабильный `rate_limited` Code, так что client UI может показать "slow down" сообщение, а не утечь "wrong password" подсказку атакующему.
 
-### LinkCreated through the transactional outbox
+### LinkCreated через transactional outbox
 
-The Create handler runs INSERT + `outbox.Enqueue` in ONE `db.Tx`, so the link row and the `LinkCreated` event commit atomically. A long-lived `outbox.Worker` started in `main.go` polls the table on a 5-second cadence, calls `natsmap.PublishRaw` per event, and marks the row published on success — bumps `attempts` and stashes the error otherwise.
+Handler Create запускает INSERT + `outbox.Enqueue` в ОДНОЙ `db.Tx`, так что link-строка и `LinkCreated` событие commit'ятся атомарно. Долгоживущий `outbox.Worker`, запущенный в `main.go`, polling'ит таблицу на 5-секундной cadence, зовёт `natsmap.PublishRaw` на каждое событие и маркирует строку published при успехе — bump'ает `attempts` и stash'ит ошибку в противном случае.
 
-Why bother for a click-tracking demo? Because the **commit→publish crash window** is exactly the kind of bug that escapes integration tests and surfaces only in production: the link is durable, the downstream "user got their new short URL" notification never fires, no error gets logged anywhere. The outbox pushes the publish step into a separate retryable transaction, so a crash anywhere in the pipeline either rolls back the entire link creation OR delivers the event eventually.
+Зачем заморачиваться для click-tracking демки? Потому что **commit→publish crash window** — это именно тот тип бага, который ускользает от интеграционных тестов и всплывает только в production: ссылка durable, downstream "user got their new short URL" notification никогда не срабатывает, никакая ошибка не логируется нигде. outbox толкает publish-шаг в отдельную retryable-транзакцию, так что крэш где угодно в pipeline либо откатывает весь link-create целиком, ЛИБО доставляет событие в итоге.
 
-`LinkVisited` deliberately stays on the direct publish path — fire-and-forget analytics, bounded loss on a node crash is acceptable, and the outbox storage cost (one INSERT per click) would dominate the redirect hot path's latency budget.
+`LinkVisited` намеренно остаётся на прямом publish-пути — fire-and-forget аналитика, bounded loss при крэше ноды приемлем, а cost storage outbox'а (один INSERT на клик) доминировал бы latency budget hot-path'а редиректа.
 
-## Limitations
+## Ограничения
 
-- **Best-effort enrichment:** if MicroLink or the target URL is down, the link is still created with empty metadata. Not a bug — the demo deliberately picks "user-visible failures should be loud; analytics should be quiet".
-- **6-char base62 code:** ~1e10 keyspace; retry up to 5 times on unique-violation, then error. Increase length for higher volume.
-- **At-most-once visit counting** during the ≤1s buffer window (see above). Production deployments needing strict counts should switch to a manual-ack JetStream subscription.
-- **No HTTPS, no real secrets handling** — dev only.
-- **Refresh-token rotation works** but no per-device tracking beyond `user_agent`.
+- **Best-effort enrichment:** если MicroLink или target URL лежит, link всё равно создаётся с пустыми метаданными. Это не баг — демка намеренно выбирает "user-visible сбои должны быть громкими; аналитика должна быть тихой".
+- **6-char base62 код:** ~1e10 keyspace; retry до 5 раз на unique-violation, потом ошибка. Увеличьте длину для большего объёма.
+- **At-most-once visit-counting** во время ≤1s буферного окна (см. выше). Production-деплои, нуждающиеся в strict-count, должны переключиться на manual-ack JetStream-подписку.
+- **Нет HTTPS, нет реального secrets handling'а** — только dev.
+- **Refresh-token ротация работает**, но нет per-device tracking'а сверх `user_agent`.
 
-## Tests
+## Тесты
 
 ```bash
-make test    # requires Docker — testcontainers Postgres + NATS + httptest stub
+make test    # требует Docker — testcontainers Postgres + NATS + httptest-stub
 ```
 
-One end-to-end smoke test (`main_test.go::TestSmoke_EndToEnd`) covers
-every package in a single positive-path scenario. Negative cases live
-in each subpackage's own test suite.
+Один end-to-end smoke test (`main_test.go::TestSmoke_EndToEnd`) покрывает
+каждый пакет в одном positive-path сценарии. Negative cases живут в
+suite-тестов каждого подпакета.
+</content>

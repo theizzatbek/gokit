@@ -1,11 +1,11 @@
 # auth/fibermount
 
-One-call bridge between `*auth.Auth[C]` and a `*fibermap.Engine[T]`. Registers the `bearer`, `require_scope`, and `require_role` factory middlewares onto the engine so routes.yaml can use them by name. The bridge lives in a subpackage so core `auth/` stays framework-agnostic (no fibermap import there).
+One-call мост между `*auth.Auth[C]` и `*fibermap.Engine[T]`. Регистрирует factory middleware `bearer`, `require_scope` и `require_role` на engine, чтобы routes.yaml мог использовать их по имени. Мост живёт в подпакете, чтобы core `auth/` оставался framework-agnostic (никакого импорта fibermap там).
 
-**Parent:** [../README.md](../README.md)
-**Import:** `github.com/theizzatbek/gokit/auth/fibermount`
+**Родитель:** [../README.md](../README.md)
+**Импорт:** `github.com/theizzatbek/gokit/auth/fibermount`
 
-## Use
+## Использование
 
 ```go
 import (
@@ -17,13 +17,13 @@ import (
 eng := fibermap.New[AppCtx]()
 authObj, _ := auth.New[MyClaims](cfg, auth.WithRefreshStore(store))
 
-// One line — registers all three factory middlewares.
+// Одна строка — регистрирует все три factory middleware.
 if err := fibermount.MountMiddlewareFactories(eng, authObj); err != nil {
     return err
 }
 ```
 
-Now in `routes.yaml`:
+Теперь в `routes.yaml`:
 
 ```yaml
 groups:
@@ -41,17 +41,18 @@ groups:
           - require_role: [admin]
 ```
 
-Both `bearer` (with `[]` = `BearerRequired`, `["optional"]` = `BearerOptional`) and `require_role`/`require_scope` (with arg lists) are now usable as YAML factory middlewares.
+И `bearer` (с `[]` = `BearerRequired`, `["optional"]` = `BearerOptional`), и `require_role`/`require_scope` (с arg-list'ами) теперь применимы как YAML factory middleware.
 
-## Notes
+## Заметки
 
-- **`MountMiddlewareFactories` is the only public function** — does all three registrations at once. If you want only some of them, register the individual `*Factory` methods of `*auth.Auth[C]` via `fibermap.RegisterMiddlewareFactory` manually.
-- **Bearer at fiber.App level vs. per-route:** when your engine's `ContextBuilder` reads the Bearer principal (typical), the auth check must run BEFORE `contextInit`. fibermount's `bearer: []` factory installs a per-route middleware that runs AFTER `contextInit` — too late for the builder. Solution: install `authObj.Bearer(auth.BearerOptional)` at fiber.App via `fibermap.WithUse(...)` so the principal is in Locals before the builder runs; per-route `bearer: []` then enforces 401 on protected paths.
-- **`auth/` itself does NOT import `gokit/fibermap`.** Only this bridge does. Keeps `auth` usable from non-Fiber code (CLI, workers, scripts).
-- **Adapts via `factory.Adapter/AdapterFactory`** under the hood (see [`fibermap/factory`](../../fibermap/factory/README.md)).
+- **`MountMiddlewareFactories` — единственная публичная функция** — делает все три регистрации за раз. Если нужны только некоторые из них, регистрируйте отдельные методы `*Factory` у `*auth.Auth[C]` через `fibermap.RegisterMiddlewareFactory` руками.
+- **Bearer на уровне fiber.App vs. per-route:** когда `ContextBuilder` вашего engine читает Bearer-principal (типично), auth-проверка должна выполняться ДО `contextInit`. Factory `bearer: []` из fibermount устанавливает per-route middleware, который запускается ПОСЛЕ `contextInit` — слишком поздно для builder'а. Решение: установите `authObj.Bearer(auth.BearerOptional)` на fiber.App через `fibermap.WithUse(...)`, чтобы principal был в Locals до того, как запустится builder; per-route `bearer: []` потом enforces 401 на защищённых путях.
+- **Сам `auth/` НЕ импортирует `gokit/fibermap`.** Только этот мост это делает. Это сохраняет `auth` пригодным из не-Fiber кода (CLI, workers, скрипты).
+- **Адаптирует через `factory.Adapter/AdapterFactory`** под капотом (см. [`fibermap/factory`](../../fibermap/factory/README.md)).
 
-## See also
+## См. также
 
-- [`auth`](../README.md) — parent: provides `Bearer`/`RequireScopeFactory`/`RequireRoleFactory` methods this bridge wraps
+- [`auth`](../README.md) — родитель: предоставляет методы `Bearer`/`RequireScopeFactory`/`RequireRoleFactory`, которые этот мост оборачивает
 - [`fibermap`](../../fibermap/README.md) — `RegisterMiddlewareFactory`, `WithUse`
-- [`examples/urlshort`](../../examples/urlshort/README.md) — uses fibermount end-to-end
+- [`examples/urlshort`](../../examples/urlshort/README.md) — использует fibermount end-to-end
+</content>
