@@ -336,6 +336,9 @@ last-write-wins (код override'ит). `Servers` / `SecuritySchemes` /
 | `WithDBDrainTimeout(d)` | Cap на ожидание in-flight DB-запросов / транзакций во время `Service.Close`. По умолчанию 5s. `svc.DB.Drain(ctx)` вызывается с этим deadline'ом перед hard-Close. |
 | `WithS3Options(s3client.Option...)` | Extra `s3client.Option` для kit-built `*s3client.Client`. Logger + Metrics уже auto-wired'ы; reach for this для custom-retry policy через AWS SDK config. |
 | `WithRateLimit(ratelimit.Config, opts...)` | Opt-in kit-овского Redis-backed sliding-window лимитера (`svc.RateLimiter`). Регистрирует YAML middleware factory `rate_limit_redis` на Engine. Требует Config.Redis.URL (иначе `service_ratelimit_needs_redis`). Когда Auth тоже сконфигурирован — `user`/`subject` key-strategy резолвится через `auth.KeyBySubject[C]` автоматически. |
+| `WithPreflightEndpoint(path)` | Mounts `/preflight` (path override-able) returning JSON `{status, checks[]}`. 200 на success, 503 на любой failure. Используется `kit doctor` CLI'ём для CI-gating'а + on-call-smoke-checks. Сами checks — те же что run'ятся `/readyz` plus opt-in custom-чекеры через `WithReadinessChecker`. |
+| `WithPreflightTimeout(d)` | Cap на time-budget'е всего preflight-run'а. Default 10s — accommodates slow one-shot validations (S3 HEAD, schema-version SELECT). |
+| `WithDevMode(prefix, dev.ConfigOption...)` | Auto-mount dev-tools: HTML-error-pages + `/_dev/routes` route-inspector + `/_dev/config` env-inspector (с redaction). **No-op когда `Config.Service.Env != "dev"`** + warn-log. См. [`fibermap/dev`](../fibermap/dev/README.md). |
 
 ## Common patterns
 

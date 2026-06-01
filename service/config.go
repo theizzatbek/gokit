@@ -65,6 +65,12 @@ type ServiceConfig struct {
 	// literal paths and are NOT prefixed — keeping the override
 	// channel transparent.
 	ConfigsDir string `env:"CONFIGS_DIR"`
+
+	// Env labels the runtime environment ("dev", "staging",
+	// "prod"). [WithDevMode] uses this as the gate for mounting
+	// dev-only inspectors — non-"dev" values disable mounting
+	// even when the option was passed.
+	Env string `env:"ENV"`
 }
 
 // AuthConfig — JWT signing material + TTLs. PrivateKeyPEM is the

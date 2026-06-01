@@ -108,6 +108,49 @@ kit outbox status --dsn postgres://...
 Показывает queue-глубину, возраст самой старой pending-строки, топ-5
 самых неоднократно зафейлившихся строк с их сообщениями об ошибках.
 
+### `kit doctor`
+
+Hits `/preflight` running service'а и pretty-print'ит per-check
+status. Exit-code 0 на ok, 1 на failure, 2 на transport / config-error.
+Используется в CI как gate ("staging actually ready before integration tests").
+
+```sh
+kit doctor --url http://localhost:8080
+kit doctor --url https://staging.api.io --timeout 30s
+kit doctor --url http://localhost:8080 --json | jq
+```
+
+Требует `service.WithPreflightEndpoint("")` в service-construction'е.
+
+### `kit init`
+
+Scaffold'ит новый kit-based сервис: `go.mod`, `main.go` с
+`service.New`, `configs/routes.yaml` + `clients.yaml`, `Makefile`,
+`internal/handlers/handlers.go`-stub, `.gitignore`, `README.md`.
+Destination-directory должен быть empty.
+
+```sh
+kit init tasks --module github.com/acme/tasks
+cd tasks
+go mod tidy
+make run
+```
+
+После init'а сервис listens на `:3000` с `/ping` example-route'ом.
+
+### `kit add-endpoint`
+
+Appends route в `configs/routes.yaml` + создаёт handler-stub в
+`internal/handlers/<base>.go`. Если файл существует — appends
+TODO-comment вместо clobber'а.
+
+```sh
+kit add-endpoint GET /tasks tasks.list
+kit add-endpoint POST /tasks tasks.create --group /api/v1
+```
+
+Handler-base name извлекается из части до первого `.` в handler-name'е.
+
 ## DSN-формат
 
 Все DB-связанные команды принимают `--dsn postgres://user:pw@host:port/db?sslmode=disable`

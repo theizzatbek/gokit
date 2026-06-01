@@ -1,0 +1,22 @@
+// Package handlers wires {{.Name}}'s fibermap handlers. Each
+// handler is registered under a stable name that routes.yaml
+// references; the engine resolves names → callbacks at Mount time.
+package handlers
+
+import (
+	"github.com/gofiber/fiber/v2"
+
+	"github.com/theizzatbek/gokit/fibermap"
+	"github.com/theizzatbek/gokit/service"
+)
+
+// Register wires every handler this package owns onto the service's
+// engine. Call from main() before svc.Run().
+func Register[T any, C any](svc *service.Service[T, C]) {
+	fibermap.RegisterHandler(svc.Engine, "meta.ping", func(c *fibermap.Context[T]) error {
+		return c.Ctx.Status(fiber.StatusOK).JSON(map[string]any{
+			"service": "{{.Name}}",
+			"status":  "ok",
+		})
+	})
+}

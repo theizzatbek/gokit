@@ -100,6 +100,17 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 				fibermap.WithReadinessTimeout(s.opts.readinessTimeout)))
 		}
 	}
+	s.mountDevTools()
+	if s.opts.preflightEnable {
+		path := s.opts.preflightPath
+		if path == "" {
+			path = "/preflight"
+		}
+		handler := s.preflightHandler()
+		out = append(out, fibermap.WithConfigureApp(func(app *fiber.App) {
+			app.Get(path, handler)
+		}))
+	}
 	if s.opts.bodyLimit > 0 {
 		out = append(out, fibermap.WithFiberConfig(fiber.Config{
 			BodyLimit:    s.opts.bodyLimit,

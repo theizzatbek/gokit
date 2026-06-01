@@ -1,0 +1,39 @@
+# {{.Name}}
+
+A kit-based service scaffolded via `kit init`.
+
+## Quickstart
+
+```bash
+go mod tidy
+make run
+```
+
+Service listens on `:8080` by default. Try `GET http://localhost:8080/ping`.
+
+## Layout
+
+- `main.go` — entry point; constructs `service.Service` and runs it.
+- `configs/routes.yaml` — declarative route table; references handler names.
+- `configs/clients.yaml` — declarative outbound HTTP clients (apimap).
+- `internal/handlers/` — handler implementations.
+
+## Adding endpoints
+
+```bash
+kit add-endpoint GET /tasks tasks.list
+```
+
+This appends to `routes.yaml` + generates a handler stub.
+
+## Operations
+
+```bash
+make doctor     # runs /preflight checks against a running service
+make build      # builds binary into bin/
+```
+
+## Resources
+
+- gokit docs: <https://github.com/theizzatbek/gokit>
+- routes.yaml schema: <https://github.com/theizzatbek/gokit/blob/main/fibermap/README.md>

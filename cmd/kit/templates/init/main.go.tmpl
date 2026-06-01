@@ -1,0 +1,50 @@
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/caarlos0/env/v11"
+	"github.com/theizzatbek/gokit/service"
+
+	"{{.Module}}/internal/handlers"
+)
+
+// AppCtx is the per-request payload type for fibermap. Extend it as
+// your service grows — e.g. add fields populated by middleware
+// (request ID, tenant ID).
+type AppCtx struct{}
+
+// Claims is the per-token custom-claims type for auth. Empty struct
+// is fine if your service only uses the standard JWT fields.
+type Claims struct{}
+
+// Config embeds service.Config so kit-level env vars (DATABASE_*,
+// REDIS_URL, NATS_URL, ...) work out of the box.
+type Config struct {
+	service.Config
+}
+
+func main() {
+	var cfg Config
+	if err := env.Parse(&cfg); err != nil {
+		log.Fatalf("env parse: %v", err)
+	}
+
+	ctx := context.Background()
+	svc, err := service.New[AppCtx, Claims](ctx, cfg.Config,
+		service.WithPreflightEndpoint(""),
+		service.WithRoutes(),
+	)
+	if err != nil {
+		log.Fatalf("service.New: %v", err)
+	}
+	defer svc.Close()
+
+	// Register fibermap handlers BEFORE Run (Run loads routes.yaml).
+	handlers.Register(svc)
+
+	if err := svc.Run(); err != nil {
+		log.Fatalf("svc.Run: %v", err)
+	}
+}

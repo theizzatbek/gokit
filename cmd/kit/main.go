@@ -35,6 +35,9 @@ Usage:
   kit migrate up|down|status [flags]
   kit auth keygen|apikey [flags]
   kit outbox status [flags]
+  kit doctor --url URL [flags]
+  kit init <name> --module PATH [flags]
+  kit add-endpoint METHOD PATH HANDLER [flags]
 
 Pass --help on any subcommand for its flags.
 `
@@ -57,6 +60,12 @@ func main() {
 		err = runAuth(ctx, os.Args[2:])
 	case "outbox":
 		err = runOutbox(ctx, os.Args[2:])
+	case "doctor":
+		err = runDoctor(ctx, os.Args[2:])
+	case "init":
+		err = runInit(ctx, os.Args[2:])
+	case "add-endpoint":
+		err = runAddEndpoint(ctx, os.Args[2:])
 	case "help", "--help", "-h":
 		fmt.Fprint(os.Stdout, usageRoot)
 	default:
