@@ -13,6 +13,7 @@ import (
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
+	s3client "github.com/theizzatbek/gokit/clients/s3"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/db/outbox"
 	"github.com/theizzatbek/gokit/fibermap"
@@ -31,6 +32,7 @@ type Service[T any, C any] struct {
 	Engine  *fibermap.Engine[T] // always built
 	Hasher  *auth.Hasher        // nil when Auth is nil
 	Outbox  *outbox.Worker      // nil unless WithOutbox + DB + NATSMap all wired
+	S3      *s3client.Client    // nil when Config.S3.Bucket == ""
 
 	cfg     Config
 	logger  *slog.Logger
@@ -53,6 +55,10 @@ type Service[T any, C any] struct {
 	// service registry implements prometheus.Gatherer (the default
 	// does). Flushes the OTLP metric pipeline during Close.
 	otelMetricsShutdown func(context.Context) error
+
+	// otelLogsShutdown is non-nil iff WithOtel was passed AND
+	// WithoutOtelLogs was not. Flushes the OTLP log pipeline.
+	otelLogsShutdown func(context.Context) error
 
 	// sentryShutdown is non-nil iff WithSentry was passed. Flushes
 	// pending Sentry events during Close.

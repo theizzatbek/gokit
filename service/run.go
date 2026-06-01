@@ -1,7 +1,9 @@
 package service
 
 import (
+	"context"
 	"os"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -206,6 +208,12 @@ func (s *Service[T, C]) Close() {
 		_ = s.Redis.Close()
 	}
 	if s.DB != nil {
-		s.DB.Close()
+		drainTimeout := s.opts.dbDrainTimeout
+		if drainTimeout <= 0 {
+			drainTimeout = 5 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+		_ = s.DB.Drain(ctx)
+		cancel()
 	}
 }

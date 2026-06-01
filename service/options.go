@@ -16,6 +16,7 @@ import (
 	natsclient "github.com/theizzatbek/gokit/clients/nats"
 	"github.com/theizzatbek/gokit/clients/natsmap"
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
+	s3client "github.com/theizzatbek/gokit/clients/s3"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/db/outbox"
 	"github.com/theizzatbek/gokit/fibermap"
@@ -82,6 +83,11 @@ type options struct {
 	migrationsFS               fs.FS
 	skipOutboxReadiness        bool
 	outboxCheckerOpts          []outbox.CheckerOption
+	skipOtelLogs               bool
+	otelLogsOpts               []otelkit.LogsOption
+	skipLogger                 bool
+	dbDrainTimeout             time.Duration
+	s3Opts                     []s3client.Option
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -378,6 +384,22 @@ func WithoutOtelMetrics() Option {
 	return func(o *options) { o.skipOtelMetrics = true }
 }
 
+// WithoutOtelLogs suppresses the slog→OTel log bridge that
+// WithOtel otherwise auto-enables. Tracing and metrics stay on;
+// only the log pipeline is skipped. Use when the deployment ships
+// logs out-of-band (sidecar shipper, Promtail, Vector) and the
+// double-export would inflate billing.
+func WithoutOtelLogs() Option {
+	return func(o *options) { o.skipOtelLogs = true }
+}
+
+// WithOtelLogsOptions configures the OTel log pipeline auto-enabled
+// by WithOtel (resource attrs, exporter overrides). Forwards to
+// [otelkit.SetupLogs]. No-op without WithOtel.
+func WithOtelLogsOptions(opts ...otelkit.LogsOption) Option {
+	return func(o *options) { o.otelLogsOpts = append(o.otelLogsOpts, opts...) }
+}
+
 // WithRefreshGC schedules periodic garbage collection of expired
 // refresh tokens against the refresh store wired through Auth. Without
 // it, the underlying table (auth_refresh_tokens for refreshpg) grows
@@ -550,6 +572,32 @@ func WithReadinessTimeout(d time.Duration) Option {
 //	)
 func WithReadinessChecker(c ...fibermap.Checker) Option {
 	return func(o *options) { o.readinessExtraCheckers = append(o.readinessExtraCheckers, c...) }
+}
+
+// WithS3Options appends to the s3client options applied by
+// service.New. Logger + Metrics are already auto-wired (so S3
+// observability lands on the shared service registry); use this
+// for niche overrides — custom retry policy via the AWS SDK
+// config, etc.
+func WithS3Options(opts ...s3client.Option) Option {
+	return func(o *options) { o.s3Opts = append(o.s3Opts, opts...) }
+}
+
+// WithDBDrainTimeout caps the wait for in-flight DB queries /
+// transactions during Service.Close. Default 5s — accommodates a
+// burst of normal handlers without holding the SIGTERM-deadline
+// hostage to a stuck query.
+//
+// Set to 0 to keep the default; a positive value overrides it.
+// `Service.Close` calls `svc.DB.Drain(ctx)` with this deadline
+// before falling through to a hard `Close()`, so long-running
+// handlers finish their work cleanly instead of getting cut
+// mid-transaction.
+//
+// service.Run already plumbs `WithShutdownTimeout(...)` for the
+// HTTP server; this is the DB-side counterpart.
+func WithDBDrainTimeout(d time.Duration) Option {
+	return func(o *options) { o.dbDrainTimeout = d }
 }
 
 // WithDBOptions appends to the db options applied by service.New.

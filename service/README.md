@@ -331,6 +331,10 @@ last-write-wins (код override'ит). `Servers` / `SecuritySchemes` /
 | `WithOutbox(outbox.WorkerOption...)` | Включить transactional outbox-worker. Требует DB + (NATSMap ИЛИ `WithOutboxDispatcher`). Auto-wires logger + metrics, регистрирует `OnShutdown(Stop)`. Default PublishFn = `natsmap.PublishRaw(ctx, rt, e.EventType, e.Payload, e.Headers)`. |
 | `WithOutboxDispatcher(fn)` | Override default outbox PublishFn (например, fan out в несколько subjects, оборачивать audit-логом, диспатчить на не-natsmap шину). |
 | `WithOutboxAutoSchema()` | Применить `outbox.Schema()` на boot'е. Off по умолчанию — большинство деплоев впихивают DDL в свой migration-tool. |
+| `WithoutOtelLogs()` | Подавить slog→OTel logs-мост, который `WithOtel` иначе auto-включает. Tracing и metrics остаются on. Используйте, когда логи отправляются sidecar-shipper'ом (Promtail, Vector). |
+| `WithOtelLogsOptions(otelkit.LogsOption...)` | Конфигурирует OTel logs-пайплайн, авто-включённый `WithOtel`'ом (resource-атрибуты, exporter-override'ы). No-op без `WithOtel`. |
+| `WithDBDrainTimeout(d)` | Cap на ожидание in-flight DB-запросов / транзакций во время `Service.Close`. По умолчанию 5s. `svc.DB.Drain(ctx)` вызывается с этим deadline'ом перед hard-Close. |
+| `WithS3Options(s3client.Option...)` | Extra `s3client.Option` для kit-built `*s3client.Client`. Logger + Metrics уже auto-wired'ы; reach for this для custom-retry policy через AWS SDK config. |
 
 ## Common patterns
 

@@ -78,6 +78,24 @@ func (s *Service[T, C]) setupOtel(ctx context.Context) error {
 		}
 		s.otelMetricsShutdown = metricShutdown
 	}
+
+	// Logs pipeline: OTLP/HTTP exporter + LoggerProvider. The actual
+	// slog→OTel handler wrap on the kit logger happens in build.go
+	// after both setupOtel and setupSentry run, so the bridge
+	// composes cleanly with the Sentry breadcrumb wrap.
+	if !s.opts.skipOtelLogs {
+		logsShutdown, err := otelkit.SetupLogs(ctx, s.opts.otelServiceName, s.opts.otelLogsOpts...)
+		if err != nil {
+			_ = shutdown(ctx)
+			s.otelShutdown = nil
+			if s.otelMetricsShutdown != nil {
+				_ = s.otelMetricsShutdown(ctx)
+				s.otelMetricsShutdown = nil
+			}
+			return err
+		}
+		s.otelLogsShutdown = logsShutdown
+	}
 	return nil
 }
 
@@ -89,6 +107,14 @@ func (s *Service[T, C]) registerOtelShutdown() {
 	// LIFO). Order matters: we want to flush spans before the metric
 	// pipeline tears down — the metrics provider's last push includes
 	// any counters the span flush mutated.
+	if s.otelLogsShutdown != nil {
+		shutdown := s.otelLogsShutdown
+		s.OnShutdown(func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return shutdown(ctx)
+		})
+	}
 	if s.otelMetricsShutdown != nil {
 		shutdown := s.otelMetricsShutdown
 		s.OnShutdown(func() error {

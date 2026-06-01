@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/theizzatbek/gokit/clients/httpc"
+	s3client "github.com/theizzatbek/gokit/clients/s3"
 	"github.com/theizzatbek/gokit/db"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
@@ -25,15 +26,16 @@ const (
 //	    MyField string `env:"MY_FIELD"`
 //	}
 type Config struct {
-	Service ServiceConfig `envPrefix:""`
-	DB      db.Config     `envPrefix:"DB_"`
-	Auth    AuthConfig    `envPrefix:"AUTH_"`
-	NATS    NATSConfig    `envPrefix:"NATS_"`
-	NATSMap NATSMapConfig `envPrefix:"NATSMAP_"`
-	HTTPC   httpc.Config  `envPrefix:"HTTPC_"`
-	APIMap  APIMapConfig  `envPrefix:"APIMAP_"`
-	Routes  RoutesConfig  `envPrefix:"ROUTES_"`
-	Redis   RedisConfig   `envPrefix:"REDIS_"`
+	Service ServiceConfig   `envPrefix:""`
+	DB      db.Config       `envPrefix:"DB_"`
+	Auth    AuthConfig      `envPrefix:"AUTH_"`
+	NATS    NATSConfig      `envPrefix:"NATS_"`
+	NATSMap NATSMapConfig   `envPrefix:"NATSMAP_"`
+	HTTPC   httpc.Config    `envPrefix:"HTTPC_"`
+	APIMap  APIMapConfig    `envPrefix:"APIMAP_"`
+	Routes  RoutesConfig    `envPrefix:"ROUTES_"`
+	Redis   RedisConfig     `envPrefix:"REDIS_"`
+	S3      s3client.Config `envPrefix:"S3_"`
 }
 
 // ServiceConfig — server + logging knobs.
