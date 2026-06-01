@@ -1,4 +1,9 @@
-package links
+// Package counter is the batched NATS-subscriber side of urlshort.
+// It owns the visit_count + last_visited_at columns on the links
+// table; nothing else writes them. Receives batches via natsmap's
+// pull subscriber (configs/subscribers.yaml → link_visit_counter)
+// and runs one aggregated UPDATE per batch.
+package counter
 
 import (
 	"context"
@@ -11,7 +16,7 @@ import (
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/db/sqb"
 
-	"github.com/theizzatbek/gokit/examples/urlshort/internal/events"
+	"github.com/theizzatbek/gokit/examples/urlshort/shared/events"
 )
 
 // VisitCounter is the batched NATS subscriber that persists visit
@@ -32,7 +37,7 @@ import (
 //
 // All-or-nothing: the DB UPDATE and the per-message ack live on the
 // same "did the batch succeed?" boolean. No partial commits.
-type VisitCounter struct {
+type Counter struct {
 	db  *db.DB
 	log *slog.Logger
 }
@@ -42,17 +47,17 @@ type visitAgg struct {
 	lastTS time.Time
 }
 
-// NewVisitCounter wires the persistence side. The subscription
-// lifecycle is owned by natsmap — Drain it via natsmap.Runtime.Drain
+// New wires the persistence side. The subscription lifecycle is
+// owned by natsmap — Drain it via natsmap.Runtime.Drain
 // (service.Close already does this before the DB pool tears down).
-func NewVisitCounter(d *db.DB, log *slog.Logger) *VisitCounter {
-	return &VisitCounter{db: d, log: log}
+func New(d *db.DB, log *slog.Logger) *Counter {
+	return &Counter{db: d, log: log}
 }
 
 // Handle receives one batch from natsmap's pull subscriber. Returns
 // nil on success (natsmap Acks all) or err on failure (natsmap Naks
 // all → redelivery).
-func (vc *VisitCounter) Handle(ctx context.Context, batch []natsclient.Msg[events.LinkVisited]) error {
+func (vc *Counter) Handle(ctx context.Context, batch []natsclient.Msg[events.LinkVisited]) error {
 	if len(batch) == 0 {
 		return nil
 	}

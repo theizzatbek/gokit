@@ -1,0 +1,11 @@
+streams: auto
+
+# The publisher owns the NATS-facing publish surface. Both subjects
+# the urlshort-api would have published directly are routed through
+# here — outbox-drained (urlshort.link.created) and HTTP-gateway'd
+# (urlshort.link.visited).
+publishers:
+  - name: urlshort.link.created
+    subject: urlshort.link.created
+  - name: urlshort.link.visited
+    subject: urlshort.link.visited

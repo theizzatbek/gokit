@@ -15,7 +15,7 @@ import (
 	"github.com/theizzatbek/gokit/db/sqb"
 	xerrs "github.com/theizzatbek/gokit/errs"
 
-	"github.com/theizzatbek/gokit/examples/urlshort/internal/events"
+	"github.com/theizzatbek/gokit/examples/urlshort/shared/events"
 )
 
 // CachedLink is the trimmed-down projection stored in Redis under
@@ -29,20 +29,29 @@ type CachedLink struct {
 	OriginalURL string `json:"original_url"`
 }
 
-// EnrichFn is the metadata fetcher injected by main.go. The service
-// does not depend on the enrich package directly to keep the dep tree
-// flat (handlers wire enrich.FetchMetadata in here).
-type EnrichFn func(ctx context.Context, url string) (title, description, imageURL string)
-
-type Service struct {
-	db     *db.DB
-	enrich EnrichFn
-	pub    *events.Publisher
-	cache  *cache.Redis[CachedLink] // nil = no cache (graceful pass-through)
+// VisitPublisher emits one LinkVisited event per successful redirect.
+// Service depends on the interface (not the publisher transport
+// directly) so the example stays unit-testable: tests pass a no-op,
+// main.go wires the HTTP-backed urlshort-publisher gateway client.
+//
+// Enrichment (title / description / image_url) is OUT of scope for
+// the api — it happens asynchronously in urlshort-enricher after the
+// LinkCreated outbox event is published. The api always inserts the
+// row with empty metadata; the enricher UPDATEs once Microlink
+// returns. Stale rows (enricher down) keep working — only the
+// metadata is missing, the redirect still resolves.
+type VisitPublisher interface {
+	LinkVisited(ctx context.Context, e events.LinkVisited)
 }
 
-func NewService(d *db.DB, enrich EnrichFn, pub *events.Publisher, c *cache.Redis[CachedLink]) *Service {
-	return &Service{db: d, enrich: enrich, pub: pub, cache: c}
+type Service struct {
+	db    *db.DB
+	pub   VisitPublisher
+	cache *cache.Redis[CachedLink] // nil = no cache (graceful pass-through)
+}
+
+func NewService(d *db.DB, pub VisitPublisher, c *cache.Redis[CachedLink]) *Service {
+	return &Service{db: d, pub: pub, cache: c}
 }
 
 // linkColumns is the canonical column order for every SELECT/RETURNING
@@ -67,7 +76,8 @@ func scanLink(row pgx.Row, l *Link) error {
 // The INSERT + outbox.Enqueue run inside ONE db.Tx so the event is
 // persisted atomically with the link row — no crash window between
 // commit and publish. The kit-managed outbox.Worker drains the
-// outbox table asynchronously and publishes through natsmap.
+// outbox table asynchronously and publishes through natsmap (the
+// worker lives in urlshort-publisher, not here).
 //
 // Idempotent on (user_id, original_url): the second time a user posts
 // the same URL, this returns the existing link without inserting a
@@ -88,8 +98,6 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 		return l, nil
 	}
 
-	title, desc, img := s.enrich(ctx, originalURL)
-
 	for i := 0; i < codeRetryBudget; i++ {
 		code, err := generateCode()
 		if err != nil {
@@ -99,10 +107,15 @@ func (s *Service) Create(ctx context.Context, userID, originalURL string) (Link,
 
 		var inserted Link
 		txErr := s.db.Tx(ctx, func(tx *db.Tx) error {
+			// title/description/image_url stay empty here — the
+			// enricher service backfills them out-of-band after
+			// consuming LinkCreated. Lets the redirect endpoint
+			// work the instant the row is committed even if the
+			// enricher is paused.
 			l, qerr := sqb.QueryOne[Link](ctx, tx, sqb.Builder.
 				Insert("links").
-				Columns("user_id", "code", "original_url", "title", "description", "image_url").
-				Values(userID, code, originalURL, title, desc, img).
+				Columns("user_id", "code", "original_url").
+				Values(userID, code, originalURL).
 				Suffix(linkReturning), scanLink)
 			if qerr != nil {
 				return qerr

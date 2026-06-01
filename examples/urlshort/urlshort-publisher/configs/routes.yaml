@@ -1,0 +1,15 @@
+openapi:
+  info:
+    title: urlshort-publisher
+    version: 0.1.0
+    description: HTTP→NATS gateway for the urlshort sample.
+
+groups:
+  - prefix: /
+    routes:
+      - method: POST
+        path: /publish
+        handler: gateway.publish
+        name: publish
+        tags: [gateway]
+        summary: Republish a JSON payload onto the named NATS subject

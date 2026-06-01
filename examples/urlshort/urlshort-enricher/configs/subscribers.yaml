@@ -1,0 +1,9 @@
+streams: auto
+
+# natsmap auto-derives durable + queue_group from `name` (see
+# resolveDurableQueueGroup in clients/natsmap/engine.go). queue_group
+# fans out across enricher replicas so horizontal scaling does not
+# double-fetch.
+subscribers:
+  - name: link_enricher
+    subject: urlshort.link.created
