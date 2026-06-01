@@ -20,4 +20,9 @@ const (
 	// (unknown publisher, NATS transport blip, etc.). The
 	// underlying error wraps in Cause.
 	CodePublishFailed = "natsgw_publish_failed"
+
+	// CodeValidationFailed — a [Validator] rejected the inbound
+	// payload. The wrapped error carries the validator's reason so
+	// the caller sees WHY (missing field, wrong shape, etc.).
+	CodeValidationFailed = "natsgw_validation_failed"
 )

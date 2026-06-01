@@ -61,6 +61,68 @@ svc, _ := service.New[App, Claims](ctx, cfg,
 | `WithHeaderForwarder(headers...)` | Forward named HTTP-headers в NATS message-headers. |
 | `WithMaxBodySize(n)` | Cap inbound-payload. `0` отключает (но Fiber-level BodyLimit всё ещё работает). |
 | `WithStatusOK(code)` | Override success-status. 200 для HTTP-semantics, 204 для fire-and-forget. |
+| `WithValidator(fn)` | Global validator — runs на каждый publish после allowlist + body-cap, до NATS publish. Stack multiple — first non-nil error wins. |
+| `WithSubjectValidator(subject, fn)` | Per-subject validator. Skipped когда inbound subject не match'ит. Stack для multi-subject contracts. |
+
+## Validators
+
+Validator runs **AFTER** subject-allowlist + body-cap, **BEFORE** NATS-publish — cheap rejection paths first, expensive JSON-decode только если payload не отброшен раньше.
+
+```go
+type Validator func(ctx context.Context, subject string, body []byte) error
+```
+
+Non-nil error → request rejected с 400 + `natsgw_validation_failed`. Validator может вернуть собственный `*errs.Error` (любой Code) — kit preserves его без re-wrap'а; plain `error` wrap'ятся kit'ом.
+
+### Helper'ы
+
+| Helper | Заметки |
+|---|---|
+| `natsgw.ValidJSON()` | Cheap "is well-formed JSON"-check через `json.Valid`. Use для coarse-pre-check'а ("don't admit malformed JSON onto the bus"). |
+| `natsgw.UnmarshalAs[T]()` | Typed per-subject validator: JSON-decodes body into zero-value `T`, decode-failure → rejection. Pairs с `WithSubjectValidator` для типизированного контракта. |
+
+### Пример: typed per-subject validation
+
+```go
+import (
+    "github.com/theizzatbek/gokit/clients/natsmap/natsgw"
+    "yourapp/events"
+)
+
+natsgw.Handler(rt,
+    natsgw.WithSubjectAllowlist(
+        "urlshort.link.created",
+        "urlshort.link.visited",
+    ),
+    natsgw.WithSubjectValidator("urlshort.link.created",
+        natsgw.UnmarshalAs[events.LinkCreated]()),
+    natsgw.WithSubjectValidator("urlshort.link.visited",
+        natsgw.UnmarshalAs[events.LinkVisited]()),
+)
+```
+
+Каждый payload checked'ится по correct shape'у *до* того, как hit'нет NATS — subscribers вниз по pipeline никогда не видят undecodable rows. Defense-in-depth: малicious / buggy producer не может flood'ить bus malformed-event'ами.
+
+### Пример: custom-validator с domain-rule'ами
+
+```go
+natsgw.WithSubjectValidator("orders.placed",
+    func(ctx context.Context, _ string, body []byte) error {
+        var o Order
+        if err := json.Unmarshal(body, &o); err != nil {
+            return err
+        }
+        if o.AmountUSD < 0 {
+            return xerrs.Validation("orders_negative_amount",
+                "amount must be non-negative")
+        }
+        if o.Currency != "USD" && o.Currency != "EUR" {
+            return xerrs.Validationf("orders_unsupported_currency",
+                "currency %q not supported", o.Currency)
+        }
+        return nil
+    })
+```
 
 ## Error-mapping
 
@@ -69,6 +131,7 @@ svc, _ := service.New[App, Claims](ctx, cfg,
 | Empty subject (extractor returned "") | 400 `natsgw_invalid_subject` |
 | Subject не в allowlist'е | 400 `natsgw_subject_not_allowed` |
 | Body > `WithMaxBodySize` | 400 `natsgw_payload_too_large` |
+| Validator rejected | 400 `natsgw_validation_failed` (или validator's own Code, если он вернул `*errs.Error`) |
 | Unknown publisher (subject not in publishers.yaml) | 404 `natsgw_publish_failed` (wraps `natsmap_unknown_publisher`) |
 | NATS transport-blip | 503 `natsgw_publish_failed` |
 

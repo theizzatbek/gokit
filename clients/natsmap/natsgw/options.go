@@ -13,6 +13,14 @@ type config struct {
 	forwardHeaders []string
 	maxBodyBytes   int
 	statusOK       int
+	validators     []scopedValidator
+}
+
+// scopedValidator pairs a Validator with an optional subject scope.
+// Empty subject means "applies to every request".
+type scopedValidator struct {
+	subject string // "" = global
+	fn      Validator
 }
 
 // WithSubjectExtractor overrides the default path-param-based

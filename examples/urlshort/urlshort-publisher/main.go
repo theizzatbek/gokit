@@ -84,11 +84,20 @@ func run() error {
 		// Kit-managed HTTP→NATS gateway. Allowlist the two urlshort
 		// subjects so the public POST /publish surface can't be used
 		// to broadcast on arbitrary internal-bus subjects.
+		//
+		// Each subject also gets a typed validator: the gateway
+		// rejects malformed payloads at the HTTP edge with a 400 +
+		// natsgw_validation_failed Code so subscribers downstream
+		// never see undecodable rows.
 		service.WithNATSMapGateway("/publish",
 			natsgw.WithSubjectAllowlist(
 				events.SubjectLinkCreated,
 				events.SubjectLinkVisited,
 			),
+			natsgw.WithSubjectValidator(events.SubjectLinkCreated,
+				natsgw.UnmarshalAs[events.LinkCreated]()),
+			natsgw.WithSubjectValidator(events.SubjectLinkVisited,
+				natsgw.UnmarshalAs[events.LinkVisited]()),
 		),
 		// Outbox-worker lives HERE — urlshort-api just INSERTs into
 		// the outbox table inside its db.Tx, and this worker drains.

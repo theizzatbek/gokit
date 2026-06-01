@@ -52,6 +52,27 @@ func Handler(rt *natsmap.Runtime, opts ...Option) fiber.Handler {
 				"natsgw: body %d bytes exceeds limit %d",
 				len(body), cfg.maxBodyBytes)
 		}
+		// Validators run after the cheap rejection paths (allowlist
+		// + body cap) so a malformed flood doesn't pay for the
+		// expensive JSON decode before being kicked. Per-subject
+		// validators short-circuit on subject mismatch; subject ==
+		// "" entries are global.
+		ctx := c.UserContext()
+		for _, v := range cfg.validators {
+			if v.subject != "" && v.subject != subject {
+				continue
+			}
+			if err := v.fn(ctx, subject, body); err != nil {
+				// *errs.Error from the validator passes through
+				// unchanged so its Code wins; plain errors get
+				// wrapped with CodeValidationFailed.
+				if _, ok := err.(*xerrs.Error); ok {
+					return err
+				}
+				return xerrs.Wrap(err, xerrs.KindValidation, CodeValidationFailed,
+					"natsgw: validation failed")
+			}
+		}
 		var hdrs map[string][]string
 		if len(cfg.forwardHeaders) > 0 {
 			hdrs = make(map[string][]string, len(cfg.forwardHeaders))
