@@ -81,7 +81,7 @@ Shared:
 
 | Method + Path | Описание |
 |---|---|
-| `POST /publish` | `{subject, payload, headers?}` JSON → `natsmap.PublishRaw(subject, payload)`. Returns 202 on accept. |
+| `POST /publish/:subject` | Raw body forwarded на NATS-subject из path-param'а. Backed by kit's [`natsmap/natsgw`](../../clients/natsmap/natsgw/README.md). Returns 202 Accepted. Allowlist'нут на `urlshort.link.{created,visited}`. |
 | `GET /healthz`, `/readyz`, `/metrics`, `/preflight` | ops endpoints |
 
 ## Как запустить
@@ -131,12 +131,9 @@ curl -I localhost:3000/Ab1cD
 #           counter batches → UPDATE visit_count.
 
 # Direct gateway call — useful for replay / debugging
-curl -X POST localhost:3001/publish \
+curl -X POST localhost:3001/publish/urlshort.link.visited \
   -H 'content-type: application/json' \
-  -d '{
-    "subject": "urlshort.link.visited",
-    "payload": {"code":"Ab1cD","visited_at":"2026-06-01T12:00:00Z","ip":"1.2.3.4"}
-  }'
+  -d '{"code":"Ab1cD","visited_at":"2026-06-01T12:00:00Z","ip":"1.2.3.4"}'
 # 202 Accepted — bypasses api entirely, useful when replaying
 # captured analytics into the NATS bus.
 ```

@@ -2,11 +2,12 @@
 // publish.
 //
 // urlshort-api does NOT talk to NATS directly. LinkVisited is sent
-// as JSON to urlshort-publisher's POST /publish endpoint, which
-// republishes onto the matching NATS subject. The latency cost is
-// one in-cluster HTTP RTT (~1-5ms); the win is that the api binary
-// has no natsmap import surface — easier to deploy into network
-// zones without NATS reachability.
+// as a raw JSON body to urlshort-publisher's POST /publish/:subject
+// endpoint (the kit's natsmap/natsgw primitive), which republishes
+// onto the matching NATS subject. The latency cost is one
+// in-cluster HTTP RTT (~1-5ms); the win is that the api binary has
+// no natsmap import surface — easier to deploy into network zones
+// without NATS reachability.
 //
 // LinkCreated goes through the transactional outbox (writes inside
 // the same db.Tx as the link insert) so it does NOT live here. See
@@ -23,19 +24,12 @@ import (
 	"github.com/theizzatbek/gokit/examples/urlshort/shared/events"
 )
 
-// gatewayRequest mirrors urlshort-publisher's gateway.Request.
-// Kept private so callers see only the typed LinkVisited façade.
-type gatewayRequest struct {
-	Subject string          `json:"subject"`
-	Payload json.RawMessage `json:"payload"`
-}
-
-// Visit calls urlshort-publisher's POST /publish endpoint for
-// LinkVisited events. Best-effort: HTTP failures (publisher down,
-// 5xx, timeout) are logged at Warn and swallowed so the redirect
-// hot path is never blocked.
+// Visit calls urlshort-publisher's POST /publish/:subject endpoint
+// for LinkVisited events. Best-effort: HTTP failures (publisher
+// down, 5xx, timeout) are logged at Warn and swallowed so the
+// redirect hot path is never blocked.
 //
-// PublisherURL is the publisher's base URL (e.g. http://publisher:3000).
+// PublisherURL is the publisher's base URL (e.g. http://publisher:3001).
 // Client is the HTTP client to use — wire a *http.Client built
 // through gokit/clients/httpc so retries + timeouts ride the kit's
 // transport chain.
@@ -66,22 +60,14 @@ func (p *Visit) LinkVisited(ctx context.Context, e events.LinkVisited) {
 	if p == nil || p.publisherURL == "" {
 		return
 	}
-	payload, err := json.Marshal(e)
+	body, err := json.Marshal(e)
 	if err != nil {
-		p.log.Warn("urlshort api: encode visit failed", "code", e.Code, "err", err.Error())
-		return
-	}
-	body, err := json.Marshal(gatewayRequest{
-		Subject: events.SubjectLinkVisited,
-		Payload: payload,
-	})
-	if err != nil {
-		p.log.Warn("urlshort api: encode gateway req failed",
+		p.log.Warn("urlshort api: encode visit failed",
 			"code", e.Code, "err", err.Error())
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		p.publisherURL+"/publish", bytes.NewReader(body))
+	url := p.publisherURL + "/publish/" + events.SubjectLinkVisited
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		p.log.Warn("urlshort api: build publish req failed",
 			"code", e.Code, "err", err.Error())
