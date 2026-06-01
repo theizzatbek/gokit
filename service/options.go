@@ -22,6 +22,7 @@ import (
 	"github.com/theizzatbek/gokit/db/outbox"
 	"github.com/theizzatbek/gokit/fibermap"
 	"github.com/theizzatbek/gokit/fibermap/bind"
+	"github.com/theizzatbek/gokit/fibermap/dev"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
 	"github.com/theizzatbek/gokit/otelkit"
 	"github.com/theizzatbek/gokit/sentrykit"
@@ -91,6 +92,12 @@ type options struct {
 	s3Opts                     []s3client.Option
 	rateLimitCfg               *ratelimit.Config
 	rateLimitOpts              []ratelimit.Option
+	preflightEnable            bool
+	preflightPath              string
+	preflightTimeout           time.Duration
+	devEnable                  bool
+	devPrefix                  string
+	devConfigOpts              []dev.ConfigOption
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -603,6 +610,35 @@ func WithRateLimit(cfg ratelimit.Config, opts ...ratelimit.Option) Option {
 		o.rateLimitCfg = &cfg
 		o.rateLimitOpts = append(o.rateLimitOpts, opts...)
 	}
+}
+
+// WithPreflightEndpoint mounts the `/preflight` HTTP endpoint that
+// renders [PreflightResult] as JSON (200 on success, 503 on any
+// failure). Used by `kit doctor` for ops smoke-tests and by CI
+// pipelines that need a "is staging actually ready" gate before
+// running integration tests.
+//
+// Path is configurable; pass "" to use the default "/preflight".
+//
+// Unlike `/readyz` (auto-mounted, K8s readiness probe), preflight
+// is opt-in — it's a debug / ops surface, not part of the request
+// path. Don't wire it as a K8s readinessProbe unless you've raised
+// the probe timeout to accommodate slower checks.
+func WithPreflightEndpoint(path string) Option {
+	return func(o *options) {
+		o.preflightEnable = true
+		o.preflightPath = path
+	}
+}
+
+// WithPreflightTimeout caps how long Preflight waits on the slowest
+// check. Default 10s — chosen to accommodate slower one-shot
+// validations (S3 HEAD across regions, schema-version SELECT).
+//
+// Tighten for fast services; raise when including legitimately slow
+// custom checkers via [WithReadinessChecker].
+func WithPreflightTimeout(d time.Duration) Option {
+	return func(o *options) { o.preflightTimeout = d }
 }
 
 // WithS3Options appends to the s3client options applied by

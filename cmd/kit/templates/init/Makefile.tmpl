@@ -1,0 +1,22 @@
+.PHONY: run build test tidy fmt vet
+
+run:
+	CONFIGS_DIR=configs go run .
+
+build:
+	go build -o bin/{{.Name}} .
+
+test:
+	go test -race -count=1 ./...
+
+tidy:
+	go mod tidy
+
+fmt:
+	gofmt -w .
+
+vet:
+	go vet ./...
+
+doctor:
+	go run github.com/theizzatbek/gokit/cmd/kit doctor --url http://localhost:8080
