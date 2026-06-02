@@ -79,6 +79,13 @@ clients:
     #   name: <signer-id>   # должен совпадать с регистрацией RegisterAuth
     # — или —
     #   type: none
+    breaker:                                # опционально; presence включает circuit breaker для апстрима
+      failure_threshold: <int>              # default 10
+      minimum_requests: <int>               # default 20; должно быть >= failure_threshold
+      window_duration: <duration>           # default 10s
+      window_size: <int>                    # default 10 (bucket'ов в окне)
+      open_interval: <duration>             # default 30s
+      half_open_max_probes: <int>           # default 1
     endpoints:
       - name: <string>                      # обязательно, уникально в client'е
         method: GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS
@@ -281,6 +288,52 @@ client, err := eng.Build(...)
 
 **Только per-client.** Каждый клиент выбирает свой signer; эндпоинты внутри одного клиента все шарят его signer. Если нужны разные signing-схемы для разных эндпоинтов одного API, разделите на отдельные клиенты.
 
+### Circuit breaker per client
+
+Опциональный `breaker:` блок включает [breaker](../../breaker/README.md)
+для всего апстрима — один `*breaker.Breaker` на `clients[].name`. Когда апстрим
+падает, breaker размыкается и каждый последующий вызов через любой endpoint
+этого клиента возвращается с `*errs.Error{Code: "apimap_<client>_circuit_open"}`
+без сетевого вызова, давая апстриму прийти в себя:
+
+```yaml
+clients:
+  - name: stripe
+    base_url: https://api.stripe.com
+    timeout: 10s
+    max_retries: 3
+    breaker:
+      failure_threshold: 10       # 10 failure'ов
+      minimum_requests: 20        #   в окне как минимум 20 запросов
+      window_duration: 10s
+      open_interval: 30s
+      half_open_max_probes: 1
+    endpoints:
+      - {name: create_charge, method: POST, path: /v1/charges, encode: json, decode: json}
+      - {name: get_charge,    method: GET,  path: /v1/charges/{id}, decode: json}
+```
+
+**Unit-of-failure = client, не endpoint.** Если у некоторых endpoint'ов есть
+`timeout`/`max_retries` overrides — они получают свой `*http.Client`, но
+шарят тот же breaker (потому что upstream падает целиком, а не per endpoint).
+Outage Stripe'а триггерит short-circuit и на `create_charge`, и на
+`get_charge`.
+
+**Error**: short-circuit'нутый вызов через `Decode`/`Exchange`/`Do` возвращает
+`*errs.Error{KindUnavailable, Code: "apimap_<client>_circuit_open"}` с
+`Cause = breaker.ErrOpen`. `errors.Is(err, breaker.ErrOpen)` работает после
+wrapping'а; `errs.HTTP(err)` даёт 503. Build-time валидация: невалидный YAML
+breaker-блок (например, `minimum_requests < failure_threshold`) роняет `Build`
+с `apimap_invalid_breaker`.
+
+**Observability**: breaker наследует engine-уровневые `WithLogger` и
+`WithMetrics` — `breaker_state{name=<client>}`, `breaker_transitions_total`,
+`breaker_short_circuits_total`, `breaker_requests_total` появляются рядом с
+`apimap_*` и `httpc_*` на одном scrape'е.
+
+Опущенный `breaker:` блок = breaker выключен (по умолчанию). Это opt-in
+feature — клиенты без блока ведут себя в точности как раньше.
+
 ### Типизированный Register* (опционально, runtime-checked)
 
 `RegisterRequest[T]` / `RegisterResponse[T]` опциональные, но, когда установлены, они bind'ят эндпоинт к специфическому Go-типу. `Decode[U]` / `Exchange[U,V]` потом проверяют, что generic'и вызова матчат регистрацию на runtime:
@@ -356,6 +409,8 @@ Type-mismatch'и возвращают `*errs.Error{Code: "apimap_unsupported_bod
 | `apimap_env_var_unset` / `apimap_env_var_malformed` | разрешение `${VAR}` зафейлилось |
 | `apimap_registered_endpoint_missing` | `Register*` назвал эндпоинт не в YAML |
 | `apimap_already_built` | `Build()` вызван дважды |
+| `apimap_invalid_breaker` | `breaker:` блок зафейлил `breaker.New` валидацию (например, `minimum_requests < failure_threshold`) |
+| `apimap_<client>_circuit_open` | Runtime: вызов через любой endpoint клиента short-circuit'нут открытым breaker'ом. Cause = `breaker.ErrOpen`. |
 
 Runtime-коды из `Do`/`Decode`/`Exchange`: `apimap_unknown_endpoint`, `apimap_missing_path_var`, `apimap_unknown_path_var`, `apimap_encode_failed`, `apimap_decode_failed`, `apimap_unsupported_body_type`, `apimap_unsupported_decode_type`, плюс динамические per-endpoint status-коды выше.
 

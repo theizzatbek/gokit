@@ -48,6 +48,8 @@ resp, err := c.Get("https://api.example.com/users/42")
 | `WithLogger(*slog.Logger)` | silent | Debug на каждом retry-решении, Warn на исчерпании retry'ев |
 | `WithMetrics(prometheus.Registerer)` | нет коллекторов | Регистрирует requests_total / request_duration_seconds / retries_total / retries_exhausted_total |
 | `WithBaseTransport(http.RoundTripper)` | `http.DefaultTransport` | Override низа цепочки — кладите otel-instrumented или auth-injecting RoundTripper'ы под retry-логику |
+| `WithBreaker(*breaker.Breaker)` | nil (выключен) | Circuit breaker между retry и base. См. секцию ниже. |
+| `WithBreakerFailureClassifier(fn)` | 408/429/5xx + non-Canceled err | Override "что считается failure'ом" для breaker'а. No-op без `WithBreaker`. |
 
 ## Retry-семантика (hard-coded — no overrides)
 
@@ -109,6 +111,64 @@ s3 := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 })
 ```
 
+### Circuit breaker
+
+Когда апстрим падает по-настоящему (не флэкает), retry'и amplify'ят пожар:
+одна user-request × `MaxRetries+1` × `BackoffMax` секунд впустую. `WithBreaker`
+вставляет [`breaker`](../../breaker/README.md)-слой *под* retry — каждая попытка
+консультируется с ним отдельно, и когда breaker открывается, retry-loop сразу
+бэйлит с `breaker.ErrOpen` (никакого backoff, никакого нового round-trip'а):
+
+```go
+import "github.com/theizzatbek/gokit/breaker"
+
+b, _ := breaker.New(breaker.Config{
+    Name:              "stripe",
+    FailureThreshold:  10,
+    MinimumRequests:   20,
+    WindowDuration:    10 * time.Second,
+    OpenInterval:      30 * time.Second,
+    HalfOpenMaxProbes: 1,
+})
+
+c, _ := httpc.New(httpc.Config{Timeout: 10*time.Second, MaxRetries: 3},
+    httpc.WithBreaker(b),
+)
+
+resp, err := c.Get("https://api.stripe.com/...")
+if errors.Is(err, breaker.ErrOpen) {
+    // 503-like short-circuit: stripe сейчас считается down,
+    // запрос не был отправлен в сеть.
+}
+```
+
+**Failure классификация** (что инкрементит breaker'у failure-счётчик):
+
+- Дефолт: response с status `{408, 429, 500, 502, 503, 504}` — failure; ошибка от
+  base.RoundTrip — failure, **кроме** `context.Canceled` (browser close ≠
+  upstream down). `context.DeadlineExceeded` ЕСТЬ failure (это и есть симптом
+  медленного апстрима).
+- 4xx (404/401/...) НЕ считаются failure'ами — это ошибки клиента, не апстрима.
+- Override через `WithBreakerFailureClassifier(func(*http.Response, error) bool)`
+  для апстримов с "200 + body `{error: ...}`" семантикой.
+
+**Surface ошибки**: short-circuit'нутый запрос возвращает
+`*errs.Error{KindUnavailable, Code: "httpc_circuit_open"}` с `Cause =
+breaker.ErrOpen`. Так `errors.Is(err, breaker.ErrOpen)` работает, и
+`errs.HTTP(err)` даёт честный 503.
+
+**Шарить один breaker между двумя клиентами** (например, один upstream с
+разными httpc-конфигами per endpoint — это паттерн apimap'а):
+
+```go
+b, _ := breaker.New(cfg)
+fastClient, _ := httpc.New(httpc.Config{Timeout: 1*time.Second}, httpc.WithBreaker(b))
+slowClient, _ := httpc.New(httpc.Config{Timeout: 30*time.Second}, httpc.WithBreaker(b))
+// Один failure-счётчик на оба клиента — unit-of-failure = upstream.
+```
+
+См. [`breaker`](../../breaker/README.md) для конфига, состояний и observability.
+
 ## Error-модель
 
 `*errs.Error` только на валидации конфигурации в `New`/`NewTransport`:
@@ -118,6 +178,7 @@ s3 := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 | `httpc_invalid_timeout` | `Timeout < 0` |
 | `httpc_invalid_max_retries` | `MaxRetries < -1` |
 | `httpc_invalid_backoff` | `BackoffBase` / `BackoffMax` невалидны или `BackoffMax < BackoffBase` |
+| `httpc_circuit_open` | Запрос short-circuit'нут открытым breaker'ом из `WithBreaker`. Cause = `breaker.ErrOpen`; `errs.HTTP` → 503 Unavailable. |
 
 Runtime-ошибки — stdlib (`*url.Error`, `net.Error` и т.д.) — это и есть *смысл* возврата `*http.Client`. Если ваш handler хочет конвертировать "retry exhausted on 503" в domain-ошибку, оборачивайте руками:
 
@@ -191,7 +252,6 @@ func TestRetryOn503(t *testing.T) {
 
 - **Retry-политика hard-coded.** Только идемпотентные, фиксированный набор статусов. Никакого `WithRetryClassifier` пока нет — приедет как additive-feature, если понадобится.
 - **Нет JSON-хелперов.** Декодируйте в своём handler'е (`json.NewDecoder(resp.Body).Decode(&out)`). Пакет остаётся transport'ом.
-- **Нет circuit breaker'а.** Используйте отдельную библиотеку или оборачивайте свой RoundTripper.
 - **Per-host concurrency cap'ы живут на `http.Transport`.** Конфигурируйте через `WithBaseTransport(custom)`, если нужны.
 - **Body-buffering для streaming-body без `GetBody` — задача caller'а.** httpc не будет молча потреблять + буферить произвольные upload-стримы.
 
