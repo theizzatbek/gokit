@@ -171,13 +171,82 @@ err := d.Tx(ctx, func(tx *db.Tx) error {
 
 Вложенные вызовы `Tx` открывают savepoint вместо новой транзакции — компонуется из уже-транзакционного кода.
 
+### Auto-retry на conflict (`TxRetry`)
+
+Постгрес-ошибки `40001` (serialization failure) и `40P01` (deadlock detected) — это **retry-safe**: postgres гарантирует, что то же изменение можно безопасно применить повторно. `TxRetry` оборачивает `Tx` циклом auto-retry с exp-backoff + ±25% jitter:
+
+```go
+err := d.TxRetry(ctx, func(tx *db.Tx) error {
+    // fn ДОЛЖНА быть идемпотентной — может запускаться повторно.
+    if _, err := tx.Exec(ctx, `UPDATE accounts SET balance = balance - $1 WHERE id = $2`, amt, from); err != nil {
+        return err
+    }
+    _, err := tx.Exec(ctx, `UPDATE accounts SET balance = balance + $1 WHERE id = $2`, amt, to)
+    return err
+},
+    db.WithTxRetryMaxAttempts(5),                                      // default 3
+    db.WithTxRetryBackoff(5*time.Millisecond, 100*time.Millisecond),   // base / cap
+    db.WithTxRetryOpts(db.TxOpts{IsoLevel: db.Serializable}),          // SERIALIZABLE + retry — каноничный паттерн
+)
+```
+
+Каждая retry-попытка инкрементирует counter `db_tx_retries_total` (первая не считается). Non-retryable ошибки всплывают на первой же попытке.
+
+### Изоляция / read-only / deferrable (`TxWithOpts`)
+
+```go
+err := d.TxWithOpts(ctx, db.TxOpts{
+    IsoLevel:       db.Serializable,
+    AccessMode:     db.ReadOnly,
+    DeferrableMode: db.Deferrable, // эффективно только при Serializable + ReadOnly
+}, func(tx *db.Tx) error {
+    // long-running analytic report
+    return nil
+})
+```
+
+`TxOpts{}` (нулевое значение) == текущий `Tx` (READ COMMITTED, read-write).
+
+### Bulk insert через COPY (`CopyFrom`)
+
+```go
+n, err := d.CopyFrom(ctx,
+    pgx.Identifier{"events"},
+    []string{"id", "type", "payload"},
+    pgx.CopyFromRows(batch),
+)
+```
+
+Тонкая обёртка над `pgxpool.CopyFrom`, ошибки прогоняются через тот же `mapPgxErr`. `*Tx.CopyFrom` делает то же самое внутри транзакции (атомарно с окружающими `Exec`'ами).
+
+### Защита от runaway-запросов (`WithDefaultStatementTimeout`, `WithConnInit`)
+
+`statement_timeout` ставится на **сервере**, поэтому убивает зависший запрос даже когда caller-context уже отвалился:
+
+```go
+d, err := db.Connect(ctx, cfg,
+    db.WithDefaultStatementTimeout(30*time.Second),
+    db.WithConnInit(func(ctx context.Context, conn *pgx.Conn) error {
+        _, err := conn.Exec(ctx, `SET search_path TO app, public`)
+        return err
+    }),
+)
+```
+
+`WithConnInit` — общий hook, вызывается один раз на свежее pgx-соединение **до** того, как оно попадает в пул. Несколько `WithConnInit` накапливаются по порядку регистрации. Используйте для `SET application_name`, `SET search_path`, prewarming prepared-statement кэша или `SET ROLE` для tenant-изоляции.
+
 ### Healthcheck (для `/healthz`)
 
 ```go
-if err := d.Healthcheck(ctx); err != nil {
+if err := d.Healthcheck(ctx); err != nil {            // primary pool only
     return errs.Unavailable("db_down", "postgres unhealthy")
 }
+if err := d.HealthcheckRead(ctx); err != nil {        // standby pool (no-op when not configured)
+    // logger.Warn("read replica unhealthy", "err", err) — НЕ фейлим /readyz
+}
 ```
+
+Split-API на цели: `/readyz` зависит от primary (без него writes невозможны), `HealthcheckRead` — диагностический сигнал. `ReadQuery` прозрачно fallback'ится на primary, когда replica не сконфигурирован, но НЕ ловит "half-dead" standby с зависающими соединениями — отдельный пинг это покрывает.
 
 ### Escape hatch — raw pgx pool
 

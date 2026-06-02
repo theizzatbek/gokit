@@ -31,6 +31,7 @@ type metricsCollector struct {
 	txTotal   *prometheus.CounterVec   // kind=tx|savepoint, outcome=commit|rollback|panic
 	txLatency *prometheus.HistogramVec // kind, outcome
 	slowQuery prometheus.Counter
+	txRetries prometheus.Counter
 }
 
 func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
@@ -58,6 +59,10 @@ func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
 			Name: "db_slow_query_total",
 			Help: "Number of queries whose execution exceeded the configured slow-query threshold (WithSlowQueryThreshold). Errored queries do NOT count here — they show up in db_query_duration_seconds{outcome=error} instead.",
 		}),
+		txRetries: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "db_tx_retries_total",
+			Help: "Number of TxRetry retry attempts (the first attempt is not counted). Terminal outcomes still flow through db_tx_total{kind=tx,outcome=…}; this counter measures contention pressure.",
+		}),
 	}
 	reg.MustRegister(mc)
 	return mc
@@ -70,6 +75,7 @@ func (m *metricsCollector) Describe(ch chan<- *prometheus.Desc) {
 	m.txTotal.Describe(ch)
 	m.txLatency.Describe(ch)
 	m.slowQuery.Describe(ch)
+	m.txRetries.Describe(ch)
 }
 
 // Collect implements prometheus.Collector. Refreshes pool gauges from the
@@ -81,6 +87,7 @@ func (m *metricsCollector) Collect(ch chan<- prometheus.Metric) {
 	m.txTotal.Collect(ch)
 	m.txLatency.Collect(ch)
 	m.slowQuery.Collect(ch)
+	m.txRetries.Collect(ch)
 }
 
 func (m *metricsCollector) attach(name string, p *pgxpool.Pool) {
@@ -115,6 +122,15 @@ func (m *metricsCollector) incSlowQuery() {
 		return
 	}
 	m.slowQuery.Inc()
+}
+
+// incTxRetry records one TxRetry retry attempt. The first attempt of a
+// TxRetry call is NOT counted; only retries after the initial failure.
+func (m *metricsCollector) incTxRetry() {
+	if m == nil {
+		return
+	}
+	m.txRetries.Inc()
 }
 
 func (m *metricsCollector) setPoolStat(name string, s poolStat) {

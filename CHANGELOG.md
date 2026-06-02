@@ -9,6 +9,38 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `db/` — five production-oriented helpers around the existing pgx wrapper.
+  - `db.(*DB).TxRetry(ctx, fn, opts...)` — auto-retry on SQLSTATE
+    `40001` (serialization failure) and `40P01` (deadlock detected)
+    with exponential backoff + ±25% jitter. Defaults:
+    `MaxAttempts=3`, `BaseBackoff=5ms`, `MaxBackoff=100ms`. Options:
+    `WithTxRetryMaxAttempts`, `WithTxRetryBackoff`,
+    `WithTxRetryClassifier`, `WithTxRetryOpts(TxOpts)`. Helper
+    `db.IsRetryableTxConflict(err)` walks the error chain via
+    `errors.As` so wrapped `*errs.Error` still classifies. New
+    counter `db_tx_retries_total` increments once per retry attempt
+    (terminal outcomes stay in `db_tx_total{kind=tx,outcome=…}`).
+  - `db.(*DB).TxWithOpts(ctx, TxOpts, fn)` + kit-stable `IsoLevel` /
+    `TxAccessMode` / `TxDeferrableMode` constants. `Tx` becomes a
+    thin shortcut for `TxOpts{}`. Pair `TxOpts{IsoLevel:
+    Serializable}` with `TxRetry` for the canonical strict-isolation
+    pattern.
+  - `db.WithDefaultStatementTimeout(d)` — sets server-side
+    `statement_timeout` via an `AfterConnect` hook so a runaway
+    query is killed on the server even when the caller's
+    `context.WithTimeout` only kills the local goroutine.
+  - `db.WithConnInit(fn ConnInitFn)` — generic per-connection hook
+    chained after the statement-timeout setter. Multiple calls
+    accumulate in registration order; used for `SET
+    application_name`, `SET search_path`, `SET ROLE`, or
+    prepared-statement warming.
+  - `db.(*DB).HealthcheckRead(ctx)` — pings the read-replica pool
+    when `HasReadReplica=true`; returns nil when no standby
+    configured. Surfaces silent standby loss that `ReadQuery`'s
+    primary-fallback hides.
+  - `db.(*DB).CopyFrom` / `db.(*Tx).CopyFrom` — thin wrappers over
+    pgx's COPY protocol with the same `mapPgxErr` funnel as
+    `Query`/`Exec`.
 - `clients/webhooks/` — outbound + inbound HTTP webhooks subsystem.
   - Core: `Subscription` + `Delivery` types, `SubscriptionStore` /
     `DeliveryStore` interfaces, `Signer` (Stripe-style HMAC),

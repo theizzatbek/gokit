@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -11,11 +12,20 @@ import (
 // Option configures Connect.
 type Option func(*options)
 
+// ConnInitFn runs once per fresh pgx connection BEFORE the connection
+// joins the pool. Use to set session-level state (statement_timeout,
+// search_path, application_name, role) or to warm any prepared-stmt
+// caches the kit doesn't manage. A non-nil return causes pgx to
+// discard the connection and re-dial.
+type ConnInitFn func(ctx context.Context, conn *pgx.Conn) error
+
 type options struct {
-	logger        *slog.Logger
-	slowThreshold time.Duration
-	metrics       *metricsCollector
-	extraTracers  []pgx.QueryTracer
+	logger           *slog.Logger
+	slowThreshold    time.Duration
+	metrics          *metricsCollector
+	extraTracers     []pgx.QueryTracer
+	statementTimeout time.Duration
+	connInit         []ConnInitFn
 }
 
 // WithLogger wires a slog.Logger into the pgx QueryTracer. Without this
@@ -60,6 +70,42 @@ func WithSlowQueryThreshold(d time.Duration) Option {
 // Without this option, no collectors are created (zero Prometheus footprint).
 func WithMetrics(reg prometheus.Registerer) Option {
 	return func(o *options) { o.metrics = newMetricsCollector(reg) }
+}
+
+// WithDefaultStatementTimeout sets the server-side `statement_timeout`
+// (in milliseconds) for every connection the pool opens. Applied via
+// an AfterConnect hook with a single `SET statement_timeout = <ms>`.
+// 0 = no timeout (Postgres default).
+//
+// Use as a defence-in-depth against runaway queries: a single bad
+// query can otherwise hold a pool connection indefinitely, and the
+// caller's context.WithTimeout only kills the local goroutine — the
+// server keeps churning until the query completes. statement_timeout
+// kills the query on the server too.
+//
+// Per-query overrides via context.WithTimeout still take precedence
+// (pgx's CancelRequest path fires before statement_timeout in
+// practice). Override per-statement with `SET LOCAL statement_timeout`
+// inside a Tx.
+func WithDefaultStatementTimeout(d time.Duration) Option {
+	return func(o *options) { o.statementTimeout = d }
+}
+
+// WithConnInit registers a hook called once per fresh pgx connection
+// BEFORE the connection joins the pool. Multiple WithConnInit calls
+// accumulate in registration order; the kit-internal statement_timeout
+// hook (when WithDefaultStatementTimeout is set) runs first.
+//
+// Typical uses: `SET application_name = '…/replica1'`, `SET search_path
+// = app, public`, warming a prepared-statement cache, switching role
+// via SET ROLE for tenant isolation. A non-nil return causes pgx to
+// discard the connection and re-dial.
+func WithConnInit(fn ConnInitFn) Option {
+	return func(o *options) {
+		if fn != nil {
+			o.connInit = append(o.connInit, fn)
+		}
+	}
 }
 
 // WithTracer attaches an external pgx.QueryTracer that runs alongside
