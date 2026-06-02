@@ -3,6 +3,7 @@ package httpc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"math"
@@ -11,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/theizzatbek/gokit/breaker"
 )
 
 // retryTransport is the kit's retry-on-transient-failure RoundTripper.
@@ -185,6 +188,13 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp, err := t.base.RoundTrip(attemptReq)
 		if err != nil {
 			cancel()
+			// Circuit-open from the breakerTransport below us: do not
+			// retry, do not back off — the breaker has already
+			// classified the upstream as down and any retry would
+			// just burn the per-request budget pointlessly.
+			if errors.Is(err, breaker.ErrOpen) {
+				return nil, err
+			}
 			if attempt >= maxAttempts {
 				if t.logger != nil {
 					t.logger.WarnContext(req.Context(), "httpc retries exhausted",
