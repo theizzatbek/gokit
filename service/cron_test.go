@@ -97,3 +97,76 @@ func TestCron_DefaultSlug_FromJobName(t *testing.T) {
 		t.Errorf("slug = %q, want daily-rollup", got)
 	}
 }
+
+func TestCron_JobReceivesRunCtx_ObservesShutdown(t *testing.T) {
+	// A long-running job that blocks on ctx.Done(). After svc.Close()
+	// the runCancel chain must propagate into the job so it returns
+	// before the scheduler-stop timeout.
+	started := make(chan struct{}, 1)
+	canceled := make(chan struct{}, 1)
+
+	svc := newServiceForCronTest(t,
+		WithCronParser(cron.NewParser(cron.Second|cron.Minute|cron.Hour|cron.Dom|cron.Month|cron.Dow)),
+		WithCron("long", "* * * * * *", func(ctx context.Context) error {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			select {
+			case <-ctx.Done():
+				select {
+				case canceled <- struct{}{}:
+				default:
+				}
+				return ctx.Err()
+			case <-time.After(30 * time.Second):
+				return nil
+			}
+		}),
+	)
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("job never started within 3s")
+	}
+
+	svc.Close()
+
+	select {
+	case <-canceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("job ctx was not cancelled within 2s of Close — runCtx propagation broken")
+	}
+}
+
+func TestCron_RunCtx_NotDerivedFromBootCtx(t *testing.T) {
+	// runCtx must be background-derived. If it were derived from the
+	// boot ctx, callers cancelling boot post-construct would also
+	// terminate background workers — which is a footgun.
+	bootCtx, bootCancel := context.WithCancel(context.Background())
+	svc, err := New[map[string]any, any](bootCtx, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(svc.Close)
+
+	bootCancel()
+	if err := svc.runCtx.Err(); err != nil {
+		t.Errorf("runCtx cancelled when boot ctx was cancelled: %v", err)
+	}
+}
+
+func TestCron_RunCancel_FiresAtClose(t *testing.T) {
+	svc, err := New[map[string]any, any](context.Background(), Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.runCtx.Err(); err != nil {
+		t.Errorf("runCtx already cancelled before Close: %v", err)
+	}
+	svc.Close()
+	if err := svc.runCtx.Err(); err == nil {
+		t.Error("runCtx NOT cancelled after Close — shutdown propagation broken")
+	}
+}

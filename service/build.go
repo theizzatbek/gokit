@@ -62,6 +62,12 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		metrics: metrics,
 		opts:    o,
 	}
+	// Long-running, service-scoped ctx for background workers (cron
+	// jobs, refresh GC). Cancelled at the head of [Service.Close] so
+	// observably-ctx-aware jobs can return before the scheduler-stop
+	// timeout. Background-derived (not the boot ctx) because boot ctx
+	// is typically scoped to startup and not held by callers.
+	s.runCtx, s.runCancel = context.WithCancel(context.Background())
 	s.registerRuntimeCollectors()
 
 	// OTel must run BEFORE the build phase — it mutates
