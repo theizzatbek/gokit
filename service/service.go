@@ -87,6 +87,17 @@ type Service[T any, C any] struct {
 	// scheduler is non-nil iff WithCron jobs were registered.
 	scheduler *scheduler
 
+	// runCtx is the long-running, service-scoped context handed to
+	// background workers (cron jobs, periodic GC) so they can observe
+	// graceful shutdown via ctx.Done(). Derived from
+	// context.Background, NOT from the ctx passed to [New] — that one
+	// has scope only for boot. runCancel is invoked once at the head
+	// of [Service.Close], BEFORE OnShutdown callbacks fire, so a
+	// long-running job can return early before the scheduler-stop
+	// timeout kicks in.
+	runCtx    context.Context
+	runCancel context.CancelFunc
+
 	closed bool
 }
 

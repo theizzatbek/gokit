@@ -148,9 +148,24 @@ func (s *Service[T, C]) AddCron(name, schedule string, fn JobFn) error {
 	slug := s.cronSlug(name)
 	sched := s.scheduler
 	wrapped := func() {
+		// Skip the run when the service is already shutting down — the
+		// runCancel chain has been invoked but the scheduler hasn't
+		// fully stopped yet, so a tick can still fire.
+		if s.runCtx != nil {
+			if err := s.runCtx.Err(); err != nil {
+				return
+			}
+		}
 		sched.wg.Add(1)
 		defer sched.wg.Done()
-		ctx := context.Background()
+		// Hand the long-running, service-scoped ctx to the job so
+		// observably-aware fn implementations can return at shutdown
+		// via ctx.Done(). Falls back to Background only for tests that
+		// construct *Service literals without going through [New].
+		ctx := s.runCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		run := func(rctx context.Context) error { return fn(rctx) }
 		var err error
 		if useSentry {
@@ -202,13 +217,21 @@ func (s *Service[T, C]) buildCron(ctx context.Context) error {
 		}
 		slug := s.cronSlug(j.Name)
 		wrapped := func() {
-			if err := ctx.Err(); err != nil {
+			// Use the service-scoped runCtx so shutdown propagates
+			// into observably-aware fn implementations. The boot ctx
+			// from [New] is intentionally NOT held: it has scope only
+			// for boot and the caller may cancel it post-construct
+			// without intending to terminate background jobs.
+			jobCtx := s.runCtx
+			if jobCtx == nil {
+				jobCtx = context.Background()
+			}
+			if err := jobCtx.Err(); err != nil {
 				return
 			}
 			sched.wg.Add(1)
 			defer sched.wg.Done()
 
-			jobCtx := ctx
 			run := func(rctx context.Context) error { return jobFn(rctx) }
 			var err error
 			if useSentry {

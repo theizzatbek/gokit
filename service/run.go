@@ -206,6 +206,15 @@ func (s *Service[T, C]) Close() {
 	s.shutdownFns = nil
 	s.shutdownMu.Unlock()
 
+	// Cancel the long-running ctx BEFORE the OnShutdown chain runs so
+	// ctx-aware background workers (cron jobs, refresh GC) can exit
+	// their inner loop before the scheduler.Stop deadline. nil-guarded
+	// because tests construct *Service literals without going through
+	// [New].
+	if s.runCancel != nil {
+		s.runCancel()
+	}
+
 	for i := len(fns) - 1; i >= 0; i-- {
 		if err := fns[i](); err != nil && s.logger != nil {
 			s.logger.Error("service: OnShutdown handler failed", "index", i, "err", err)
