@@ -137,10 +137,12 @@ fairness критична, оберните `bulkhead` собственной FI
 
 | Метрика | Тип | Labels |
 |---|---|---|
-| `bulkhead_in_flight` | Gauge | `name` (snapshot len(sem) на scrape) |
-| `bulkhead_waiting` | Gauge | `name` (snapshot atomic counter) |
+| `bulkhead_in_flight` | Gauge | `name` (snapshot on scrape) |
+| `bulkhead_waiting` | Gauge | `name` (snapshot on scrape) |
+| `bulkhead_capacity` | Gauge | `name` (current MaxConcurrent — двигается при WithAdaptive) |
 | `bulkhead_acquires_total` | Counter | `name`, `outcome` (`ok` / `full` / `ctx_canceled` / `queue_timeout`) |
 | `bulkhead_wait_duration_seconds` | Histogram (DefBuckets) | `name`, `outcome` |
+| `bulkhead_call_latency_seconds` | Histogram (DefBuckets) | `name` (release - Acquire — для AIMD/Vegas controller'ов) |
 
 `name` — `ConstLabel`, так что один Prometheus registry держит N bulkhead'ов
 без коллизий — `clients/apimap` точно так и делает (один bulkhead на client name).
@@ -186,9 +188,86 @@ r()
 for b.Stats().Waiting < 2 { time.Sleep(time.Millisecond) }
 ```
 
+## Adaptive concurrency (auto-tuning MaxConcurrent)
+
+Жёсткий `MaxConcurrent` — это guesswork: слишком тесно → недоиспользуем upstream
+в здоровом state'е; слишком свободно → backed-up latency каскадирует. Опция
+`WithAdaptive` запускает controller-loop, который двигает cap по observable
+upstream pressure.
+
+```go
+b, _ := bulkhead.New(bulkhead.Config{Name: "stripe", MaxQueue: 100},
+    bulkhead.WithAdaptive(bulkhead.AdaptiveConfig{
+        Controller:   &bulkhead.AIMDController{
+            IncreaseStep:   1,    // +1 на healthy tick
+            DecreaseFactor: 0.5,  // ÷2 при error spike
+            ErrorThreshold: 0.1,  // 10% error rate trip
+        },
+        InitialCap:   10,
+        MinCapacity:  2,
+        MaxCapacity:  100,
+        TickInterval: 1 * time.Second,
+        WindowSize:   10 * time.Second,
+    }),
+)
+defer b.Close()   // adaptive mode ОБЯЗАН быть Closed
+```
+
+**`Config.MaxConcurrent` НЕ ставится** при `WithAdaptive` — capacity владеет
+adaptive layer. Validation падает с `apimap_invalid_adaptive_config` если
+указаны оба.
+
+### Controller interface
+
+Plug-and-play algorithm:
+
+```go
+type Controller interface {
+    Next(s Snapshot) int
+}
+
+type Snapshot struct {
+    Capacity   int
+    InFlight   int
+    Waiting    int
+    Latency    LatencyStats   // p50, p99, count over WindowSize
+    ErrorRate  float64        // 0.0–1.0 over WindowSize
+    SinceLast  time.Duration
+}
+```
+
+Дефолтный `AIMDController` — additive-increase / multiplicative-decrease
+(TCP-style):
+- `Latency.Count == 0` (no traffic) → hold capacity. Защищает от unintended
+  shrink при open-circuit-period.
+- `ErrorRate ≥ ErrorThreshold` → `cap × DecreaseFactor`, floor 1.
+- Иначе → `cap + IncreaseStep`.
+
+Vegas / Gradient2 controllers — open question (v2 за тем же interface).
+
+### Error rate источник
+
+`Execute(ctx, fn)` подаёт `fn err == nil` в latency window как success
+outcome. То есть AIMD автоматически видит fn-failures без caller bookkeeping.
+Двухфазная `Acquire()` форма дефолтит к success=true — если хотите feedback
+от error'ов, используйте Execute.
+
+### SetCapacity (manual lever)
+
+`b.SetCapacity(n)` — operator runbook lever. "Stripe в инциденте, force cap
+до 5 на 10 минут." Та же primitive, что adaptive внутри. Raising cap'а
+просыпает waiter'ов через `cond.Broadcast`; lowering НЕ preempt'ит in-flight
+(drain on shrink). Adaptive tick может перезаписать руками выставленную cap
+на следующем тике — для строгого override отключите adaptive.
+
+### Drain on shrink
+
+Уменьшение capacity ниже in-flight count НЕ прерывает текущие slots — они
+завершатся естественно. Новые Acquire'ы блокируются пока `inflight ≤ capacity`
+не выполнится.
+
 ## Ограничения / out-of-scope
 
-- **Adaptive `MaxConcurrent`** (auto-tuning по observed RTT) — v2.
 - **Priority queue** — bulkhead не различает background-vs-user requests.
 - **Per-host внутри одного bulkhead'а** — для multi-host клиента используйте
   отдельные bulkhead'ы.
