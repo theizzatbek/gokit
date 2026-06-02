@@ -290,10 +290,6 @@ middleware / factory зарегистрированы — ваш Go-бинарь
 
 | Пример | Что показывает |
 |---|---|
-| [`examples/quickstart/`](examples/quickstart/) | Минимальный Hello-world через прямой `fibermap.Engine`. |
-| [`examples/auth/`](examples/auth/) | JWT login + Bearer middleware. |
-| [`examples/nats/`](examples/nats/) | Типизированный publisher / subscriber. |
-| [`examples/tasks/`](examples/tasks/) | Полный сервис: config, db, auth, OpenAPI, validation, cache. |
 | [`examples/urlshort/`](examples/urlshort/) | Multi-binary microservice setup с outbox + apimap. |
 | [`examples/resilience/`](examples/resilience/) | breaker + bulkhead через apimap YAML против flaky httptest сервера. |
 | [`examples/inbox-outbox/`](examples/inbox-outbox/) | Effectively-once event flow с outboxnats + inboxnats (testcontainers postgres + nats). |
