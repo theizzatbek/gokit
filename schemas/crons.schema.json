@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/theizzatbek/gokit/main/schemas/crons.schema.json",
+  "title": "cronmap crons.yaml",
+  "description": "Schema for cronmap (https://github.com/theizzatbek/gokit/tree/main/cronmap) YAML cron definitions. Add `# yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/gokit/main/schemas/crons.schema.json` to the top of your crons.yaml.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "jobs": {
+      "description": "Cron jobs. Each entry is one periodic invocation; ordering is significant only for metric label cardinality (job names key the singleton lock + every collector).",
+      "type": "array",
+      "items": { "$ref": "#/definitions/job" }
+    }
+  },
+  "definitions": {
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "handler", "schedule"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique within the engine. Keys the singleton lock + every cronmap_* metric label. Slugified to derive the default sentry_slug."
+        },
+        "handler": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name registered via cronmap.RegisterHandler(eng, name, fn) before Build. Missing handler surfaces as cronmap_unknown_handler at Build."
+        },
+        "schedule": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Cron expression. Default parser is 5-field (min hour dom month dow) plus @hourly/@daily/@weekly/@monthly/@yearly descriptors. Override via cronmap.WithParser for seconds-precision schedules. Supports ${VAR} env substitution."
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Per-run deadline as a Go duration string (e.g. \"5m\", \"30s\"). Runtime wraps fn in context.WithTimeout. DeadlineExceeded gets its own cronmap_runs_total{outcome=timeout} label, NOT bundled into failure. Empty / 0 = no per-run deadline."
+        },
+        "singleton": {
+          "type": "boolean",
+          "description": "Enable leader-elect: only one instance of N pods runs this job per tick. Requires cronmap.WithSingletonLocker at Build (PGLocker is the kit-default backend). Lock-not-acquired increments cronmap_singleton_skipped_total — the HEALTHY signal in N-1 of N pods. Default false."
+        },
+        "sentry_slug": {
+          "type": "string",
+          "description": "Identity for sentrykit.MonitorCron when cronmap.WithSentry() is set at Build. Default = slugify(name). Override when migrating from a service.WithCron name whose slug shouldn't change."
+        }
+      }
+    }
+  }
+}

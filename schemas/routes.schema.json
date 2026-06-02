@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://raw.githubusercontent.com/theizzatbek/fibermap/main/schema/routes.schema.json",
+  "$id": "https://raw.githubusercontent.com/theizzatbek/gokit/main/schemas/routes.schema.json",
   "title": "fibermap routes.yaml",
-  "description": "Schema for fibermap (https://github.com/theizzatbek/fibermap) YAML route trees. Add `# yaml-language-server: $schema=...` to the top of routes.yaml for editor autocomplete.",
+  "description": "Schema for fibermap (https://github.com/theizzatbek/gokit/tree/main/fibermap) YAML route trees. Add `# yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/gokit/main/schemas/routes.schema.json` to the top of routes.yaml for editor autocomplete.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
