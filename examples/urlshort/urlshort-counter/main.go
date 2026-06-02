@@ -26,10 +26,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/caarlos0/env/v11"
 
@@ -55,23 +51,15 @@ type AppCtx struct{}
 // Claims mirrors AppCtx — auth never runs in this binary.
 type Claims struct{}
 
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
-	}
-}
+func main() { service.Boot(run) }
 
-func run() error {
+func run(ctx context.Context) error {
 	var cfg Config
 	if err := env.Parse(&cfg); err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation,
 			"urlshort_counter_env_parse_failed",
 			"urlshort-counter: env parse failed")
 	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	// vc is referenced from the natsmap registration callback (runs
 	// inside service.New AFTER buildDB has populated svc.DB but
