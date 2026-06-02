@@ -94,6 +94,12 @@ audit, schedulers, file uploads, webhook'и.
 | [`otelkit/`](otelkit/README.md) | OpenTelemetry bootstrap (tracing + metrics + logs bridges). |
 | [`sentrykit/`](sentrykit/README.md) | Sentry error-tracking + Fiber middleware + slog→breadcrumb bridge. |
 
+### Scheduling
+
+| Пакет | Что делает |
+|---|---|
+| [`cronmap/`](cronmap/README.md) | Declarative cron scheduler с YAML + handler-by-name. Per-run timeout, singleton (pg-advisory-lock), Sentry crons slug — всё YAML-аттрибутами. См. также [`db/jobs/`](db/jobs/README.md) (Postgres-backed delayed/one-shot queue). |
+
 ### Operations
 
 | Пакет | Что делает |
@@ -119,6 +125,8 @@ audit, schedulers, file uploads, webhook'и.
 | Прокатить миграции из embed.FS | `db/migrate` |
 | Leader-election в multi-replica | `db/lock` |
 | Один pod слушает, остальные нет | `db/lock` или `db/notify` |
+| Periodic cron jobs (declarative YAML) | `cronmap` (+ `service.WithCronMap` если используешь bundle) |
+| Cron job с leader-elect (один pod из N) | `cronmap` + `singleton: true` (нужен DB) |
 | One-shot delayed job ("через 5 мин сделай X") | `db/jobs` |
 | Гарантированный publish после db.Commit | `db/outbox` + `db/outbox/outboxnats` |
 | Effectively-once consumer (не делать дважды) | `db/inbox` + `db/inbox/inboxnats` |
@@ -152,6 +160,7 @@ db, db/sqb, db/migrate, db/lock, db/notify  → errs + pgx
 db/jobs, db/outbox, db/inbox                → db + errs
 db/outbox/outboxnats, db/inbox/inboxnats    → db/outbox|inbox + clients/natsmap
 breaker, bulkhead, batch                    → stdlib + prometheus
+cronmap                                     → errs + robfig/cron + yaml.v3 (+ db/lock optional for PGLocker, sentrykit optional)
 clients/httpc                               → errs + prometheus + breaker + bulkhead
 clients/apimap                              → errs + clients/httpc + breaker + bulkhead + yaml.v3
 clients/nats                                → errs + nats.go + prometheus
