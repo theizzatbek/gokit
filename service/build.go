@@ -166,6 +166,7 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		s.Close()
 		return nil, err
 	}
+	s.logReady()
 	return s, nil
 }
 
