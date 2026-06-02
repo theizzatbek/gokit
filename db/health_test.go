@@ -27,3 +27,10 @@ func TestHealthcheck_AfterClose_KindUnavailable(t *testing.T) {
 		t.Fatalf("want KindUnavailable, got %v (%T)", e, err)
 	}
 }
+
+func TestHealthcheckRead_NoStandbyReturnsNil(t *testing.T) {
+	d := startTestDB(t) // HasReadReplica=false in startTestDB
+	if err := d.HealthcheckRead(context.Background()); err != nil {
+		t.Errorf("HealthcheckRead with no standby = %v, want nil", err)
+	}
+}

@@ -108,6 +108,9 @@ func connectPool(ctx context.Context, raw, name string, cfg Config, o *options) 
 	if t := composeTracer(o); t != nil {
 		pgxCfg.ConnConfig.Tracer = t
 	}
+	if hook := composeAfterConnect(o); hook != nil {
+		pgxCfg.AfterConnect = hook
+	}
 
 	var pool *pgxpool.Pool
 	for attempt := 0; attempt <= cfg.ConnectMaxRetries; attempt++ {
