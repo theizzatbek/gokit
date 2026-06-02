@@ -102,6 +102,7 @@ type options struct {
 	natsgwEnable               bool
 	natsgwPath                 string
 	natsgwOpts                 []natsgw.Option
+	webhooksCfg                *WebhooksConfig
 }
 
 // WithLogger overrides the auto-built slog.Logger.

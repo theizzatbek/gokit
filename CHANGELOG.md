@@ -8,7 +8,25 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- `clients/webhooks/` — outbound + inbound HTTP webhooks subsystem.
+  - Core: `Subscription` + `Delivery` types, `SubscriptionStore` /
+    `DeliveryStore` interfaces, `Signer` (Stripe-style HMAC),
+    `Verifier` interface, `Fanout` (event → N deliveries, idempotent
+    via UNIQUE constraint), `Worker` (per-target retry/backoff/DLQ),
+    `RetentionWorker` (TTL-driven sweep of delivered rows).
+  - `clients/webhooks/storepg` — Postgres backend with AES-256-GCM
+    secret-at-rest (key via `WEBHOOKS_SECRET_KEY`, 32 bytes base64;
+    version-prefixed ciphertext).
+  - `clients/webhooks/verifiers` — `GenericHMAC` (configurable
+    scheme, optional timestamp window) + `GitHub` preset.
+  - `fibermap/webhookguard` — Fiber middleware that verifies the
+    inbound signature via any `webhooks.Verifier` and returns 401
+    via the kit's `errs.HTTP` mapping on mismatch.
+  - `service.WithWebhooks` — wires `Worker` into the lifecycle and
+    drains it via `OnShutdown` before NATS/DB teardown;
+    `Service.WebhooksFanout` is exposed for the caller to register
+    inside their `WithNATSMapRegistration` handler.
 
 ## [v0.8.2] - 2026-05-23
 

@@ -15,6 +15,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/ratelimit"
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	s3client "github.com/theizzatbek/gokit/clients/s3"
+	"github.com/theizzatbek/gokit/clients/webhooks"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/db/outbox"
 	"github.com/theizzatbek/gokit/fibermap"
@@ -40,6 +41,18 @@ type Service[T any, C any] struct {
 	// configured. When non-nil, the `rate_limit_redis` YAML factory
 	// is automatically registered on Engine.
 	RateLimiter *ratelimit.Redis
+
+	// WebhooksWorker is the outbound webhooks delivery worker built by
+	// [WithWebhooks] with StartWorker=true. nil otherwise. Caller has
+	// no reason to touch it directly — kit registers Stop via
+	// OnShutdown automatically.
+	WebhooksWorker *webhooks.Worker
+
+	// WebhooksFanout is the event→deliveries fanout built by
+	// [WithWebhooks] with StartFanout=true. nil otherwise. Register
+	// `WebhooksFanout.HandleEvent` from your natsmap or db/notify
+	// handler to drive the deliveries pipeline.
+	WebhooksFanout *webhooks.Fanout
 
 	cfg     Config
 	logger  *slog.Logger
