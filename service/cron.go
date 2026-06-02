@@ -100,6 +100,15 @@ type scheduler struct {
 	wg   sync.WaitGroup
 }
 
+// jobCount returns the number of registered entries. Used by
+// [Service.Status]. nil-safe.
+func (s *scheduler) jobCount() int {
+	if s == nil || s.c == nil {
+		return 0
+	}
+	return len(s.c.Entries())
+}
+
 // AddCron registers a job AFTER service.New has built the
 // subsystems. Use when the job's closure needs `svc.DB` / `svc.Auth`
 // / etc — config-time [WithCron] runs before those fields are
