@@ -35,11 +35,7 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -76,21 +72,13 @@ func linksStatsJob(svc *service.Service[appctx.AppCtx, users.Claims]) service.Jo
 	}
 }
 
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
-	}
-}
+func main() { service.Boot(run) }
 
-func run() error {
+func run(ctx context.Context) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	// SSRF guard via the links-package safe_url validator.
 	v := validator.New(validator.WithRequiredStructEnabled())

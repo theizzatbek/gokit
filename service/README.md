@@ -76,6 +76,47 @@ func main() {
 }
 ```
 
+## `service.Boot` — main()-boilerplate reducer
+
+Quickstart выше хэндкрафтит `signal.NotifyContext`, `log.Fatal`, exit-code
+handling. `service.Boot` сводит этот pattern к одной строке:
+
+```go
+func main() { service.Boot(run) }
+
+func run(ctx context.Context) error {
+    cfg, err := config.Load()
+    if err != nil { return err }
+    svc, err := service.New[AppCtx, Claims](ctx, cfg)
+    if err != nil { return err }
+    defer svc.Close()
+    // ... wire handlers ...
+    return svc.Run()
+}
+```
+
+Что делает Boot:
+
+1. `signal.NotifyContext(SIGINT, SIGTERM)` — graceful shutdown по
+   k8s SIGTERM. `ctx.Done()` срабатывает; fn получает signal-aware ctx.
+2. Различает graceful exit от падения:
+   - `nil` ИЛИ `context.Canceled` (через `errors.Is`) → `os.Exit(0)`
+     неявно (Boot возвращает control к main, main exits 0).
+   - Любая другая ошибка → `fmt.Fprintln(os.Stderr, err)` + `os.Exit(1)`.
+3. Caller владеет logger'ом — kit не строит slog за caller'а (format /
+   level / handler — service-specific). `slog.Default()` достаточен для
+   простых случаев.
+
+Boot НЕ конструирует config — у каждого сервиса свой Config type, и
+`config.Load()` обычно специфичен для проекта.
+
+См. `examples/urlshort/urlshort-api/main.go` как реальный пример: одна
+строка main + явный `func run(ctx context.Context) error`.
+
+**Caveat**: `os.Exit(1)` на failure path skip'ает main's deferred work
+— это known Go quirk (а не наш). Кладите deferred cleanup ВНУТРЬ fn,
+где он отработает перед return'ом.
+
 ## Конфигурация
 
 Env-driven через `caarlos0/env/v11`. Композируйте в собственный app-config через embedding, чтобы добавить app-specific поля.
