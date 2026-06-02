@@ -37,6 +37,7 @@ import (
 	"github.com/theizzatbek/gokit/breaker"
 	"github.com/theizzatbek/gokit/bulkhead"
 	"github.com/theizzatbek/gokit/clients/apimap"
+	"github.com/theizzatbek/gokit/service"
 )
 
 // pingResponse is the typed payload Decode reads back from /ping.
@@ -44,14 +45,9 @@ type pingResponse struct {
 	OK bool `json:"ok"`
 }
 
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "fail:", err)
-		os.Exit(1)
-	}
-}
+func main() { service.Boot(run) }
 
-func run() error {
+func run(ctx context.Context) error {
 	// 1. The flaky upstream. Every request either returns 503 (failure),
 	//    sleeps 300ms then 200 (slow), or 200 immediately.
 	server := flakyServer()
@@ -73,12 +69,12 @@ func run() error {
 	// 3. 30 concurrent callers, 2 batches separated by a small pause so
 	//    the breaker has time to open after the first batch trips it.
 	fmt.Println("Batch 1 — server is healthy-ish; some 5xx, some slow:")
-	stats := fireBatch(client, 30)
+	stats := fireBatch(ctx, client, 30)
 	stats.print()
 
 	fmt.Println("\nBatch 2 — wait 3s past the breaker's OpenInterval=2s, expect recovery:")
 	time.Sleep(3 * time.Second)
-	stats = fireBatch(client, 30)
+	stats = fireBatch(ctx, client, 30)
 	stats.print()
 
 	// 4. Print the kit-emitted collectors.
@@ -87,14 +83,14 @@ func run() error {
 	return nil
 }
 
-func fireBatch(client *apimap.Client, n int) *batchStats {
+func fireBatch(parent context.Context, client *apimap.Client, n int) *batchStats {
 	stats := &batchStats{}
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 			defer cancel()
 			_, err := apimap.Decode[pingResponse](ctx, client, "flaky.ping", apimap.Call{})
 			stats.record(err)

@@ -57,6 +57,7 @@ import (
 	"github.com/theizzatbek/gokit/db/inbox/inboxnats"
 	"github.com/theizzatbek/gokit/db/outbox"
 	"github.com/theizzatbek/gokit/db/outbox/outboxnats"
+	"github.com/theizzatbek/gokit/service"
 )
 
 type orderCreated struct {
@@ -69,16 +70,13 @@ const (
 	consumerTag = "demo:orders-consumer"
 )
 
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "fail:", err)
-		os.Exit(1)
-	}
-}
+func main() { service.Boot(run) }
 
-func run() error {
+func run(ctx context.Context) error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Demo budgets itself to 60s — Boot's signal-aware ctx is the parent
+	// so Ctrl+C still preempts the timer.
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	fmt.Println("→ Starting Postgres + NATS containers (~10s)…")

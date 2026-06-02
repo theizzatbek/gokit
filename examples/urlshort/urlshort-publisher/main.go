@@ -28,10 +28,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/caarlos0/env/v11"
@@ -57,23 +53,15 @@ type (
 	Claims struct{}
 )
 
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
-	}
-}
+func main() { service.Boot(run) }
 
-func run() error {
+func run(ctx context.Context) error {
 	var cfg Config
 	if err := env.Parse(&cfg); err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation,
 			"urlshort_publisher_env_parse_failed",
 			"urlshort-publisher: env parse failed")
 	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	svc, err := service.New[AppCtx, Claims](ctx, cfg.Config,
 		service.WithNATSMap(),
