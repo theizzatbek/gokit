@@ -289,65 +289,6 @@ func WithSentry(dsn string, opts SentryOptions) Option {
 	}
 }
 
-// Deprecated: pass via [SentryOptions.RefreshGCSlug] on [WithSentry].
-// Retained for one release so existing call-sites compile; will be
-// removed in the next 0.x bump. Internally flips the same option
-// field as the struct path.
-func WithSentryRefreshGCSlug(slug string) Option {
-	return func(o *options) { o.sentryRefreshGCSlug = slug }
-}
-
-// Deprecated: pass via [SentryOptions.DisableRefreshGCMonitor] on
-// [WithSentry]. Retained for one release.
-func WithoutSentryRefreshGCMonitor() Option {
-	return func(o *options) { o.skipSentryRefreshGCMonitor = true }
-}
-
-// Deprecated: pass via [SentryOptions.DisableUserScope] on
-// [WithSentry]. Retained for one release.
-func WithoutSentryUserScope() Option {
-	return func(o *options) { o.skipSentryUserScope = true }
-}
-
-// Deprecated: pass via [SentryOptions.ErrorCaptureLevel] on
-// [WithSentry] using [LevelPtr] for the level pointer. Retained for
-// one release.
-func WithSentryErrorCapture(level slog.Level) Option {
-	return func(o *options) {
-		o.sentrySlogOpts = append(o.sentrySlogOpts, sentrykit.WithCaptureLevel(level))
-	}
-}
-
-// Deprecated: pass via [SentryOptions.Breadcrumbs] on [WithSentry].
-// Retained for one release.
-func WithSentryBreadcrumbs(opts ...sentrykit.HandlerOption) Option {
-	return func(o *options) { o.sentrySlogOpts = append(o.sentrySlogOpts, opts...) }
-}
-
-// Deprecated: pass via [OtelOptions.MetricsOptions] on [WithOtel].
-// Retained for one release.
-func WithOtelMetricsOptions(opts ...otelkit.MetricsOption) Option {
-	return func(o *options) { o.otelMetricsOpts = append(o.otelMetricsOpts, opts...) }
-}
-
-// Deprecated: pass via [OtelOptions.DisableMetrics] on [WithOtel].
-// Retained for one release.
-func WithoutOtelMetrics() Option {
-	return func(o *options) { o.skipOtelMetrics = true }
-}
-
-// Deprecated: pass via [OtelOptions.DisableLogs] on [WithOtel].
-// Retained for one release.
-func WithoutOtelLogs() Option {
-	return func(o *options) { o.skipOtelLogs = true }
-}
-
-// Deprecated: pass via [OtelOptions.LogsOptions] on [WithOtel].
-// Retained for one release.
-func WithOtelLogsOptions(opts ...otelkit.LogsOption) Option {
-	return func(o *options) { o.otelLogsOpts = append(o.otelLogsOpts, opts...) }
-}
-
 // WithRefreshGC schedules periodic garbage collection of expired
 // refresh tokens against the refresh store wired through Auth. Without
 // it, the underlying table (auth_refresh_tokens for refreshpg) grows

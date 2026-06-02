@@ -136,7 +136,7 @@ type testWriter struct{}
 
 func (testWriter) Write(b []byte) (int, error) { return len(b), nil }
 
-func TestNew_WithSentryErrorCapture_CapturesErrorLog(t *testing.T) {
+func TestNew_SentryErrorCaptureLevel_CapturesErrorLog(t *testing.T) {
 	var captured []*sentry.Event
 	svc, err := New[testCtx, testClaims](context.Background(), Config{},
 		WithSentry(sentryTestDSN, SentryOptions{
@@ -235,7 +235,7 @@ func TestSetupSentry_UserScopeMiddlewareSkippedWithoutAuth(t *testing.T) {
 	}
 }
 
-func TestSetupSentry_WithoutSentryUserScope_SkipsMiddleware(t *testing.T) {
+func TestSetupSentry_DisableUserScope_SkipsMiddleware(t *testing.T) {
 	s := &Service[struct{}, struct{}]{
 		Auth: &auth.Auth[struct{}]{}, // placeholder non-nil — middleware never invokes it here
 		opts: &options{

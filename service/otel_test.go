@@ -83,7 +83,7 @@ func TestSetupOtel_WiresMetricsBridge_WhenRegistryIsGatherer(t *testing.T) {
 	_ = s.otelMetricsShutdown(context.Background())
 }
 
-func TestSetupOtel_WithoutOtelMetrics_SkipsBridge(t *testing.T) {
+func TestSetupOtel_DisableMetrics_SkipsBridge(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	s := &Service[struct{}, struct{}]{
 		opts: &options{
@@ -96,7 +96,7 @@ func TestSetupOtel_WithoutOtelMetrics_SkipsBridge(t *testing.T) {
 		t.Fatalf("setupOtel: %v", err)
 	}
 	if s.otelMetricsShutdown != nil {
-		t.Error("otelMetricsShutdown should be nil when WithoutOtelMetrics is set")
+		t.Error("otelMetricsShutdown should be nil when OtelOptions.DisableMetrics is true")
 	}
 	if s.otelShutdown == nil {
 		t.Error("trace pipeline should still be installed")
