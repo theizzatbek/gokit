@@ -362,7 +362,7 @@ func TestRoutes(t *testing.T) {
 - **Нет built-in rate-limiting'а.** Используйте `gofiber/fiber/v2/middleware/limiter` через `WithUse`.
 - **Нет hot-reload routes.yaml.** Грузится один раз на старте.
 - **Нет per-route auth декларативного shorthand'а.** Используйте middleware-factory, зарегистрированные через `auth/fibermount.MountMiddlewareFactories`.
-- **YAML-ошибки на parse-time, не edit-time.** Используйте routes.schema.json (см. `fibermap/schema/`) в вашем редакторе для live-валидации.
+- **YAML-ошибки на parse-time, не edit-time.** Используйте `routes.schema.json` (см. [`schemas/`](../schemas/)) в вашем редакторе для live-валидации.
 - **`Mount`/`Run` можно вызвать только один раз на engine.** Re-mount — это программерская ошибка (panic'ит).
 
 ## См. также
@@ -371,7 +371,7 @@ func TestRoutes(t *testing.T) {
 - [`fibermap/factory`](factory/README.md) — хелперы для сборки middleware-factory
 - [`fibermap/fibermaptest`](fibermaptest/README.md) — testing-хелперы для inventory Routes()
 - [`fibermap/openapi`](openapi/README.md) — генерация OpenAPI 3.0 spec'а из `Engine.Routes()`
-- [`fibermap/schema`](schema/README.md) — embedded JSON-schema для routes.yaml
+- [`schemas/`](../schemas/) — JSON-schema'ы для всех YAML-конфигов кита (routes/clients/crons/natsmap)
 - [`auth/fibermount`](../auth/fibermount/README.md) — монтирует `bearer`/`require_scope`/`require_role` factory на engine
 - [`errs`](../errs/README.md) — typed-error контракт, используемый `ErrorHandler`'ом
 - [`examples/urlshort/`](../examples/urlshort/README.md) — полный интеграционный пример

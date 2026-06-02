@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/theizzatbek/gokit/main/schemas/natsmap.schema.json",
+  "title": "natsmap subscribers.yaml / publishers.yaml",
+  "description": "Schema for clients/natsmap (https://github.com/theizzatbek/gokit/tree/main/clients/natsmap). Covers the union of top-level keys (`subscribers`, `publishers`, `streams`) so a single combined YAML or split subscribers.yaml / publishers.yaml both validate. Add `# yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/gokit/main/schemas/natsmap.schema.json` to the top of each file.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "subscribers": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/subscriber" }
+    },
+    "publishers": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/publisher" }
+    },
+    "streams": {
+      "type": "array",
+      "description": "App-managed JetStream stream definitions. natsmap idempotently EnsureStream on each entry at Build.",
+      "items": { "$ref": "#/definitions/stream" }
+    }
+  },
+  "definitions": {
+    "subscriber": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "subject"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Subscriber identity. Must match the name passed to natsmap.RegisterHandler[T] / RegisterBatchedHandler[T]."
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "description": "NATS subject to subscribe on. Supports wildcards (`*`, `>`). Supports ${ENV_VAR} substitution at Load."
+        },
+        "durable": {
+          "type": "string",
+          "description": "JetStream durable consumer name. When set, the subscription survives restarts; omitted = ephemeral."
+        },
+        "queue_group": {
+          "type": "string",
+          "description": "NATS queue group for load-balancing across N subscribers. Combined with ServerGroup suffix when service-side ServerGroup is set."
+        },
+        "max_in_flight": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Per-subscriber semaphore on concurrent handler goroutines."
+        },
+        "max_deliver": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "JetStream redelivery cap before a message is moved to the per-stream DLQ."
+        },
+        "ack_wait": {
+          "type": "string",
+          "description": "Handler deadline as a Go duration; an in-flight message becomes eligible for redelivery once exceeded."
+        },
+        "backoff": {
+          "$ref": "#/definitions/backoff",
+          "description": "Per-message retry backoff. Drives JetStream's BackOff array on the consumer config."
+        },
+        "start_from": {
+          "type": "string",
+          "description": "JetStream DeliverPolicy hint. Supported values map to nats.DeliverPolicy (e.g. `all`, `new`, `last`)."
+        },
+        "filter_subject": {
+          "type": "string",
+          "description": "Optional consumer-side subject filter when the bound stream covers a wider pattern."
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Opts into batched-handler mode. Requires natsmap.RegisterBatchedHandler[T] (mismatch surfaces as natsmap_batch_handler_required / natsmap_regular_handler_required at Build)."
+        },
+        "batch_interval": {
+          "type": "string",
+          "description": "Max wait between Fetch() calls in batched mode (Go duration). Default 1s."
+        }
+      }
+    },
+    "publisher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "subject"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Publisher identity. Must match the name passed to natsmap.RegisterPublisher[T] / used in natsmap.Publish[T]."
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Outbound subject. Supports ${ENV_VAR} substitution at Load."
+        },
+        "headers": {
+          "type": "object",
+          "description": "Static NATS headers applied to every message published through this publisher.",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "backoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["exponential", "fixed"]
+        },
+        "base": { "type": "string", "description": "Base interval (Go duration). For fixed mode this is the only delay." },
+        "max":  { "type": "string", "description": "Ceiling for exponential mode (Go duration)." }
+      }
+    },
+    "stream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "subjects"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "subjects": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "storage":   { "type": "string", "enum": ["file", "memory"] },
+        "retention": { "type": "string", "enum": ["limits", "interest", "work_queue"] },
+        "max_age":   { "type": "string", "description": "Max message age (Go duration)." },
+        "max_bytes": { "type": "integer", "minimum": 0 },
+        "max_msgs":  { "type": "integer", "minimum": 0 },
+        "replicas":  { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

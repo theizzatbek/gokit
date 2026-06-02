@@ -266,17 +266,21 @@ return svc.Run()
 по каждому подсистеме (`db=true, auth=true, redis=false, ...`); intospection
 через `svc.Status()`. Подробности — [`service/README.md`](service/README.md).
 
-## Поддержка редактора для `routes.yaml`
+## Поддержка редактора для YAML-конфигов
 
-Добавьте в начало вашего `routes.yaml`:
+Все встроенные YAML'ы кита (`routes.yaml`, `crons.yaml`, `clients.yaml`,
+`subscribers.yaml`/`publishers.yaml`) имеют JSON Schema (draft-07),
+сгружённые в [`schemas/`](schemas/). Добавьте modeline в начало
+соответствующего файла:
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/gokit/main/fibermap/schema/routes.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/theizzatbek/gokit/main/schemas/routes.schema.json
 ```
 
 VS Code (с [redhat.vscode-yaml]), GoLand и Vim с `coc-yaml` дают
 автодополнение, hover-документацию и inline-диагностику — опечатки в
-`middleware:` подсвечиваются до `go test`.
+`middleware:` подсвечиваются до `go test`. Полный список схем + примеры
+— в [`schemas/README.md`](schemas/README.md).
 
 [redhat.vscode-yaml]: https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml
 
