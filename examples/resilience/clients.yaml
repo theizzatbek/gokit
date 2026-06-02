@@ -1,0 +1,27 @@
+# Single declarative client targeted at a flaky upstream simulated by
+# the example's httptest server. Both breaker and bulkhead blocks
+# enabled — when the server starts flapping, the breaker trips; when
+# we hammer it concurrently, the bulkhead caps the in-flight calls.
+#
+# ${UPSTREAM_BASE_URL} is substituted at LoadBytes time from the env
+# var the example sets to httptest.Server.URL.
+
+clients:
+  - name: flaky
+    base_url: ${UPSTREAM_BASE_URL}
+    timeout: 1s
+    max_retries: -1     # demo wants raw single-attempt fail-fast
+    breaker:
+      failure_threshold: 3
+      minimum_requests: 5
+      window_duration: 5s
+      open_interval: 2s
+      half_open_max_probes: 1
+    bulkhead:
+      max_concurrent: 5
+      max_queue: 10     # queue admits a few waiters before fail-fast
+    endpoints:
+      - name: ping
+        method: GET
+        path: /ping
+        decode: json
