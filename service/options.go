@@ -248,10 +248,10 @@ func WithoutBearerOptionalLayer() Option {
 //
 // Database query tracing (pgx) is out of scope here — add a pgx tracer
 // manually via the db package's options if you need DB spans.
-func WithOtel(serviceName string, opts ...otelkit.Option) Option {
+func WithOtel(serviceName string, opts OtelOptions) Option {
 	return func(o *options) {
 		o.otelServiceName = serviceName
-		o.otelOpts = opts
+		applyOtelOptions(o, opts)
 	}
 }
 
@@ -282,135 +282,68 @@ func WithOtel(serviceName string, opts ...otelkit.Option) Option {
 // outermost user-chain layer (prepended by setupOtel) and sentry
 // sits inside it — so every captured event implicitly shares the
 // trace_id of the surrounding OTel span.
-func WithSentry(dsn string, opts ...sentrykit.Option) Option {
+func WithSentry(dsn string, opts SentryOptions) Option {
 	return func(o *options) {
 		o.sentryDSN = dsn
-		o.sentryOpts = opts
+		applySentryOptions(o, opts)
 	}
 }
 
-// WithSentryRefreshGCSlug overrides the default "kit-refresh-gc"
-// monitor slug used when the refresh-token GC ticker reports
-// check-ins to Sentry Crons. Use to distinguish multiple kit-based
-// services sharing one Sentry project, e.g. "orders-refresh-gc".
-//
-// No effect unless [WithSentry] and [WithRefreshGC] are both set
-// (cron monitoring lights up only when both subsystems are wired).
+// Deprecated: pass via [SentryOptions.RefreshGCSlug] on [WithSentry].
+// Retained for one release so existing call-sites compile; will be
+// removed in the next 0.x bump. Internally flips the same option
+// field as the struct path.
 func WithSentryRefreshGCSlug(slug string) Option {
 	return func(o *options) { o.sentryRefreshGCSlug = slug }
 }
 
-// WithoutSentryRefreshGCMonitor disables Sentry Crons check-ins for
-// the refresh-token GC ticker. Use in multi-replica deployments
-// where every replica ticks on its own — Sentry doesn't deduplicate
-// by slug, so one configured monitor would receive one heartbeat
-// per replica per tick (the "Failing job" alert never fires, the
-// "Missed check-in" alert is impossible to tune).
-//
-// Tracing / breadcrumbs / error capture from PRs #1–#4 stay
-// enabled; only the periodic check-in is suppressed.
+// Deprecated: pass via [SentryOptions.DisableRefreshGCMonitor] on
+// [WithSentry]. Retained for one release.
 func WithoutSentryRefreshGCMonitor() Option {
 	return func(o *options) { o.skipSentryRefreshGCMonitor = true }
 }
 
-// WithoutSentryUserScope disables the per-request user scope that
-// service.WithSentry otherwise installs (when Auth is also wired).
-//
-// Default behaviour: when a request is authenticated, every Sentry
-// event captured during that request carries
-// `sentry.User{ID: principal.Subject}` — visible in the Sentry UI as
-// the "Affected User" facet. Disable when:
-//
-//   - Subject is considered PII in your deployment (e.g. it's the
-//     user's email).
-//   - You want to set User scope manually from handlers (e.g. with a
-//     hashed/redacted Subject).
-//
-// No effect unless WithSentry is also set or Auth is unconfigured.
+// Deprecated: pass via [SentryOptions.DisableUserScope] on
+// [WithSentry]. Retained for one release.
 func WithoutSentryUserScope() Option {
 	return func(o *options) { o.skipSentryUserScope = true }
 }
 
-// WithSentryErrorCapture enables Sentry event auto-capture for log
-// records at >= level. Forwards to
-// [sentrykit.WithCaptureLevel]: when the kit-built logger emits a
-// record at or above the threshold, an event ships in addition to
-// the breadcrumb. When the record carries an attr named "err",
-// "error", or "cause" with an error value, the event is a Sentry
-// Exception (stack frames from the running goroutine); otherwise
-// it's a Message event.
-//
-//	service.WithSentry(dsn),
-//	service.WithSentryErrorCapture(slog.LevelError)
-//
-// No-op without [WithSentry] or when the caller supplied their own
-// logger via WithLogger (user loggers are kept untouched). Duplicate
-// events for the same (level, category, message) within 60s are
-// suppressed; override with
-// service.WithSentryBreadcrumbs(sentrykit.WithCaptureDedupeWindow(d)).
+// Deprecated: pass via [SentryOptions.ErrorCaptureLevel] on
+// [WithSentry] using [LevelPtr] for the level pointer. Retained for
+// one release.
 func WithSentryErrorCapture(level slog.Level) Option {
 	return func(o *options) {
 		o.sentrySlogOpts = append(o.sentrySlogOpts, sentrykit.WithCaptureLevel(level))
 	}
 }
 
-// WithSentryBreadcrumbs configures the slog→breadcrumb bridge that
-// service auto-installs on the kit-built logger when [WithSentry] is
-// passed. Forwarded to [sentrykit.SlogHandler]: WithDebugBreadcrumbs,
-// WithAttrFilter, WithCategoryAttr, WithMaxBreadcrumbValueLen,
-// WithCaptureDedupeWindow, WithCaptureErrorAttrKeys.
-//
-//	service.New(... ,
-//	    service.WithSentry(dsn),
-//	    service.WithSentryBreadcrumbs(
-//	        sentrykit.WithAttrFilter(func(k string) bool { return k != "sql" }),
-//	        sentrykit.WithMaxBreadcrumbValueLen(256),
-//	    ))
-//
-// No-op when WithSentry was not passed or when the caller supplied
-// their own logger via WithLogger (user loggers are kept as-is to
-// avoid surprising side effects on a pre-tuned log pipeline).
+// Deprecated: pass via [SentryOptions.Breadcrumbs] on [WithSentry].
+// Retained for one release.
 func WithSentryBreadcrumbs(opts ...sentrykit.HandlerOption) Option {
 	return func(o *options) { o.sentrySlogOpts = append(o.sentrySlogOpts, opts...) }
 }
 
-// WithOtelMetricsOptions configures the OTel metrics pipeline that
-// service.WithOtel auto-enables. Forwarded to [otelkit.SetupMetrics]
-// (interval, exporter options, resource attributes).
-//
-//	service.WithOtel("orders-api"),
-//	service.WithOtelMetricsOptions(
-//	    otelkit.WithMetricsInterval(15*time.Second),
-//	),
-//
-// No-op unless WithOtel is also passed.
+// Deprecated: pass via [OtelOptions.MetricsOptions] on [WithOtel].
+// Retained for one release.
 func WithOtelMetricsOptions(opts ...otelkit.MetricsOption) Option {
 	return func(o *options) { o.otelMetricsOpts = append(o.otelMetricsOpts, opts...) }
 }
 
-// WithoutOtelMetrics suppresses the Prometheus→OTel metrics bridge
-// that WithOtel otherwise auto-enables. Use when the deployment
-// scrapes the kit's /metrics endpoint directly and doesn't want a
-// second push pipeline, or when the chosen OTel backend already
-// scrapes Prometheus and would receive duplicates.
-//
-// Tracing stays on; only the metrics bridge is skipped.
+// Deprecated: pass via [OtelOptions.DisableMetrics] on [WithOtel].
+// Retained for one release.
 func WithoutOtelMetrics() Option {
 	return func(o *options) { o.skipOtelMetrics = true }
 }
 
-// WithoutOtelLogs suppresses the slog→OTel log bridge that
-// WithOtel otherwise auto-enables. Tracing and metrics stay on;
-// only the log pipeline is skipped. Use when the deployment ships
-// logs out-of-band (sidecar shipper, Promtail, Vector) and the
-// double-export would inflate billing.
+// Deprecated: pass via [OtelOptions.DisableLogs] on [WithOtel].
+// Retained for one release.
 func WithoutOtelLogs() Option {
 	return func(o *options) { o.skipOtelLogs = true }
 }
 
-// WithOtelLogsOptions configures the OTel log pipeline auto-enabled
-// by WithOtel (resource attrs, exporter overrides). Forwards to
-// [otelkit.SetupLogs]. No-op without WithOtel.
+// Deprecated: pass via [OtelOptions.LogsOptions] on [WithOtel].
+// Retained for one release.
 func WithOtelLogsOptions(opts ...otelkit.LogsOption) Option {
 	return func(o *options) { o.otelLogsOpts = append(o.otelLogsOpts, opts...) }
 }

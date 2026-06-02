@@ -58,7 +58,7 @@ func TestSetupSentry_InstallsFiberMiddleware(t *testing.T) {
 
 func TestWithSentry_StoresConfigOnOptions(t *testing.T) {
 	o := &options{}
-	WithSentry("dsn-xyz", sentrykit.WithEnvironment("staging"))(o)
+	WithSentry("dsn-xyz", SentryOptions{Setup: []sentrykit.Option{sentrykit.WithEnvironment("staging")}})(o)
 	if o.sentryDSN != "dsn-xyz" {
 		t.Errorf("sentryDSN = %q, want dsn-xyz", o.sentryDSN)
 	}
@@ -96,7 +96,7 @@ func TestRegisterSentryShutdown_AddsCallback(t *testing.T) {
 
 func TestNew_WithSentry_WrapsAutoBuiltLogger(t *testing.T) {
 	svc, err := New[testCtx, testClaims](context.Background(), Config{},
-		WithSentry(sentryTestDSN, dropSentry()))
+		WithSentry(sentryTestDSN, SentryOptions{Setup: []sentrykit.Option{dropSentry()}}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestNew_WithSentry_RespectsUserLogger(t *testing.T) {
 	user := slog.New(slog.NewJSONHandler(testWriter{}, nil))
 	svc, err := New[testCtx, testClaims](context.Background(), Config{},
 		WithLogger(user),
-		WithSentry(sentryTestDSN, dropSentry()))
+		WithSentry(sentryTestDSN, SentryOptions{Setup: []sentrykit.Option{dropSentry()}}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -139,13 +139,16 @@ func (testWriter) Write(b []byte) (int, error) { return len(b), nil }
 func TestNew_WithSentryErrorCapture_CapturesErrorLog(t *testing.T) {
 	var captured []*sentry.Event
 	svc, err := New[testCtx, testClaims](context.Background(), Config{},
-		WithSentry(sentryTestDSN,
-			sentrykit.WithBeforeSend(func(e *sentry.Event, _ *sentry.EventHint) *sentry.Event {
-				captured = append(captured, e)
-				return nil
-			})),
-		WithSentryErrorCapture(slog.LevelError),
-		WithSentryBreadcrumbs(sentrykit.WithCaptureDedupeWindow(0)),
+		WithSentry(sentryTestDSN, SentryOptions{
+			Setup: []sentrykit.Option{
+				sentrykit.WithBeforeSend(func(e *sentry.Event, _ *sentry.EventHint) *sentry.Event {
+					captured = append(captured, e)
+					return nil
+				}),
+			},
+			ErrorCaptureLevel: LevelPtr(slog.LevelError),
+			Breadcrumbs:       []sentrykit.HandlerOption{sentrykit.WithCaptureDedupeWindow(0)},
+		}),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -170,11 +173,12 @@ func TestSetupSentry_AutoReleaseInjected(t *testing.T) {
 
 	var captured []*sentry.Event
 	svc, err := New[testCtx, testClaims](context.Background(), Config{},
-		WithSentry(sentryTestDSN,
+		WithSentry(sentryTestDSN, SentryOptions{Setup: []sentrykit.Option{
 			sentrykit.WithBeforeSend(func(e *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 				captured = append(captured, e)
 				return nil
-			})),
+			}),
+		}}),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -195,12 +199,13 @@ func TestSetupSentry_ExplicitReleaseOverridesAuto(t *testing.T) {
 
 	var captured []*sentry.Event
 	svc, err := New[testCtx, testClaims](context.Background(), Config{},
-		WithSentry(sentryTestDSN,
+		WithSentry(sentryTestDSN, SentryOptions{Setup: []sentrykit.Option{
 			sentrykit.WithRelease("explicit-v2"),
 			sentrykit.WithBeforeSend(func(e *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 				captured = append(captured, e)
 				return nil
-			})),
+			}),
+		}}),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
