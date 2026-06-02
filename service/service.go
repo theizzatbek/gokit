@@ -77,7 +77,7 @@ type Service[T any, C any] struct {
 	otelMetricsShutdown func(context.Context) error
 
 	// otelLogsShutdown is non-nil iff WithOtel was passed AND
-	// WithoutOtelLogs was not. Flushes the OTLP log pipeline.
+	// OtelOptions.DisableLogs was false. Flushes the OTLP log pipeline.
 	otelLogsShutdown func(context.Context) error
 
 	// sentryShutdown is non-nil iff WithSentry was passed. Flushes

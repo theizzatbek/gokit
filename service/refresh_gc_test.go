@@ -229,7 +229,7 @@ func TestStartRefreshGC_WithSentry_SendsCheckIns(t *testing.T) {
 	}
 }
 
-func TestStartRefreshGC_WithoutSentryRefreshGCMonitor_NoCheckIns(t *testing.T) {
+func TestStartRefreshGC_DisableRefreshGCMonitor_NoCheckIns(t *testing.T) {
 	tr := installGCSentry(t)
 	store := &fakeStore{}
 	s := newServiceForGC(t, 5*time.Millisecond, store, nil)
