@@ -121,10 +121,15 @@ func matches(e Event, f Filter) bool {
 	if f.Outcome != "" && e.Outcome != f.Outcome {
 		return false
 	}
-	if !f.From.IsZero() && e.OccurredAt.Before(f.From) {
+	// Filter times get truncated to microsecond before comparison so
+	// callers can pass time.Now()-derived bounds (nanosecond precision)
+	// without missing events whose OccurredAt was already µs-truncated
+	// by [Logger.Log]. Matches the store-side precision auditpg gets
+	// from Postgres' timestamptz column automatically.
+	if !f.From.IsZero() && e.OccurredAt.Before(f.From.Truncate(time.Microsecond)) {
 		return false
 	}
-	if !f.To.IsZero() && e.OccurredAt.After(f.To) {
+	if !f.To.IsZero() && e.OccurredAt.After(f.To.Truncate(time.Microsecond)) {
 		return false
 	}
 	return true
