@@ -64,3 +64,59 @@ func (c Config) validate() error {
 	}
 	return nil
 }
+
+// validateNew is the entry-point validator that knows about Options.
+// When [WithAdaptive] is set, [Config.MaxConcurrent] MUST be 0 (the
+// adaptive layer owns capacity) and the adaptive sub-config is
+// validated separately.
+func validateNew(c Config, o *options) error {
+	if o.adaptive == nil {
+		return c.validate()
+	}
+	// Adaptive path: MaxConcurrent must NOT be set; the rest of
+	// Config is still checked (Name / MaxQueue / QueueTimeout).
+	if c.Name == "" {
+		return newError(CodeInvalidName, "bulkhead: Config.Name is required")
+	}
+	if c.MaxConcurrent != 0 {
+		return newError(CodeInvalidAdaptiveConfig,
+			"bulkhead: Config.MaxConcurrent must be 0 when WithAdaptive is set (adaptive owns capacity)")
+	}
+	if c.MaxQueue < 0 {
+		return newError(CodeInvalidMaxQueue,
+			"bulkhead: Config.MaxQueue must be >= 0")
+	}
+	if c.QueueTimeout < 0 {
+		return newError(CodeInvalidQueueTimeout,
+			"bulkhead: Config.QueueTimeout must be >= 0")
+	}
+	return o.adaptive.validate()
+}
+
+func (a *AdaptiveConfig) validate() error {
+	if a.Controller == nil {
+		return newError(CodeInvalidAdaptiveConfig,
+			"bulkhead: AdaptiveConfig.Controller is required")
+	}
+	if a.MinCapacity < 1 {
+		return newError(CodeInvalidAdaptiveConfig,
+			"bulkhead: AdaptiveConfig.MinCapacity must be >= 1")
+	}
+	if a.MaxCapacity < a.MinCapacity {
+		return newError(CodeInvalidAdaptiveConfig,
+			"bulkhead: AdaptiveConfig.MaxCapacity must be >= MinCapacity")
+	}
+	if a.InitialCap < a.MinCapacity || a.InitialCap > a.MaxCapacity {
+		return newError(CodeInvalidAdaptiveConfig,
+			"bulkhead: AdaptiveConfig.InitialCap must be within [MinCapacity, MaxCapacity]")
+	}
+	if a.TickInterval < 0 {
+		return newError(CodeInvalidAdaptiveConfig,
+			"bulkhead: AdaptiveConfig.TickInterval must be >= 0")
+	}
+	if a.WindowSize < 0 {
+		return newError(CodeInvalidAdaptiveConfig,
+			"bulkhead: AdaptiveConfig.WindowSize must be >= 0")
+	}
+	return nil
+}

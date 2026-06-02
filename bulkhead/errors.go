@@ -33,6 +33,11 @@ const (
 
 	// CodeInvalidQueueTimeout — Config.QueueTimeout < 0.
 	CodeInvalidQueueTimeout = "bulkhead_invalid_queue_timeout"
+
+	// CodeInvalidAdaptiveConfig — WithAdaptive's AdaptiveConfig
+	// failed validation (missing Controller; InitialCap or bounds
+	// out of range; Config.MaxConcurrent set alongside WithAdaptive).
+	CodeInvalidAdaptiveConfig = "bulkhead_invalid_adaptive_config"
 )
 
 // Error is the validation error type returned by [New]. It carries a
