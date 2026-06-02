@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/theizzatbek/gokit/breaker"
+	"github.com/theizzatbek/gokit/bulkhead"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
@@ -67,10 +68,21 @@ func (c *Client) send(ep resolvedEndpoint, req *http.Request) (*http.Response, e
 	start := time.Now()
 	resp, err := ep.httpClient.Do(req)
 	c.metrics.observe(ep.clientName, ep.endpointName, resp, err, time.Since(start))
-	if err != nil && errors.Is(err, breaker.ErrOpen) {
-		err = xerrs.Wrapf(err, xerrs.KindUnavailable,
-			codeForCircuitOpen(ep.clientName),
-			"apimap: client %q upstream unavailable (circuit open)", ep.clientName)
+	if err != nil {
+		switch {
+		case errors.Is(err, breaker.ErrOpen):
+			err = xerrs.Wrapf(err, xerrs.KindUnavailable,
+				codeForCircuitOpen(ep.clientName),
+				"apimap: client %q upstream unavailable (circuit open)", ep.clientName)
+		case errors.Is(err, bulkhead.ErrBulkheadFull):
+			err = xerrs.Wrapf(err, xerrs.KindUnavailable,
+				codeForBulkheadFull(ep.clientName),
+				"apimap: client %q concurrency cap reached", ep.clientName)
+		case errors.Is(err, bulkhead.ErrQueueTimeout):
+			err = xerrs.Wrapf(err, xerrs.KindTimeout,
+				codeForBulkheadQueueTimeout(ep.clientName),
+				"apimap: client %q bulkhead queue wait timed out", ep.clientName)
+		}
 	}
 	return resp, err
 }

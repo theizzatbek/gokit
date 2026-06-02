@@ -27,6 +27,7 @@ type rawClient struct {
 	DefaultHeaders map[string]string `yaml:"default_headers,omitempty"`
 	Auth           *rawAuth          `yaml:"auth,omitempty"`
 	Breaker        *rawBreaker       `yaml:"breaker,omitempty"`
+	Bulkhead       *rawBulkhead      `yaml:"bulkhead,omitempty"`
 	Endpoints      []rawEndpoint     `yaml:"endpoints"`
 }
 
@@ -41,6 +42,18 @@ type rawBreaker struct {
 	WindowSize        int           `yaml:"window_size,omitempty"`
 	OpenInterval      time.Duration `yaml:"open_interval,omitempty"`
 	HalfOpenMaxProbes int           `yaml:"half_open_max_probes,omitempty"`
+}
+
+// rawBulkhead is the optional concurrency-cap block per client.
+// Presence of the block enables the bulkhead — but unlike the breaker
+// block, MaxConcurrent is REQUIRED (it is the entire point — no
+// sensible default for "how much concurrency does this upstream
+// tolerate"). MaxQueue defaults to 0 (fail-fast); QueueTimeout
+// defaults to 0 (honour only caller ctx).
+type rawBulkhead struct {
+	MaxConcurrent int           `yaml:"max_concurrent"`
+	MaxQueue      int           `yaml:"max_queue,omitempty"`
+	QueueTimeout  time.Duration `yaml:"queue_timeout,omitempty"`
 }
 
 // rawAuth carries the YAML auth: block. type discriminator picks one

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/theizzatbek/gokit/breaker"
+	"github.com/theizzatbek/gokit/bulkhead"
 	"github.com/theizzatbek/gokit/clients/httpc"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
@@ -207,7 +208,15 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 			buildErrs = append(buildErrs, brErr)
 			continue
 		}
-		clientHTTP, err := buildHTTPClient(cl, nil, o, signFn, br)
+		// Same rule for the bulkhead: one per client, shared across
+		// endpoint-override clients. Stripe saturation halts every
+		// Stripe endpoint at once.
+		bh, bhErr := buildBulkheadFromYAML(cl, o)
+		if bhErr != nil {
+			buildErrs = append(buildErrs, bhErr)
+			continue
+		}
+		clientHTTP, err := buildHTTPClient(cl, nil, o, signFn, br, bh)
 		if err != nil {
 			buildErrs = append(buildErrs, err)
 			continue
@@ -223,7 +232,7 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 			}
 			epHTTP := clientHTTP
 			if ep.hasHTTPCOverride() {
-				epHTTP, err = buildHTTPClient(cl, ep, o, signFn, br)
+				epHTTP, err = buildHTTPClient(cl, ep, o, signFn, br, bh)
 				if err != nil {
 					buildErrs = append(buildErrs, err)
 					continue
@@ -318,7 +327,7 @@ func (s *signingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 // overrides. The observability options are passed through unchanged.
 // When signFn is non-nil, it is inserted as a transport-level signer
 // below httpc's retry layer so every attempt re-invokes the signer.
-func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*http.Request) error, br *breaker.Breaker) (*http.Client, error) {
+func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*http.Request) error, br *breaker.Breaker, bh *bulkhead.Bulkhead) (*http.Client, error) {
 	cfg := httpc.Config{
 		Timeout:     cl.Timeout,
 		BackoffBase: cl.BackoffBase,
@@ -369,7 +378,36 @@ func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*ht
 	if br != nil {
 		httpcOpts = append(httpcOpts, httpc.WithBreaker(br))
 	}
+	if bh != nil {
+		httpcOpts = append(httpcOpts, httpc.WithBulkhead(bh))
+	}
 	return httpc.New(cfg, httpcOpts...)
+}
+
+// buildBulkheadFromYAML materialises the per-client *bulkhead.Bulkhead
+// from the optional YAML `bulkhead:` block. Returns (nil, nil) when
+// the block is omitted (bulkhead disabled for this client). Logger
+// and Metrics inherit from the engine option — collectors disambiguate
+// via the `name` const label (= client name).
+func buildBulkheadFromYAML(cl *rawClient, o *options) (*bulkhead.Bulkhead, error) {
+	if cl.Bulkhead == nil {
+		return nil, nil
+	}
+	rb := cl.Bulkhead
+	cfg := bulkhead.Config{
+		Name:          cl.Name,
+		MaxConcurrent: rb.MaxConcurrent,
+		MaxQueue:      rb.MaxQueue,
+		QueueTimeout:  rb.QueueTimeout,
+		Logger:        o.logger,
+		Metrics:       o.metrics,
+	}
+	b, err := bulkhead.New(cfg)
+	if err != nil {
+		return nil, xerrs.Wrap(err, xerrs.KindValidation, CodeInvalidBulkhead,
+			"apimap: client "+cl.Name+": invalid bulkhead config")
+	}
+	return b, nil
 }
 
 // buildBreaker materialises the per-client *breaker.Breaker from the
