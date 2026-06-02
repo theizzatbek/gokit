@@ -16,6 +16,7 @@ import (
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	s3client "github.com/theizzatbek/gokit/clients/s3"
 	"github.com/theizzatbek/gokit/clients/webhooks"
+	"github.com/theizzatbek/gokit/cronmap"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/db/outbox"
 	"github.com/theizzatbek/gokit/fibermap"
@@ -35,6 +36,11 @@ type Service[T any, C any] struct {
 	Hasher  *auth.Hasher        // nil when Auth is nil
 	Outbox  *outbox.Worker      // nil unless WithOutbox + DB + NATSMap all wired
 	S3      *s3client.Client    // nil when Config.S3.Bucket == ""
+
+	// CronMap is the declarative cron scheduler built by [WithCronMap]
+	// from Config.CronMap.Path (or DefaultCronMapPath). nil when the
+	// option was not passed AND Config.CronMap is empty.
+	CronMap *cronmap.Runtime
 
 	// RateLimiter is the Redis-backed sliding-window limiter built by
 	// [WithRateLimit]. nil unless the option was passed AND Redis is

@@ -19,6 +19,7 @@ import (
 	"github.com/theizzatbek/gokit/clients/ratelimit"
 	redisclient "github.com/theizzatbek/gokit/clients/redis"
 	s3client "github.com/theizzatbek/gokit/clients/s3"
+	"github.com/theizzatbek/gokit/cronmap"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/db/outbox"
 	"github.com/theizzatbek/gokit/fibermap"
@@ -103,6 +104,9 @@ type options struct {
 	natsgwPath                 string
 	natsgwOpts                 []natsgw.Option
 	webhooksCfg                *WebhooksConfig
+	cronMapEnable              bool
+	cronMapEnv                 map[string]string
+	cronMapHandlers            map[string]cronmap.HandlerFn
 }
 
 // WithLogger overrides the auto-built slog.Logger.
