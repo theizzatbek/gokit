@@ -16,6 +16,7 @@ const (
 	DefaultNATSMapSubscribersPath = "subscribers.yaml"
 	DefaultNATSMapPublishersPath  = "publishers.yaml"
 	DefaultRoutesPath             = "routes.yaml"
+	DefaultCronMapPath            = "crons.yaml"
 )
 
 // Config is the env-driven service configuration. Compose into your own
@@ -33,6 +34,7 @@ type Config struct {
 	NATSMap NATSMapConfig   `envPrefix:"NATSMAP_"`
 	HTTPC   httpc.Config    `envPrefix:"HTTPC_"`
 	APIMap  APIMapConfig    `envPrefix:"APIMAP_"`
+	CronMap CronMapConfig   `envPrefix:"CRONMAP_"`
 	Routes  RoutesConfig    `envPrefix:"ROUTES_"`
 	Redis   RedisConfig     `envPrefix:"REDIS_"`
 	S3      s3client.Config `envPrefix:"S3_"`
@@ -117,6 +119,17 @@ type RedisConfig struct {
 
 // APIMapConfig — Enabled (or Path override) triggers apimap auto-build.
 type APIMapConfig struct {
+	Enabled bool   `env:"ENABLED"`
+	Path    string `env:"PATH"`
+}
+
+// CronMapConfig — Enabled (or Path override) triggers cronmap
+// auto-build. When Enabled is true and no override is set, the
+// default path [DefaultCronMapPath] is used (joined with ConfigsDir
+// if set). Missing default file is silently skipped (lets a service
+// add cron jobs later without forcing the file to exist). Explicit
+// Path is strict — a missing file produces an error.
+type CronMapConfig struct {
 	Enabled bool   `env:"ENABLED"`
 	Path    string `env:"PATH"`
 }

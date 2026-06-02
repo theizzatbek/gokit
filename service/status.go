@@ -22,7 +22,8 @@ type Status struct {
 	OTel        bool // WithOtel was passed
 	Sentry      bool // WithSentry was passed
 	RefreshGC   bool // WithRefreshGC was passed AND Auth is configured
-	Cron        int  // count of registered scheduler jobs
+	Cron        int  // count of registered scheduler jobs (service.WithCron)
+	CronMap     int  // count of jobs in cronmap.Runtime (WithCronMap)
 }
 
 // Status returns the current snapshot. Cheap (no locks taken for the
@@ -53,6 +54,9 @@ func (s *Service[T, C]) Status() Status {
 	if s.scheduler != nil {
 		st.Cron = s.scheduler.jobCount()
 	}
+	if s.CronMap != nil {
+		st.CronMap = len(s.CronMap.JobNames())
+	}
 	return st
 }
 
@@ -81,5 +85,6 @@ func (s *Service[T, C]) logReady() {
 		"sentry", st.Sentry,
 		"refresh_gc", st.RefreshGC,
 		"cron_jobs", st.Cron,
+		"cronmap_jobs", st.CronMap,
 	)
 }
