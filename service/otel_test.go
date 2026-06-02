@@ -50,7 +50,7 @@ func TestSetupOtel_WiresMiddlewareAndHTTPC(t *testing.T) {
 
 func TestWithOtel_StoresConfigOnOptions(t *testing.T) {
 	o := &options{}
-	WithOtel("payments", otelkit.WithServiceVersion("2.1.0"))(o)
+	WithOtel("payments", OtelOptions{Setup: []otelkit.Option{otelkit.WithServiceVersion("2.1.0")}})(o)
 	if o.otelServiceName != "payments" {
 		t.Errorf("otelServiceName = %q, want payments", o.otelServiceName)
 	}
