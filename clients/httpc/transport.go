@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/theizzatbek/gokit/breaker"
+	"github.com/theizzatbek/gokit/bulkhead"
 )
 
 // retryTransport is the kit's retry-on-transient-failure RoundTripper.
@@ -42,12 +43,12 @@ func (b *cancelOnCloseBody) Close() error {
 	return err
 }
 
-// rng is the package-level RNG used for backoff jitter. Tests verify
-// behaviour (counts, ordering), not exact delays, so a fixed seed is fine.
-var rng = mathrand.New(mathrand.NewPCG(1, 2))
-
 // computeBackoff returns the delay before the next retry attempt, given the
 // index of the failed attempt. Full-jitter exponential capped at backoffMax.
+//
+// Uses the top-level math/rand/v2 functions (thread-safe via per-CPU state)
+// rather than a package-level *Rand, which would race when multiple in-flight
+// requests retry concurrently through the same transport.
 func computeBackoff(attempt int, base, maxDelay time.Duration) time.Duration {
 	if base <= 0 {
 		return 0
@@ -58,7 +59,7 @@ func computeBackoff(attempt int, base, maxDelay time.Duration) time.Duration {
 	}
 	exp := float64(uint64(1) << uint(shift))
 	capped := time.Duration(math.Min(float64(base)*exp, float64(maxDelay)))
-	return time.Duration(rng.Float64() * float64(capped))
+	return time.Duration(mathrand.Float64() * float64(capped))
 }
 
 // ctxSleep sleeps for d, returning early with ctx.Err() if the context is
@@ -193,6 +194,14 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			// classified the upstream as down and any retry would
 			// just burn the per-request budget pointlessly.
 			if errors.Is(err, breaker.ErrOpen) {
+				return nil, err
+			}
+			// Bulkhead-full from the bulkheadTransport: the queue is
+			// already saturated; piling more retries on it makes it
+			// worse. Bail immediately. ErrQueueTimeout is NOT
+			// shortcut here — it is treated as a normal transient
+			// (the next attempt may succeed once the slot frees).
+			if errors.Is(err, bulkhead.ErrBulkheadFull) {
 				return nil, err
 			}
 			if attempt >= maxAttempts {

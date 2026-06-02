@@ -50,10 +50,12 @@ const (
 	CodeEnvVarMalformed     = "apimap_env_var_malformed"
 )
 
-// Breaker config-validation codes (returned from Engine.Build when the
-// YAML `breaker:` block fails breaker.New validation).
+// Breaker + bulkhead config-validation codes (returned from
+// Engine.Build when the YAML `breaker:` / `bulkhead:` blocks fail
+// breaker.New / bulkhead.New validation).
 const (
-	CodeInvalidBreaker = "apimap_invalid_breaker"
+	CodeInvalidBreaker  = "apimap_invalid_breaker"
+	CodeInvalidBulkhead = "apimap_invalid_bulkhead"
 )
 
 // codeForCircuitOpen builds the per-client circuit-open Code used when
@@ -62,6 +64,17 @@ const (
 // errors.Is(err, breaker.ErrOpen) still holds.
 func codeForCircuitOpen(client string) string {
 	return fmt.Sprintf("apimap_%s_circuit_open", client)
+}
+
+// codeForBulkheadFull / codeForBulkheadQueueTimeout build the
+// per-client codes used when the bulkhead refuses a request. The
+// wrapped Cause is bulkhead.ErrBulkheadFull / ErrQueueTimeout.
+func codeForBulkheadFull(client string) string {
+	return fmt.Sprintf("apimap_%s_bulkhead_full", client)
+}
+
+func codeForBulkheadQueueTimeout(client string) string {
+	return fmt.Sprintf("apimap_%s_bulkhead_queue_timeout", client)
 }
 
 // statusToKind maps an HTTP status code to the errs.Kind we surface from

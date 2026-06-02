@@ -40,6 +40,18 @@ func NewTransport(cfg Config, opts ...Option) (http.RoundTripper, error) {
 			failureFn: o.breakerFailureFn,
 		}
 	}
+	// Bulkhead sits ABOVE the breaker so an open breaker does not
+	// occupy a slot — the breakerTransport returns ErrOpen before
+	// reaching base, and the deferred release here fires on a slot
+	// that was never actually used. Bulkhead is still BELOW retry so
+	// each retry attempt Acquires + releases independently (a retry
+	// backoff sleep does not camp on a slot).
+	if o.bulkhead != nil {
+		base = &bulkheadTransport{
+			base:     base,
+			bulkhead: o.bulkhead,
+		}
+	}
 	cols := newCollectors(o.metrics)
 	retry := &retryTransport{
 		base:        base,

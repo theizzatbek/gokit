@@ -6,6 +6,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/theizzatbek/gokit/breaker"
+	"github.com/theizzatbek/gokit/bulkhead"
 )
 
 // Option configures the client beyond what Config covers.
@@ -18,6 +19,7 @@ type options struct {
 	skipRequestIDHeader bool
 	breaker             *breaker.Breaker
 	breakerFailureFn    func(*http.Response, error) bool
+	bulkhead            *bulkhead.Bulkhead
 }
 
 // WithLogger wires a slog.Logger used for retry-decision and retry-exhaustion
@@ -65,6 +67,27 @@ func WithBreaker(b *breaker.Breaker) Option {
 // No-op when WithBreaker was not set.
 func WithBreakerFailureClassifier(fn func(*http.Response, error) bool) Option {
 	return func(o *options) { o.breakerFailureFn = fn }
+}
+
+// WithBulkhead installs a concurrency-cap bulkhead between the retry
+// layer and the circuit breaker. Each retry attempt independently
+// Acquires a slot; release fires as soon as base.RoundTrip returns
+// (BEFORE the caller reads the body — slot tracks the network round-
+// trip, not the body lifetime).
+//
+// Rejection surfaces as *errs.Error: [CodeBulkheadFull]
+// (KindUnavailable, wraps [bulkhead.ErrBulkheadFull]) when the
+// MaxConcurrent+MaxQueue cap is reached, or [CodeBulkheadQueueTimeout]
+// (KindTimeout, wraps [bulkhead.ErrQueueTimeout]) when the configured
+// QueueTimeout fires. The retry layer recognises ErrBulkheadFull as
+// non-retryable; ErrQueueTimeout passes through as a normal transient.
+//
+// nil disables the bulkhead (the default). Shared across multiple
+// *http.Client instances via repeated WithBulkhead(b) — apimap uses
+// this to share one bulkhead between endpoint-override clients of
+// the same upstream.
+func WithBulkhead(b *bulkhead.Bulkhead) Option {
+	return func(o *options) { o.bulkhead = b }
 }
 
 // WithoutRequestIDHeader opts out of automatically setting

@@ -14,4 +14,17 @@ const (
 	// errors.Is(err, breaker.ErrOpen) holds; errs.HTTP(err) yields
 	// 503 with this code.
 	CodeCircuitOpen = "httpc_circuit_open"
+
+	// CodeBulkheadFull is the *errs.Error Code returned when a
+	// request is rejected because the concurrency-cap bulkhead
+	// installed via [WithBulkhead] is at MaxConcurrent + MaxQueue.
+	// Cause = [bulkhead.ErrBulkheadFull]; Kind = Unavailable
+	// (errs.HTTP → 503).
+	CodeBulkheadFull = "httpc_bulkhead_full"
+
+	// CodeBulkheadQueueTimeout is the *errs.Error Code returned when
+	// the bulkhead's QueueTimeout fires before a slot becomes
+	// available. Cause = [bulkhead.ErrQueueTimeout]; Kind = Timeout
+	// (errs.HTTP → 504).
+	CodeBulkheadQueueTimeout = "httpc_bulkhead_queue_timeout"
 )
