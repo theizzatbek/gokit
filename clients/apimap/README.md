@@ -86,6 +86,10 @@ clients:
       window_size: <int>                    # default 10 (bucket'ов в окне)
       open_interval: <duration>             # default 30s
       half_open_max_probes: <int>           # default 1
+    bulkhead:                               # опционально; presence включает concurrency cap
+      max_concurrent: <int>                 # обязательно, > 0
+      max_queue: <int>                      # default 0 (fail-fast)
+      queue_timeout: <duration>             # default 0 (только caller ctx)
     endpoints:
       - name: <string>                      # обязательно, уникально в client'е
         method: GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS
@@ -334,6 +338,55 @@ breaker-блок (например, `minimum_requests < failure_threshold`) ро
 Опущенный `breaker:` блок = breaker выключен (по умолчанию). Это opt-in
 feature — клиенты без блока ведут себя в точности как раньше.
 
+### Bulkhead per client
+
+Ортогональный к breaker resilience-pattern (см. [bulkhead](../../bulkhead/README.md)
+для деталей). `bulkhead:` блок ограничивает число **одновременных** запросов
+к апстриму:
+
+```yaml
+clients:
+  - name: stripe
+    base_url: https://api.stripe.com
+    timeout: 10s
+    max_retries: 3
+    bulkhead:
+      max_concurrent: 20         # макс. 20 in-flight
+      max_queue: 50              # ещё 50 могут ждать
+      queue_timeout: 100ms       # дольше не ждать
+    endpoints:
+      - {name: create_charge, method: POST, path: /v1/charges}
+      - {name: get_charge,    method: GET,  path: /v1/charges/{id}}
+```
+
+**Unit-of-failure = client.** Один `*bulkhead.Bulkhead` на `clients[].name`,
+расшаренный между endpoint'ами (включая endpoint'ы с httpc-override'ами).
+Saturation Stripe'а вызывает fast-fail на ВСЕХ его endpoint'ах сразу — это и
+есть цель.
+
+**Errors через `Decode`/`Exchange`/`Do`**:
+
+- Saturated (in-flight + queue cap exceeded): `*errs.Error{KindUnavailable,
+  Code: "apimap_<client>_bulkhead_full"}` с `Cause = bulkhead.ErrBulkheadFull`
+  → 503 через `errs.HTTP`.
+- `QueueTimeout` истёк: `*errs.Error{KindTimeout, Code:
+  "apimap_<client>_bulkhead_queue_timeout"}` с `Cause = ErrQueueTimeout` →
+  504.
+- `errors.Is(err, bulkhead.ErrBulkheadFull)` / `ErrQueueTimeout` работает через
+  цепочку Unwrap.
+
+**Совместимость с breaker**: оба блока могут стоять на одном клиенте. Breaker
+ловит "Stripe упал" (error rate), bulkhead — "Stripe заел" (concurrency). Они
+не пересекаются — bulkhead-слой ВЫШЕ breaker'а, так что открытый breaker не
+занимает слот.
+
+**Build-time валидация**: `max_concurrent <= 0` или `max_queue < 0` роняет
+`Build` с `apimap_invalid_bulkhead`. `max_queue: -1` (unlimited) намеренно
+не поддерживается — это и есть failure mode, который bulkhead предотвращает.
+
+Опущенный блок = bulkhead выключен (opt-in feature; baseline поведение без
+изменений).
+
 ### Типизированный Register* (опционально, runtime-checked)
 
 `RegisterRequest[T]` / `RegisterResponse[T]` опциональные, но, когда установлены, они bind'ят эндпоинт к специфическому Go-типу. `Decode[U]` / `Exchange[U,V]` потом проверяют, что generic'и вызова матчат регистрацию на runtime:
@@ -411,6 +464,9 @@ Type-mismatch'и возвращают `*errs.Error{Code: "apimap_unsupported_bod
 | `apimap_already_built` | `Build()` вызван дважды |
 | `apimap_invalid_breaker` | `breaker:` блок зафейлил `breaker.New` валидацию (например, `minimum_requests < failure_threshold`) |
 | `apimap_<client>_circuit_open` | Runtime: вызов через любой endpoint клиента short-circuit'нут открытым breaker'ом. Cause = `breaker.ErrOpen`. |
+| `apimap_invalid_bulkhead` | `bulkhead:` блок зафейлил `bulkhead.New` валидацию (например, `max_concurrent ≤ 0`) |
+| `apimap_<client>_bulkhead_full` | Runtime: bulkhead saturated. Cause = `bulkhead.ErrBulkheadFull`. |
+| `apimap_<client>_bulkhead_queue_timeout` | Runtime: `queue_timeout` сработал прежде, чем освободился слот. Cause = `bulkhead.ErrQueueTimeout`. |
 
 Runtime-коды из `Do`/`Decode`/`Exchange`: `apimap_unknown_endpoint`, `apimap_missing_path_var`, `apimap_unknown_path_var`, `apimap_encode_failed`, `apimap_decode_failed`, `apimap_unsupported_body_type`, `apimap_unsupported_decode_type`, плюс динамические per-endpoint status-коды выше.
 

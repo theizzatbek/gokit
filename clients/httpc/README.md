@@ -50,6 +50,7 @@ resp, err := c.Get("https://api.example.com/users/42")
 | `WithBaseTransport(http.RoundTripper)` | `http.DefaultTransport` | Override низа цепочки — кладите otel-instrumented или auth-injecting RoundTripper'ы под retry-логику |
 | `WithBreaker(*breaker.Breaker)` | nil (выключен) | Circuit breaker между retry и base. См. секцию ниже. |
 | `WithBreakerFailureClassifier(fn)` | 408/429/5xx + non-Canceled err | Override "что считается failure'ом" для breaker'а. No-op без `WithBreaker`. |
+| `WithBulkhead(*bulkhead.Bulkhead)` | nil (выключен) | Concurrency-cap между retry и breaker. См. секцию ниже. |
 
 ## Retry-семантика (hard-coded — no overrides)
 
@@ -169,6 +170,56 @@ slowClient, _ := httpc.New(httpc.Config{Timeout: 30*time.Second}, httpc.WithBrea
 
 См. [`breaker`](../../breaker/README.md) для конфига, состояний и observability.
 
+### Bulkhead (concurrency cap)
+
+Ортогональный resilience-pattern: breaker ловит "апстрим down", bulkhead —
+"апстрим жив но настолько медленный, что мои горутины кончаются". `WithBulkhead`
+вставляет [`bulkhead`](../../bulkhead/README.md)-слой ВЫШЕ breaker'а (так
+open-circuit не занимает слот) и НИЖЕ retry (каждая попытка acquires
+независимо, не камп'ит на слоте через backoff):
+
+```go
+import "github.com/theizzatbek/gokit/bulkhead"
+
+bh, _ := bulkhead.New(bulkhead.Config{
+    Name:          "stripe",
+    MaxConcurrent: 20,
+    MaxQueue:      50,
+    QueueTimeout:  100 * time.Millisecond,
+})
+
+c, _ := httpc.New(httpc.Config{Timeout: 10*time.Second, MaxRetries: 3},
+    httpc.WithBulkhead(bh),
+)
+
+resp, err := c.Get("https://api.stripe.com/...")
+switch {
+case errors.Is(err, bulkhead.ErrBulkheadFull):
+    // 503 fast-fail: Stripe сейчас перегружен (или ваш cap слишком тугой).
+case errors.Is(err, bulkhead.ErrQueueTimeout):
+    // 504: прождал больше QueueTimeout — фоллбэк лучше, чем продолжать.
+}
+```
+
+**Слот = время `base.RoundTrip`'а**, не время чтения body — `release()`
+срабатывает на `defer` ДО того, как caller прочитает response body. Медленный
+JSON-decoder не блокирует новые requests.
+
+**Retry**: `ErrBulkheadFull` non-retryable (queue уже saturated; retry сделает
+хуже). `ErrQueueTimeout` — normal transient (следующий attempt может
+проскочить).
+
+**Shared bulkhead** между несколькими `*http.Client`'ами — паттерн apimap'а
+(один upstream, разные httpc-настройки per endpoint, один bulkhead):
+
+```go
+bh, _ := bulkhead.New(cfg)
+fastClient, _ := httpc.New(httpc.Config{Timeout: 1*time.Second}, httpc.WithBulkhead(bh))
+slowClient, _ := httpc.New(httpc.Config{Timeout: 30*time.Second}, httpc.WithBulkhead(bh))
+```
+
+См. [`bulkhead`](../../bulkhead/README.md) для конфига и observability.
+
 ## Error-модель
 
 `*errs.Error` только на валидации конфигурации в `New`/`NewTransport`:
@@ -179,6 +230,8 @@ slowClient, _ := httpc.New(httpc.Config{Timeout: 30*time.Second}, httpc.WithBrea
 | `httpc_invalid_max_retries` | `MaxRetries < -1` |
 | `httpc_invalid_backoff` | `BackoffBase` / `BackoffMax` невалидны или `BackoffMax < BackoffBase` |
 | `httpc_circuit_open` | Запрос short-circuit'нут открытым breaker'ом из `WithBreaker`. Cause = `breaker.ErrOpen`; `errs.HTTP` → 503 Unavailable. |
+| `httpc_bulkhead_full` | Bulkhead saturated (in-flight + queue cap exceeded). Cause = `bulkhead.ErrBulkheadFull`; `errs.HTTP` → 503 Unavailable. |
+| `httpc_bulkhead_queue_timeout` | `QueueTimeout` сработал прежде, чем освободился слот. Cause = `bulkhead.ErrQueueTimeout`; `errs.HTTP` → 504 Timeout. |
 
 Runtime-ошибки — stdlib (`*url.Error`, `net.Error` и т.д.) — это и есть *смысл* возврата `*http.Client`. Если ваш handler хочет конвертировать "retry exhausted on 503" в domain-ошибку, оборачивайте руками:
 
