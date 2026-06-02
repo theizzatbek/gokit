@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/theizzatbek/gokit/breaker"
 	"github.com/theizzatbek/gokit/clients/httpc"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
@@ -198,7 +199,15 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 			buildErrs = append(buildErrs, signErr)
 			continue
 		}
-		clientHTTP, err := buildHTTPClient(cl, nil, o, signFn)
+		// One breaker per client (unit of failure = upstream). Endpoint
+		// overrides reuse the same instance so a Stripe outage trips
+		// every Stripe endpoint together.
+		br, brErr := buildBreaker(cl, o)
+		if brErr != nil {
+			buildErrs = append(buildErrs, brErr)
+			continue
+		}
+		clientHTTP, err := buildHTTPClient(cl, nil, o, signFn, br)
 		if err != nil {
 			buildErrs = append(buildErrs, err)
 			continue
@@ -214,7 +223,7 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 			}
 			epHTTP := clientHTTP
 			if ep.hasHTTPCOverride() {
-				epHTTP, err = buildHTTPClient(cl, ep, o, signFn)
+				epHTTP, err = buildHTTPClient(cl, ep, o, signFn, br)
 				if err != nil {
 					buildErrs = append(buildErrs, err)
 					continue
@@ -309,7 +318,7 @@ func (s *signingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 // overrides. The observability options are passed through unchanged.
 // When signFn is non-nil, it is inserted as a transport-level signer
 // below httpc's retry layer so every attempt re-invokes the signer.
-func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*http.Request) error) (*http.Client, error) {
+func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*http.Request) error, br *breaker.Breaker) (*http.Client, error) {
 	cfg := httpc.Config{
 		Timeout:     cl.Timeout,
 		BackoffBase: cl.BackoffBase,
@@ -357,5 +366,38 @@ func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*ht
 	if baseRT != nil {
 		httpcOpts = append(httpcOpts, httpc.WithBaseTransport(baseRT))
 	}
+	if br != nil {
+		httpcOpts = append(httpcOpts, httpc.WithBreaker(br))
+	}
 	return httpc.New(cfg, httpcOpts...)
+}
+
+// buildBreaker materialises the per-client *breaker.Breaker from the
+// optional YAML `breaker:` block. Returns (nil, nil) when the block
+// is omitted (breaker disabled for this client). Logger is inherited
+// from the engine option; Metrics is inherited too — breaker_state
+// gauges land on the same registry as the apimap collectors and are
+// disambiguated by the `name` const label (= client name).
+func buildBreaker(cl *rawClient, o *options) (*breaker.Breaker, error) {
+	if cl.Breaker == nil {
+		return nil, nil
+	}
+	rb := cl.Breaker
+	cfg := breaker.Config{
+		Name:              cl.Name,
+		FailureThreshold:  rb.FailureThreshold,
+		MinimumRequests:   rb.MinimumRequests,
+		WindowDuration:    rb.WindowDuration,
+		WindowSize:        rb.WindowSize,
+		OpenInterval:      rb.OpenInterval,
+		HalfOpenMaxProbes: rb.HalfOpenMaxProbes,
+		Logger:            o.logger,
+		Metrics:           o.metrics,
+	}
+	b, err := breaker.New(cfg)
+	if err != nil {
+		return nil, xerrs.Wrap(err, xerrs.KindValidation, CodeInvalidBreaker,
+			"apimap: client "+cl.Name+": invalid breaker config")
+	}
+	return b, nil
 }

@@ -50,6 +50,20 @@ const (
 	CodeEnvVarMalformed     = "apimap_env_var_malformed"
 )
 
+// Breaker config-validation codes (returned from Engine.Build when the
+// YAML `breaker:` block fails breaker.New validation).
+const (
+	CodeInvalidBreaker = "apimap_invalid_breaker"
+)
+
+// codeForCircuitOpen builds the per-client circuit-open Code used when
+// a request through the apimap client is short-circuited by an open
+// breaker. The wrapped Cause is the underlying breaker.ErrOpen, so
+// errors.Is(err, breaker.ErrOpen) still holds.
+func codeForCircuitOpen(client string) string {
+	return fmt.Sprintf("apimap_%s_circuit_open", client)
+}
+
 // statusToKind maps an HTTP status code to the errs.Kind we surface from
 // Decode/Exchange. Codes outside the explicit set fall back to Validation
 // (4xx) or Internal (5xx).

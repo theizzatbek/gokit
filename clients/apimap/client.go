@@ -3,6 +3,7 @@ package apimap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/theizzatbek/gokit/breaker"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
@@ -65,6 +67,11 @@ func (c *Client) send(ep resolvedEndpoint, req *http.Request) (*http.Response, e
 	start := time.Now()
 	resp, err := ep.httpClient.Do(req)
 	c.metrics.observe(ep.clientName, ep.endpointName, resp, err, time.Since(start))
+	if err != nil && errors.Is(err, breaker.ErrOpen) {
+		err = xerrs.Wrapf(err, xerrs.KindUnavailable,
+			codeForCircuitOpen(ep.clientName),
+			"apimap: client %q upstream unavailable (circuit open)", ep.clientName)
+	}
 	return resp, err
 }
 

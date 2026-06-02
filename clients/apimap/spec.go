@@ -26,7 +26,21 @@ type rawClient struct {
 	BackoffMax     time.Duration     `yaml:"backoff_max,omitempty"`
 	DefaultHeaders map[string]string `yaml:"default_headers,omitempty"`
 	Auth           *rawAuth          `yaml:"auth,omitempty"`
+	Breaker        *rawBreaker       `yaml:"breaker,omitempty"`
 	Endpoints      []rawEndpoint     `yaml:"endpoints"`
+}
+
+// rawBreaker is the optional circuit-breaker block per client. All
+// fields are optional; the zero value applies breaker defaults. The
+// presence of the block (even empty) enables the breaker for this
+// client; omission leaves the client breaker-less.
+type rawBreaker struct {
+	FailureThreshold  int           `yaml:"failure_threshold,omitempty"`
+	MinimumRequests   int           `yaml:"minimum_requests,omitempty"`
+	WindowDuration    time.Duration `yaml:"window_duration,omitempty"`
+	WindowSize        int           `yaml:"window_size,omitempty"`
+	OpenInterval      time.Duration `yaml:"open_interval,omitempty"`
+	HalfOpenMaxProbes int           `yaml:"half_open_max_probes,omitempty"`
 }
 
 // rawAuth carries the YAML auth: block. type discriminator picks one
