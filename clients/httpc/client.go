@@ -30,6 +30,16 @@ func NewTransport(cfg Config, opts ...Option) (http.RoundTripper, error) {
 	if base == nil {
 		base = http.DefaultTransport
 	}
+	// Circuit breaker sits BELOW retry so each attempt is consulted
+	// independently; when the breaker trips mid-retry, retry sees
+	// ErrOpen on the next attempt and bails immediately.
+	if o.breaker != nil {
+		base = &breakerTransport{
+			base:      base,
+			breaker:   o.breaker,
+			failureFn: o.breakerFailureFn,
+		}
+	}
 	cols := newCollectors(o.metrics)
 	retry := &retryTransport{
 		base:        base,
