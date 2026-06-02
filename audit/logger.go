@@ -85,6 +85,12 @@ func (l *Logger) Log(ctx context.Context, e Event) (string, error) {
 	if !suppliedOccurredAt {
 		e.OccurredAt = time.Now()
 	}
+	// Truncate to microseconds so the value stored in Postgres
+	// (timestamptz is µs-precision) round-trips identically through
+	// Query → Verify. Go's time.Now() has ns precision; RFC3339Nano in
+	// canonicalHashInput would otherwise include nanoseconds the
+	// database silently drops, breaking the chain on readback.
+	e.OccurredAt = e.OccurredAt.Truncate(time.Microsecond)
 	if e.ServiceName == "" {
 		e.ServiceName = l.cfg.ServiceName
 	}
@@ -120,7 +126,10 @@ func (l *Logger) Log(ctx context.Context, e Event) (string, error) {
 		// sequence is monotonic. Caller-supplied OccurredAt is
 		// preserved — fixtures sometimes craft a specific time.
 		if !suppliedOccurredAt {
-			e.OccurredAt = time.Now()
+			// Same µs-truncation rule as the auto-stamp above so the
+			// hash committed under the lock matches the Postgres-side
+			// timestamptz precision on readback.
+			e.OccurredAt = time.Now().Truncate(time.Microsecond)
 		}
 		prev, err := l.store.LastHash(ctx)
 		if err != nil {
