@@ -9,6 +9,40 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `db/sqb/` — three composable helpers for typed list endpoints:
+  - `ParseSort` / `ApplySort` / `Sort` validate a comma-separated
+    sort string (`"name,-created_at"`) against a caller-supplied
+    `map[apiName]sqlColumn` allowlist and append `ORDER BY` clauses.
+    Closes the SQL-injection gap documented on `Page` — list
+    handlers no longer hand-roll the safelist. Unknown field →
+    `*errs.Error{KindValidation, Code: sqb_invalid_sort}`.
+  - `InBatches[T](items, size, fn)` chunks a slice and calls fn per
+    chunk — for big `WHERE id IN (...)` under Postgres's
+    65535-parameter bind cap, OR to bound row-lock holding times in
+    bulk UPDATE/DELETE. Stops on first fn error; size ≤ 0 panics.
+  - `CursorPage{Limit, After}` + `Cursor{CreatedAt, ID}` give
+    base64-URL-safe keyset pagination over `(created_at, id)`
+    tuples. Drops into `RegisterHandlerWithQuery` like `Page`.
+    `Apply(b, "u.created_at", "u.id")` injects the keyset WHERE
+    AND LIMIT clauses; columns are SQL-spliced and MUST be
+    hardcoded by the handler. Bad cursor →
+    `*errs.Error{KindValidation, Code: sqb_invalid_cursor}`.
+- `db/lock/` — three additions around the advisory-lock primitive:
+  - `WithLogger(*slog.Logger)` / `WithMetrics(prometheus.Registerer)`
+    Options on `lock.New`. Logger records acquire / contended /
+    released / error at the right slog levels. Metrics:
+    `lock_acquires_total{name, outcome=acquired|contended|error}`
+    counter + `lock_hold_duration_seconds{name}` histogram (1ms to
+    10min buckets). One collector per Lock name — same convention
+    as breaker/bulkhead. `RunOnce` / `RunBlocking` accept the same
+    variadic Options.
+  - `(*Lock).TryAcquireXact(ctx, *db.Tx) (bool, error)` —
+    `pg_try_advisory_xact_lock` variant that auto-releases on tx
+    commit/rollback, no manual release. Shares the namespace with
+    session-level `TryAcquire`; nil tx → CodeAcquireFailed.
+  - `(*Lock).IsHeld(ctx) (bool, error)` — diagnostic helper for
+    /admin observability. TryAcquires + immediately releases; the
+    result is a snapshot, not a control-flow primitive.
 - `sentrykit/` — six additions around the existing bootstrap:
   process-wide Stats, per-fingerprint event rate limit,
   FiberMiddleware route filter, RecoverGo for background goroutines,

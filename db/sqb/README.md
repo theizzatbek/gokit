@@ -62,6 +62,84 @@ fibermap.RegisterHandlerWithQuery(eng, "items.list", h.List)
 
 **ORDER BY намеренно НЕ часть `Page`** — sort-колонки — это SQL-injection surface. Каждый list-эндпоинт должен решать свой собственный allowlist и добавлять `OrderBy("column DIR")` в builder сам.
 
+### `Sort` с allowlist — безопасный пользовательский sort
+
+`sqb.Sort` снимает ручную обвязку sort-allowlist с каждого хендлера. Парсит comma-separated строку (с `-` префиксом для DESC), валидирует против переданного safelist'а и приклеивает соответствующие `ORDER BY` клозы:
+
+```go
+type ListInput struct {
+    Query struct {
+        sqb.Page
+        Sort string `query:"sort"`
+    }
+}
+
+func (h *Handler) List(c *fibermap.Context[T], in ListInput) error {
+    b := sqb.Builder.Select(itemColumns...).From("items").
+        Where(sq.Eq{"user_id": c.Data.UserID})
+
+    b, err := sqb.Sort(b, in.Query.Sort, map[string]string{
+        "name":       "items.name",
+        "created_at": "items.created_at",
+    })
+    if err != nil { return err } // *errs.Error{KindValidation} → 400
+
+    items, err := sqb.QueryAll[Item](c.UserContext(),
+        h.db, in.Query.Page.Apply(b), scanItem)
+    // ...
+}
+// → GET /items?sort=-created_at,name → ORDER BY items.created_at DESC, items.name ASC
+```
+
+`ParseSort` и `ApplySort` — раздельные шаги, если нужно вмешаться между ними (например, проверить что не-разрешённый default-sort точно отсутствует).
+
+Неизвестное поле сурфейсится как `*errs.Error{Code: sqb_invalid_sort}` (400 через fibermap).
+
+## InBatches — chunked iteration
+
+`sqb.InBatches` разбивает большой slice на чанки фиксированного размера и вызывает fn на каждом. Удобно для bulk операций где `WHERE id IN (...)` упёрся бы в лимит pgx-параметров (Postgres bind cap ≈ 65535), или чтобы ограничить время удержания row-locks при массовом UPDATE:
+
+```go
+err := sqb.InBatches(ids, 1000, func(chunk []uuid.UUID) error {
+    _, err := sqb.Exec(ctx, db,
+        sqb.Builder.Delete("items").Where(sq.Eq{"id": chunk}))
+    return err
+})
+```
+
+Generic'ный, останавливается на первой ошибке. `size <= 0` — panic (programmer error).
+
+## CursorPage — keyset-пагинация
+
+Альтернатива offset-пагинации для feed'ов где новые записи постоянно вставляются (offset drift'ит — page 2 повторяет элементы из page 1). Cursor — opaque base64-кодированная пара `(created_at, id)`:
+
+```go
+type ListInput struct {
+    Query sqb.CursorPage
+}
+
+func (h *Handler) List(c *fibermap.Context[T], in ListInput) error {
+    b := sqb.Builder.Select(itemColumns...).From("items").
+        OrderBy("created_at DESC", "id DESC")
+
+    b, err := in.Query.Apply(b, "items.created_at", "items.id")
+    if err != nil { return err } // bad cursor → 400
+
+    items, err := sqb.QueryAll[Item](c.UserContext(), h.db, b, scanItem)
+    if err != nil { return err }
+
+    var next string
+    if n := len(items); n > 0 {
+        last := items[n-1]
+        next = sqb.Cursor{CreatedAt: last.CreatedAt, ID: last.ID}.Encode()
+    }
+    return c.JSON(fiber.Map{"items": items, "next": next})
+}
+// → GET /items?limit=20&after=<cursor>
+```
+
+`createdCol` / `idCol` хардкодятся в хендлере — это SQL-spliced, никогда от user input. Таблица должна быть упорядочена `(created_at DESC, id DESC)` для семантики "newest first". Bad cursor → `*errs.Error{Code: sqb_invalid_cursor}` (400).
+
 ## Типизированные scan-хелперы — `QueryAll[T]` / `QueryOne[T]`
 
 Generic-хелперы, которые сворачивают стандартный pgx scan boilerplate (`Query` → `defer Close` → `for rows.Next()` → `rows.Scan` → `rows.Err`) в один вызов:
