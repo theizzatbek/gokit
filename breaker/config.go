@@ -47,10 +47,43 @@ type Config struct {
 	OpenInterval time.Duration
 
 	// HalfOpenMaxProbes caps the number of concurrent probe calls
-	// allowed through while in half-open. ALL probes must succeed to
-	// transition back to closed; the first failure rotates back to
-	// open. Default 1.
+	// allowed through while in half-open. Default 1.
+	//
+	// By default ALL probes must succeed to close — the first
+	// failure rotates back to open. Set [HalfOpenSuccessThreshold]
+	// below MaxProbes to relax to "K of N must succeed" semantics
+	// for noisy upstreams.
 	HalfOpenMaxProbes int
+
+	// HalfOpenSuccessThreshold is the number of probe successes
+	// required inside one half-open cycle to transition back to
+	// closed. Default = HalfOpenMaxProbes (i.e. all-must-succeed —
+	// backward-compatible). Validate-time clamp:
+	// 1 <= Threshold <= MaxProbes.
+	//
+	// A failure still rotates straight back to open regardless of
+	// the running success count.
+	HalfOpenSuccessThreshold int
+
+	// OpenIntervalMultiplier applies an exponential growth factor
+	// to OpenInterval on every consecutive trip without a
+	// successful close in between. Default 1.0 (constant
+	// OpenInterval — back-compat).
+	//
+	// Example: OpenInterval=10s, Multiplier=3.0 → 10s, 30s, 90s,
+	// 270s, ... A successful close resets the multiplier so the next
+	// fresh trip falls back to the base OpenInterval.
+	OpenIntervalMultiplier float64
+
+	// OpenIntervalMax caps the exponentially-grown OpenInterval. 0
+	// = no cap (only meaningful when Multiplier > 1). Default 0.
+	OpenIntervalMax time.Duration
+
+	// OnStateChange fires inside the breaker mutex AFTER a transition.
+	// Use for alerts (Slack/PagerDuty), audit logs, span attrs.
+	// Panic-safe: the kit recovers from a panicking callback so a
+	// broken hook never blocks the breaker.
+	OnStateChange func(from, to State)
 
 	// IsFailure classifies a per-call error as a failure (true) or a
 	// success (false). Defaults to:
@@ -140,6 +173,27 @@ func (c Config) validate() error {
 		return newError(CodeInvalidHalfOpenMaxProbes,
 			"breaker: Config.HalfOpenMaxProbes must be >= 0 (0 applies default)")
 	}
+	// Compose effective HalfOpenMaxProbes for the threshold check.
+	mp := c.HalfOpenMaxProbes
+	if mp == 0 {
+		mp = defaultHalfOpenMaxProbes
+	}
+	if c.HalfOpenSuccessThreshold < 0 {
+		return newError(CodeInvalidHalfOpenMaxProbes,
+			"breaker: Config.HalfOpenSuccessThreshold must be >= 0 (0 applies default = MaxProbes)")
+	}
+	if c.HalfOpenSuccessThreshold > mp {
+		return newError(CodeInvalidHalfOpenMaxProbes,
+			"breaker: Config.HalfOpenSuccessThreshold must be <= HalfOpenMaxProbes")
+	}
+	if c.OpenIntervalMultiplier < 0 {
+		return newError(CodeInvalidOpenInterval,
+			"breaker: Config.OpenIntervalMultiplier must be >= 0 (0 applies default 1.0)")
+	}
+	if c.OpenIntervalMax < 0 {
+		return newError(CodeInvalidOpenInterval,
+			"breaker: Config.OpenIntervalMax must be >= 0 (0 = no cap)")
+	}
 	return nil
 }
 
@@ -176,6 +230,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.HalfOpenMaxProbes == 0 {
 		c.HalfOpenMaxProbes = defaultHalfOpenMaxProbes
+	}
+	if c.HalfOpenSuccessThreshold == 0 {
+		c.HalfOpenSuccessThreshold = c.HalfOpenMaxProbes
+	}
+	if c.OpenIntervalMultiplier == 0 {
+		c.OpenIntervalMultiplier = 1.0
 	}
 	if c.IsFailure == nil {
 		c.IsFailure = defaultIsFailure

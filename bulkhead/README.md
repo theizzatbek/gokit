@@ -100,13 +100,49 @@ func (b *Bulkhead) Acquire(ctx context.Context) (release func(), err error)
 // Execute is the ergonomic wrapper: Acquire + run + release.
 func (b *Bulkhead) Execute(ctx context.Context, fn func() error) error
 
-// Stats returns the cheap point-in-time snapshot (InFlight, Waiting, Capacity).
-type Stats struct { InFlight, Waiting, Capacity int }
+// Stats returns the cheap point-in-time snapshot (InFlight, Waiting,
+// Capacity) plus rolling LatencyP50 / LatencyP99 / AvgWait /
+// SampleSize aggregates over Config.StatsWindow (default 10s).
+type Stats struct {
+    InFlight   int
+    Waiting    int
+    Capacity   int
+    LatencyP50 time.Duration
+    LatencyP99 time.Duration
+    AvgWait    time.Duration
+    SampleSize int
+}
 func (b *Bulkhead) Stats() Stats
+
+// SetCapacity is the operator runbook lever; fires OnCapacityChange
+// when prev != next.
+func (b *Bulkhead) SetCapacity(n int)
 
 var ErrBulkheadFull = errors.New("bulkhead: full")
 var ErrQueueTimeout = errors.New("bulkhead: queue wait timeout")
 ```
+
+### `OnCapacityChange` hook
+
+```go
+Config{
+    OnCapacityChange: func(prev, next int) {
+        slack.Notify("bulkhead '%s': capacity %d → %d", cfg.Name, prev, next)
+    },
+}
+```
+
+Fires AFTER `SetCapacity` (manual или adaptive tick) applies a non-trivial change. No-op SetCapacity (same value) suppresses the callback. Panic-safe.
+
+### Enhanced `Stats()`
+
+`Stats()` теперь включает rolling latency + wait aggregates над `Config.StatsWindow` (default 10s):
+
+- `LatencyP50` / `LatencyP99` — p50/p99 in-flight call duration.
+- `AvgWait` — average queue wait time across all Acquires.
+- `SampleSize` — total observations within the window (для "no data" check).
+
+Cheap (one mu acquire + small slice scan; ring buffer capped at 4096 entries). Suitable для /healthz / capacity planning dashboards.
 
 `(*Bulkhead)(nil)` — safe no-op receiver: `Acquire` всегда permit'ит,
 `Execute` запускает `fn`, `Stats` возвращает zero value. Лет callsite'ам

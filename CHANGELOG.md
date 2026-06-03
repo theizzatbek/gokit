@@ -9,6 +9,38 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `breaker/` — five additions covering adaptive recovery, K-of-N
+  half-open semantics, operator overrides, lifecycle hook, and an
+  /admin-friendly snapshot.
+  - `Config.OpenIntervalMultiplier` (default 1.0 = constant —
+    back-compat) and `Config.OpenIntervalMax` (cap). Each
+    consecutive trip without a successful close in between
+    multiplies the effective open duration. Resets on close.
+  - `Config.HalfOpenSuccessThreshold` (default = `HalfOpenMaxProbes`,
+    i.e. legacy all-must-succeed) relaxes the half-open → closed
+    transition to "K of N must succeed". A failure still rotates
+    back to open regardless of running success count.
+  - `Config.OnStateChange(from, to State)` is the panic-safe
+    lifecycle hook fired inside the breaker mutex after every
+    transition.
+  - `Breaker.ForceOpen(d time.Duration)` jumps the breaker to open
+    and pins it through the supplied window — operator override
+    for maintenance or incident response. `Breaker.ForceClose()`
+    is the manual reset.
+  - `Breaker.Stats() Stats` returns `{State, Generation,
+    WindowRequests, WindowFailures, HalfOpenInFlight,
+    HalfOpenSucceeded, OpenedAt, RemainingOpen, ConsecutiveTrips,
+    CurrentOpenInterval, ForcedOpenUntil}`. One mu acquire;
+    nil-receiver safe.
+- `bulkhead/` — two additions paralleling the breaker shape.
+  - `Config.OnCapacityChange(prev, next int)` fires inside
+    `SetCapacity` (manual or adaptive) on a non-trivial change.
+    Panic-safe.
+  - `Stats()` now exposes rolling `LatencyP50` / `LatencyP99` /
+    `AvgWait` / `SampleSize` over `Config.StatsWindow` (default
+    10s). Always-on (independent of `WithAdaptive`); backed by a
+    bounded ring buffer (max 4096 entries) so /healthz reads stay
+    cheap.
 - `clients/webhooks/` — nine production-quality additions around the
   Worker. Outbound flow gets per-target circuit breakers, custom
   retry policy, lifecycle hooks, per-attempt timeout, panic
