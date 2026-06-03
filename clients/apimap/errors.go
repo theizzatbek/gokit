@@ -21,6 +21,7 @@ const (
 	CodeInvalidEncode             = "apimap_invalid_encode"
 	CodeInvalidDecode             = "apimap_invalid_decode"
 	CodeRegisteredEndpointMissing = "apimap_registered_endpoint_missing"
+	CodeUnknownClient             = "apimap_unknown_client"
 )
 
 // Runtime error codes returned from Do / Decode / Exchange (the
