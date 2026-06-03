@@ -48,10 +48,11 @@ type runConfig struct {
 	readinessCheckers []Checker
 	readinessOpts     []ReadinessOption
 
-	withReqLog      bool
-	reqLog          *slog.Logger
-	reqLogSkipPaths []string
-	noReqLog        bool
+	withReqLog        bool
+	reqLog            *slog.Logger
+	reqLogSkipPaths   []string
+	reqLogSlowThresh  time.Duration
+	noReqLog          bool
 
 	noRequestID bool
 
@@ -60,6 +61,17 @@ type runConfig struct {
 	noMetrics       bool
 	metricsReg      prometheus.Registerer
 	metricsGatherer prometheus.Gatherer
+
+	// New middlewares (all opt-in).
+	corsCfg            *CORSConfig
+	rateLimitRPS       float64
+	rateLimitBurst     int
+	rateLimitSkip      []string
+	bodyLimit          int
+	compressionLevel   CompressionLevel
+	compressionEnabled bool
+	trustedProxies     []string
+	notFoundHandler    fiber.Handler
 }
 
 // WithAddr overrides the listen address. When unset, Run picks up the
@@ -326,6 +338,104 @@ func WithoutHealthCheck() RunOption {
 	}
 }
 
+// WithCORS installs the [CORS] middleware on the App level (BEFORE
+// WithUse handlers). Pass a zero CORSConfig for kit defaults (allow
+// any origin, common methods/headers).
+func WithCORS(cfg ...CORSConfig) RunOption {
+	return func(c *runConfig) {
+		final := CORSConfig{}
+		if len(cfg) > 0 {
+			final = cfg[0]
+		}
+		c.corsCfg = &final
+	}
+}
+
+// WithRateLimit installs an in-process IP-keyed token-bucket rate
+// limiter at the App level. rps is sustained requests per second per
+// IP; burst is the bucket size. skipPaths defaults to
+// `/healthz, /readyz, /metrics` so k8s probes always pass.
+//
+// In-process limit — for multi-replica deployments use the
+// fiber/middleware/limiter Storage pattern with Redis backing via
+// [WithUse].
+func WithRateLimit(rps float64, burst int, skipPaths ...string) RunOption {
+	return func(c *runConfig) {
+		c.rateLimitRPS = rps
+		c.rateLimitBurst = burst
+		if len(skipPaths) > 0 {
+			c.rateLimitSkip = skipPaths
+		}
+	}
+}
+
+// WithBodyLimit installs a Fiber-level body-size cap. Requests with
+// Content-Length > maxBytes (or a body that exceeds it mid-read)
+// surface as 413 Request Entity Too Large.
+//
+// Sets fiber.Config.BodyLimit so the cap fires inside Fiber's parser
+// BEFORE the body reaches the handler — defence-in-depth against
+// huge-upload attacks.
+func WithBodyLimit(maxBytes int) RunOption {
+	return func(c *runConfig) { c.bodyLimit = maxBytes }
+}
+
+// WithCompression installs gzip/deflate response compression based
+// on the request's Accept-Encoding header. Default level is
+// CompressionBestSpeed — minimises CPU at modest size cost.
+func WithCompression(level ...CompressionLevel) RunOption {
+	return func(c *runConfig) {
+		c.compressionEnabled = true
+		if len(level) > 0 {
+			c.compressionLevel = level[0]
+		} else {
+			c.compressionLevel = CompressionBestSpeed
+		}
+	}
+}
+
+// WithTrustedProxies enables Fiber's proxy-header trust path —
+// `c.IP()` returns the rightmost address from X-Forwarded-For (or
+// configured ProxyHeader) only if the immediate hop's IP is in the
+// supplied CIDR allowlist. Without this, c.IP() returns the TCP
+// peer address (typically the load balancer's IP) — bad for IP-based
+// rate limiting / audit logs.
+//
+// Example:
+//
+//	fibermap.WithTrustedProxies("10.0.0.0/8", "192.168.0.0/16")
+//
+// Pass at least the cluster's pod CIDR and any load balancer's
+// egress range.
+func WithTrustedProxies(cidrs ...string) RunOption {
+	return func(c *runConfig) { c.trustedProxies = cidrs }
+}
+
+// WithReqLogSlowThresholdOption raises the RequestLogger's level
+// based on per-request latency:
+//
+//   - latency >= threshold → Warn
+//   - latency < threshold  → Debug
+//   - status >= 500        → Error (always)
+//
+// Default 0 = no threshold (every non-5xx request logged at Info —
+// legacy behaviour).
+//
+// Plays nicely with WithRequestLogger — pass both: WithRequestLogger
+// supplies the logger + skipPaths, this option adds the level split.
+func WithReqLogSlowThresholdOption(d time.Duration) RunOption {
+	return func(c *runConfig) { c.reqLogSlowThresh = d }
+}
+
+// WithNotFoundHandler installs a catch-all handler for unmatched
+// routes (404). Default = Fiber's plain `404 Not Found`. The kit
+// ships [NotFoundJSON] as a JSON-shape default.
+//
+//	eng.Run(fibermap.WithNotFoundHandler(fibermap.NotFoundJSON()))
+func WithNotFoundHandler(h fiber.Handler) RunOption {
+	return func(c *runConfig) { c.notFoundHandler = h }
+}
+
 // Run is the one-shot launcher. It creates (or uses) a fiber.App,
 // installs Fiber-level middlewares, loads the YAML route tree
 // (default "routes.yaml" on disk), mounts the engine, and blocks
@@ -381,12 +491,28 @@ func (e *Engine[T]) Run(opts ...RunOption) error {
 		cfg.uses = append([]fiber.Handler{RequestID()}, cfg.uses...)
 	}
 
-	var app *fiber.App
+	// Materialise the Fiber config by merging caller-supplied fields
+	// with kit-driven overrides (BodyLimit, TrustedProxies). Caller's
+	// explicit value wins on conflict.
+	var fiberCfg fiber.Config
 	if cfg.fiberConfig != nil {
-		app = fiber.New(*cfg.fiberConfig)
-	} else {
-		app = fiber.New()
+		fiberCfg = *cfg.fiberConfig
 	}
+	if cfg.bodyLimit > 0 && fiberCfg.BodyLimit == 0 {
+		fiberCfg.BodyLimit = cfg.bodyLimit
+	}
+	if len(cfg.trustedProxies) > 0 {
+		fiberCfg.EnableTrustedProxyCheck = true
+		if len(fiberCfg.TrustedProxies) == 0 {
+			fiberCfg.TrustedProxies = cfg.trustedProxies
+		} else {
+			fiberCfg.TrustedProxies = append(fiberCfg.TrustedProxies, cfg.trustedProxies...)
+		}
+		if fiberCfg.ProxyHeader == "" {
+			fiberCfg.ProxyHeader = fiber.HeaderXForwardedFor
+		}
+	}
+	app := fiber.New(fiberCfg)
 
 	// Health check registered FIRST so it bypasses every middleware
 	// (auth, ContextBuilder, etc). The route handler doesn't call
@@ -405,8 +531,27 @@ func (e *Engine[T]) Run(opts ...RunOption) error {
 	if cfg.withRecover {
 		app.Use(Recover(cfg.recoverLog))
 	}
+	// CORS goes BEFORE most other middlewares so preflight (OPTIONS)
+	// short-circuits without engaging rate limit / auth / logger.
+	if cfg.corsCfg != nil {
+		app.Use(CORS(*cfg.corsCfg))
+	}
+	if cfg.compressionEnabled {
+		app.Use(Compression(cfg.compressionLevel))
+	}
 	if cfg.withReqLog {
-		app.Use(RequestLogger(cfg.reqLog, cfg.reqLogSkipPaths...))
+		opts := []RequestLoggerOption{WithReqLogSkipPaths(cfg.reqLogSkipPaths...)}
+		if cfg.reqLogSlowThresh > 0 {
+			opts = append(opts, WithReqLogSlowThreshold(cfg.reqLogSlowThresh))
+		}
+		app.Use(RequestLoggerWithOptions(cfg.reqLog, opts...))
+	}
+	if cfg.rateLimitRPS > 0 {
+		skip := cfg.rateLimitSkip
+		if skip == nil {
+			skip = []string{"/healthz", "/readyz", "/metrics"}
+		}
+		app.Use(rateLimitByIP(cfg.rateLimitRPS, cfg.rateLimitBurst, skip))
 	}
 	if cfg.metricsPath != "" {
 		if cfg.metricsReg != nil && cfg.metricsGatherer != nil {
@@ -442,6 +587,12 @@ func (e *Engine[T]) Run(opts ...RunOption) error {
 
 	if err := e.Mount(app); err != nil {
 		return err
+	}
+
+	// Catch-all 404 handler — registered AFTER Mount so it covers
+	// every path that no engine route claimed.
+	if cfg.notFoundHandler != nil {
+		app.Use(cfg.notFoundHandler)
 	}
 
 	if cfg.disableSignals || cfg.shutdownTimeout <= 0 {

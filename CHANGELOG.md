@@ -9,6 +9,36 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `fibermap/` — seven opt-in middleware/RunOption additions covering
+  common production HTTP needs: CORS, IP-keyed rate limit, body size
+  cap, response compression, trusted proxies, slow-request level
+  promotion, and a JSON-shape 404 catch-all.
+  - `WithCORS(cfg...)` + `CORS(cfg...)` middleware wrapping
+    `fiber/middleware/cors` with kit defaults (any origin, common
+    methods/headers, 12h preflight cache).
+  - `WithRateLimit(rps, burst, skipPaths...)` installs an in-process
+    IP-keyed token-bucket. Skips `/healthz`, `/readyz`, `/metrics`
+    by default. For multi-replica use the Redis-backed limiter via
+    `WithUse`.
+  - `WithBodyLimit(maxBytes)` sets `fiber.Config.BodyLimit` so the
+    cap fires inside Fiber's parser BEFORE the body reaches the
+    handler. `BodyLimit(n) fiber.Handler` is the standalone
+    middleware for stricter subtree caps.
+  - `WithCompression(level...)` installs gzip/deflate response
+    compression. `Compression(level)` middleware exposed directly;
+    `CompressionLevel` constants.
+  - `WithTrustedProxies(cidrs...)` enables
+    `fiber.Config.EnableTrustedProxyCheck` so `c.IP()` returns the
+    `X-Forwarded-For` head only when the immediate hop is in the
+    allowlist. Auto-sets `ProxyHeader` to `X-Forwarded-For`.
+  - `RequestLoggerWithOptions(logger, opts...)` is the new
+    option-driven access logger; `WithReqLogSlowThreshold(d)`
+    promotes slow requests to Warn, demotes fast ones to Debug;
+    5xx always stays Error. `WithReqLogSlowThresholdOption(d)` is
+    the matching `RunOption`. `RequestLogger(logger, skipPaths...)`
+    stays as the back-compat wrapper.
+  - `WithNotFoundHandler(h)` installs a catch-all 404. Kit ships
+    `NotFoundJSON()` for `{code: "not_found", message, path}`.
 - `cronmap/` — six additions around the existing scheduler: per-job
   retry policy, lifecycle hooks, /admin-friendly Stats() snapshot,
   manual TriggerJob + NextRun prediction, and per-job Pause/Resume.

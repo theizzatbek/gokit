@@ -342,6 +342,34 @@ app.Use(fibermap.SecurityHeaders(
 
 `service.New` авто-устанавливает middleware с defaults; передайте `service.WithoutSecurityHeaders` или `service.WithSecurityHeaders(opts...)`, чтобы отключить или кастомизировать.
 
+## App-level middleware bundle
+
+Под `Run()` встроены опт-ин middleware'ы. Каждый отдельный `RunOption`:
+
+```go
+eng.Run(
+    fibermap.WithCORS(),                                          // any origin, common methods/headers
+    fibermap.WithRateLimit(50, 100, "/healthz", "/readyz"),       // 50 rps, burst 100, IP-keyed
+    fibermap.WithBodyLimit(10 << 20),                             // 10 MiB cap → 413
+    fibermap.WithCompression(fibermap.CompressionBestSpeed),      // gzip/deflate
+    fibermap.WithTrustedProxies("10.0.0.0/8", "192.168.0.0/16"),  // c.IP() respects X-Forwarded-For
+    fibermap.WithReqLogSlowThresholdOption(500 * time.Millisecond),
+    fibermap.WithNotFoundHandler(fibermap.NotFoundJSON()),
+)
+```
+
+| Опция | Эффект |
+|---|---|
+| `WithCORS(cfg...)` | Установить CORS-middleware (kit defaults: any origin, common methods/headers). Конфиг — `CORSConfig{AllowOrigins, AllowMethods, AllowHeaders, AllowCredentials, MaxAge}`. |
+| `WithRateLimit(rps, burst, skipPaths...)` | In-process IP-keyed token-bucket. `/healthz` / `/readyz` / `/metrics` skipped by default. Для multi-replica — используйте Redis-backed limiter через `WithUse`. |
+| `WithBodyLimit(maxBytes)` | Body > maxBytes → 413. Устанавливает `fiber.Config.BodyLimit` (fail в parser ДО handler'а). |
+| `WithCompression(level...)` | gzip/deflate response compression based on Accept-Encoding. Default `CompressionBestSpeed`. |
+| `WithTrustedProxies(cidrs...)` | Enable `fiber.Config.EnableTrustedProxyCheck` + `TrustedProxies` so `c.IP()` returns `X-Forwarded-For` only от trusted hops. Production-must при работе за load balancer. |
+| `WithReqLogSlowThresholdOption(d)` | RequestLogger: latency < d → Debug, ≥ d → Warn, 5xx → Error always. Default = legacy Info на всех. |
+| `WithNotFoundHandler(h)` | Catch-all 404. Kit ships `NotFoundJSON()` для kit-style JSON-shape `{code, message, path}`. |
+
+CORS / Compression устанавливаются BEFORE rate limit / auth — preflight `OPTIONS` short-circuits без engagement chain'а.
+
 ## Тестирование
 
 Используйте `fibermap/fibermaptest` для assertion'ов над `Engine.Routes()` (route-inventory проверки). Для request-level тестов используйте `Engine.Mount(app)` на свежем `*fiber.App` и драйвите `app.Test(req)`.
