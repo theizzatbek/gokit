@@ -54,17 +54,31 @@ func NewTransport(cfg Config, opts ...Option) (http.RoundTripper, error) {
 	}
 	cols := newCollectors(o.metrics)
 	retry := &retryTransport{
-		base:        base,
-		timeout:     cfg.Timeout,
-		maxRetries:  cfg.MaxRetries,
-		backoffBase: cfg.BackoffBase,
-		backoffMax:  cfg.BackoffMax,
-		logger:      o.logger,
-		collectors:  cols,
+		base:               base,
+		timeout:            cfg.Timeout,
+		maxRetries:         cfg.MaxRetries,
+		backoffBase:        cfg.BackoffBase,
+		backoffMax:         cfg.BackoffMax,
+		logger:             o.logger,
+		collectors:         cols,
+		classifier:         o.retryClassifier,
+		statusCodes:        o.retryStatusCodes,
+		retryNonIdempotent: o.retryNonIdempotent,
+		idempotencyKeyHdr:  o.idempotencyKeyHdr,
 	}
 	var top http.RoundTripper = retry
 	if cols != nil {
 		top = &metricsTransport{base: retry, collectors: cols}
+	}
+	// User middleware chain — applied in REVERSE so the FIRST entry
+	// in WithMiddleware sees the request FIRST (outermost wrapper).
+	for i := len(o.middleware) - 1; i >= 0; i-- {
+		if mw := o.middleware[i]; mw != nil {
+			top = mw(top)
+		}
+	}
+	if o.beforeRequest != nil || o.afterResponse != nil {
+		top = &hookTransport{base: top, before: o.beforeRequest, after: o.afterResponse}
 	}
 	if !o.skipRequestIDHeader {
 		top = &requestIDTransport{base: top}

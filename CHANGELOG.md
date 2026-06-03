@@ -9,6 +9,39 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `clients/httpc/` — retry-policy customization, middleware chain,
+  transport shortcuts, lifecycle hooks.
+  - `WithRetryClassifier(func(*http.Request, *http.Response, error) bool)`
+    overrides the kit's default decision rule. Honoured for BOTH the
+    network-error path and the status path — a custom classifier can
+    veto a transient network failure (e.g. don't retry
+    context.Canceled-shaped errors that bubble through a third-party
+    transport).
+  - `WithRetryStatusCodes(...int)` atomically replaces the
+    transient-status set (default `408, 429, 500, 502, 503, 504`).
+    Useful when the caller handles 429 with its own rate-limit
+    replay.
+  - `IsDefaultRetryableStatus(int) bool` exposes the default status
+    set as a building block for `WithRetryClassifier` (add to the
+    default rather than replacing it).
+  - `WithRetryOnNonIdempotent(bool)` and
+    `WithIdempotencyKeyHeader(name string)` unlock POST/PATCH retry.
+    The header form is Stripe-style — retry happens only when the
+    outbound request carries the named header.
+  - `WithMiddleware(...func(http.RoundTripper) http.RoundTripper)`
+    appends RoundTripper decorators layered ABOVE retry+metrics,
+    BELOW the X-Request-ID stamp. Applied in reverse so the first
+    middleware is the outermost (matches stdlib middleware
+    conventions).
+  - `WithBeforeRequest(func(*http.Request))` /
+    `WithAfterResponse(func(req, resp, err, elapsed))` are short-API
+    hooks over `WithMiddleware` for header stamping / audit logging.
+    Multiple calls — last wins.
+  - `WithProxy(*url.URL)` / `WithDialer(...)` / `WithTLSConfig(*tls.Config)`
+    populate a shared `*http.Transport`. Compose into one Transport
+    via repeated calls instead of each replacing the previous.
+    Explicit `WithBaseTransport` with a non-`*http.Transport` (otel
+    wrapper) wins — shortcuts no-op silently.
 - `clients/nats/` — five additions covering handler resilience, sync
   consumption, and federation.
   - `WithErrorClassifier(func(error) AckAction)` — declarative

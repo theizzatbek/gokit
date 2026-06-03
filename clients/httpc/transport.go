@@ -27,6 +27,60 @@ type retryTransport struct {
 	backoffMax  time.Duration
 	logger      *slog.Logger
 	collectors  *collectors
+
+	// Custom retry policy. classifier is the override that wins
+	// over the default rule when non-nil. statusCodes overrides
+	// just the transient-status set used by the default classifier.
+	// retryNonIdempotent unlocks POST/PATCH retry unconditionally.
+	// idempotencyKeyHdr unlocks POST/PATCH retry when the request
+	// carries the named header.
+	classifier         func(*http.Request, *http.Response, error) bool
+	statusCodes        map[int]struct{}
+	retryNonIdempotent bool
+	idempotencyKeyHdr  string
+}
+
+// shouldRetry consults the configured policy. order:
+//
+//  1. method-eligibility (idempotent / WithRetryOnNonIdempotent /
+//     idempotency-key header)
+//  2. WithRetryClassifier (when set) — full override
+//  3. default classifier (network err / configured status set)
+func (t *retryTransport) shouldRetry(req *http.Request, resp *http.Response, err error) bool {
+	if !t.methodEligible(req) {
+		return false
+	}
+	if t.classifier != nil {
+		return t.classifier(req, resp, err)
+	}
+	if err != nil {
+		return true
+	}
+	if resp == nil {
+		return true
+	}
+	if t.statusCodes != nil {
+		_, ok := t.statusCodes[resp.StatusCode]
+		return ok
+	}
+	return isRetryableStatus(resp.StatusCode)
+}
+
+// methodEligible reports whether the request's method permits retry
+// under the configured policy. POST/PATCH unlock when
+// retryNonIdempotent is on OR when idempotencyKeyHdr is set AND the
+// request carries that header.
+func (t *retryTransport) methodEligible(req *http.Request) bool {
+	if isIdempotent(req.Method) {
+		return true
+	}
+	if t.retryNonIdempotent {
+		return true
+	}
+	if t.idempotencyKeyHdr != "" && req.Header.Get(t.idempotencyKeyHdr) != "" {
+		return true
+	}
+	return false
 }
 
 // cancelOnCloseBody chains the per-attempt context's cancel() to the response
@@ -103,6 +157,17 @@ func isRetryableStatus(status int) bool {
 	return false
 }
 
+// IsDefaultRetryableStatus exposes the kit's default transient-status
+// set (408, 429, 500, 502, 503, 504). Use as a building block inside
+// WithRetryClassifier when you want to add to (rather than replace)
+// the default rule:
+//
+//	httpc.WithRetryClassifier(func(req, resp, err) bool {
+//	    if err != nil { return true }
+//	    return resp != nil && (resp.StatusCode == 423 || httpc.IsDefaultRetryableStatus(resp.StatusCode))
+//	})
+func IsDefaultRetryableStatus(status int) bool { return isRetryableStatus(status) }
+
 // retryAfter returns the duration the response advises waiting, or 0 if no
 // usable header is present. Cap is applied by the caller.
 func retryAfter(resp *http.Response) time.Duration {
@@ -169,7 +234,7 @@ func classify(resp *http.Response, err error, ra time.Duration) string {
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	maxAttempts := t.maxRetries
-	if !isIdempotent(req.Method) {
+	if !t.methodEligible(req) {
 		maxAttempts = 0
 	}
 	for attempt := 0; attempt <= maxAttempts; attempt++ {
@@ -215,6 +280,11 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				}
 				return nil, err
 			}
+			// Honour the configured retry classifier — it can veto
+			// even network errors (e.g. "do not retry context.Canceled").
+			if !t.shouldRetry(req, nil, err) {
+				return nil, err
+			}
 			// If the body cannot be replayed, stop retrying and return the error.
 			if !canReplay(req) {
 				return nil, err
@@ -234,7 +304,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 			continue
 		}
-		if !isRetryableStatus(resp.StatusCode) {
+		if !t.shouldRetry(req, resp, nil) {
 			resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 			return resp, nil
 		}
