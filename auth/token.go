@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -23,17 +24,31 @@ type engineConfig struct {
 }
 
 // engine is the internal Sign/Verify implementation. It is parameterised by
-// the project's custom claim type C.
+// the project's custom claim type C. Keys live behind an atomic.Pointer so
+// Auth.RotateKeys can swap them under concurrent Sign/Verify without locks.
 type engine[C any] struct {
-	cfg engineConfig
+	cfg  engineConfig
+	keys atomic.Pointer[KeySet]
 }
 
 func newEngine[C any](cfg engineConfig) *engine[C] {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &engine[C]{cfg: cfg}
+	keys := cfg.Keys
+	cfg.Keys = nil
+	e := &engine[C]{cfg: cfg}
+	e.keys.Store(keys)
+	return e
 }
+
+// keySet returns the live KeySet via an atomic load. Concurrent
+// sign/verify never blocks against RotateKeys.
+func (e *engine[C]) keySet() *KeySet { return e.keys.Load() }
+
+// rotateKeys swaps in a fresh KeySet. Validation happens on the caller
+// side (Auth.RotateKeys) — engine just owns the atomic slot.
+func (e *engine[C]) rotateKeys(ks *KeySet) { e.keys.Store(ks) }
 
 // sign serializes claims and returns the JWT string. Header kid/alg are taken
 // from the active KeySet entry. Issuer/Audience are populated from engineConfig
@@ -45,7 +60,7 @@ func (e *engine[C]) sign(c Claims[C]) (string, error) {
 	if len(c.Audience) == 0 && len(e.cfg.Audience) > 0 {
 		c.Audience = append([]string(nil), e.cfg.Audience...)
 	}
-	active := e.cfg.Keys.active
+	active := e.keySet().active
 	if active.Priv == nil {
 		return "", xerrs.Internal("no_active_signing_key", "key set has no active private key")
 	}
@@ -118,8 +133,9 @@ func signingMaterial(s signingKey) any {
 // constant from errors.go so middleware can map them to a WWW-Authenticate
 // challenge.
 func (e *engine[C]) verify(tok string) (Claims[C], error) {
+	ks := e.keySet()
 	parser := jwt.NewParser(
-		jwt.WithValidMethods([]string{e.cfg.Keys.activeAlg()}),
+		jwt.WithValidMethods(verifyAlgs(ks)),
 		// We control iss/aud/exp checks ourselves so we can return Code-coded errors.
 		jwt.WithoutClaimsValidation(),
 	)
@@ -129,7 +145,7 @@ func (e *engine[C]) verify(tok string) (Claims[C], error) {
 		if kid == "" {
 			return nil, xerrs.Unauthorized(CodeInvalidToken, "token missing kid header")
 		}
-		entry, ok := e.cfg.Keys.verifierFor(kid)
+		entry, ok := ks.verifierFor(kid)
 		if !ok {
 			return nil, xerrs.Unauthorizedf(CodeKeyNotLoaded, "kid %q not loaded", kid)
 		}
@@ -190,4 +206,25 @@ func intersects(a, b []string) bool {
 
 func jsonMarshalMap(m jwt.MapClaims) ([]byte, error) {
 	return json.Marshal(map[string]any(m))
+}
+
+// verifyAlgs returns the deduped algorithm whitelist for jwt.NewParser.
+// Both EdDSA + ES256 entries can coexist in one KeySet (mixed-curve
+// rotation) — without this we'd reject the very tokens we just signed
+// with the other algorithm. Order is irrelevant — jwt.WithValidMethods
+// builds a set internally.
+func verifyAlgs(ks *KeySet) []string {
+	seen := map[string]struct{}{}
+	algs := make([]string, 0, 2)
+	for _, e := range ks.verify {
+		if _, dup := seen[e.Alg]; dup {
+			continue
+		}
+		seen[e.Alg] = struct{}{}
+		algs = append(algs, e.Alg)
+	}
+	if len(algs) == 0 {
+		algs = append(algs, ks.activeAlg())
+	}
+	return algs
 }

@@ -89,6 +89,24 @@ type KeyStore interface {
 	Lookup(ctx context.Context, keyHash []byte) (*KeyRecord, error)
 }
 
+// KeyUsageTracker is the optional audit hook KeyStore implementations
+// MAY satisfy to track API-key usage. When the kit detects a Lookup
+// hit AND the store also implements KeyUsageTracker, it fires
+// MarkUsed in a fresh background goroutine — the hot path stays
+// allocation-free and never waits on a DB round trip.
+//
+// `id` is the KeyRecord.ID returned by Lookup; `t` is the wall clock
+// at the request. Implementations typically `UPDATE api_keys SET
+// last_used_at = $2 WHERE id = $1 AND ($2 - last_used_at) > '1m'` to
+// throttle write pressure under bursty load.
+//
+// A non-nil error from MarkUsed surfaces only in implementor logs —
+// the kit deliberately discards it (failure to update an audit
+// timestamp is never worth rejecting an authenticated request).
+type KeyUsageTracker interface {
+	MarkUsed(ctx context.Context, id string, t time.Time) error
+}
+
 // APIKeyOption tunes [Auth.APIKey].
 type APIKeyOption func(*apiKeyConfig)
 
@@ -195,6 +213,15 @@ func (a *Auth[C]) APIKey(store KeyStore, opts ...APIKeyOption) fiber.Handler {
 				"API key expired"))
 		}
 		c.Locals(principalKey{}, recordToPrincipal[C](rec))
+		if tracker, ok := store.(KeyUsageTracker); ok && rec.ID != "" {
+			id := rec.ID
+			now := time.Now()
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = tracker.MarkUsed(ctx, id, now)
+			}()
+		}
 		return c.Next()
 	}
 }

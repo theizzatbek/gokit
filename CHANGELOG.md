@@ -9,6 +9,37 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `auth/` — six additions covering federation, operator UX, and SecOps.
+  - `Auth.JWKSHandler(maxAge int)` + `KeySet.JWKS() ([]byte, error)`
+    render the verify set as RFC 7517 JWKS. EdDSA → `kty=OKP/crv=Ed25519/x`,
+    ES256 → `kty=EC/crv=P-256/x,y`. `Auth.KeySet()` exposes the live set
+    via atomic load so callers can serve it themselves.
+  - `Auth.RotateKeys(*KeySet) error` hot-swaps signing material under
+    concurrent Sign/Verify (atomic.Pointer; no lock). Validates the
+    incoming set (non-nil, non-empty verify, active key has private
+    material when active.KID is set). Verify automatically accepts every
+    alg present in the new set — mixed EdDSA + ES256 rotation works.
+  - `Auth.RequireAnyScope(...) / RequireAnyRole(...)` — OR-semantic
+    counterparts to existing AND-form. YAML factories
+    `require_any_scope` / `require_any_role` registered through
+    `auth/fibermount.MountMiddlewareFactories`.
+  - `RevokedAccessStore` interface + `MemRevokedAccessStore` default +
+    `WithRevokedAccessStore` option. Bearer middleware consults the
+    blacklist after JWT verify, fail-OPEN on backend error
+    (transient outage doesn't lock out every user). `Auth.RevokeAccess(ctx,
+    Claims[C])` is the admin-side write path. Stable code:
+    `token_revoked` (401).
+  - `KeyUsageTracker` optional contract — `KeyStore` implementations
+    MAY satisfy `MarkUsed(ctx, id, t)` to record per-key last-used
+    timestamps. APIKey middleware type-asserts once and fires
+    `MarkUsed` in a background goroutine (5s ctx) so the hot path
+    stays allocation-free.
+  - `WithIPExtractor(IPExtractor)` overrides `c.IP()` for the whole
+    Auth bundle — refresh-token meta, security log, rate-limit
+    fallback bucket all route through `Auth.clientIP`. Empty return
+    falls back to fiber's stdlib `c.IP()`. `Auth.RateLimit` /
+    `RateLimitBySubject` now use Auth-bound keyers so CDN-aware IP
+    extraction reaches the limiter buckets too.
 - `db/` — five production-oriented helpers around the existing pgx wrapper.
   - `db.(*DB).TxRetry(ctx, fn, opts...)` — auto-retry on SQLSTATE
     `40001` (serialization failure) and `40P01` (deadlock detected)

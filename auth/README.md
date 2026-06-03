@@ -1,6 +1,6 @@
 # auth
 
-JWT issue/verify (асимметричные EdDSA/ES256), generic `Claims[C]` для app-specific кастомных данных, хеширование паролей argon2id, pluggable refresh-token storage и готовые к монтированию Fiber middleware/handlers (Bearer, RequireScope, RequireRole, Login, Refresh, Logout).
+JWT issue/verify (асимметричные EdDSA/ES256), generic `Claims[C]` для app-specific кастомных данных, хеширование паролей argon2id, pluggable refresh-token storage и готовые к монтированию Fiber middleware/handlers (Bearer, RequireScope / RequireRole / `Require*Any*` для OR-semantics, Login, Refresh, Logout, JWKS, hot-reload ключей, access-token blacklist).
 
 **Импорт:** `github.com/theizzatbek/gokit/auth`
 **Зависит от:** `golang-jwt/jwt/v5`, `golang.org/x/crypto/argon2`, `gofiber/fiber/v2`, `github.com/theizzatbek/gokit/errs`
@@ -135,6 +135,26 @@ ks, err := auth.GenerateEd25519Key("k1")
 
 Активный key-kid идёт в JWT `kid` header → verify-only сервисы с public-key-only PEM могут валидировать без хранения signing-материала. Ротация non-breaking: задеплойте verifier'ы и со старыми, и с новыми public-key'ями сначала, потом flip активный ключ.
 
+### JWKS endpoint
+
+```go
+app.Get("/.well-known/jwks.json", authObj.JWKSHandler(300)) // max-age 300s
+```
+
+`KeySet.JWKS() []byte` рендерит каждый verify-entry в JWK (`kty=OKP/crv=Ed25519/x` для EdDSA, `kty=EC/crv=P-256/x,y` для ES256). `Auth.JWKSHandler(maxAge int)` отдаёт документ под стандартной URL — verify-only сервисы загружают его вместо PEM-проксирования.
+
+### Hot-reload ключей (`Auth.RotateKeys`)
+
+```go
+ks, _ := auth.LoadKeysFromPEM("k2", newPEMs)
+if err := authObj.RotateKeys(ks); err != nil { return err }
+// Все следующие Sign используют k2, Verify принимает любой kid из новой verify-map.
+// Sign/Verify, уже запущенные параллельно, заканчиваются на старом KeySet
+// (atomic.Pointer — без mutex, без блокировки).
+```
+
+Используйте при операторской ротации (KMS/Vault публикует новый active key): новый kid появляется как verify-only задолго до flip активного ключа, потом одна вызов `RotateKeys` переключает active. Зеро-downtime.
+
 ## Common patterns
 
 ### Режимы Bearer-middleware
@@ -148,6 +168,37 @@ app.Use(authObj.Bearer(auth.BearerOptional))
 ```
 
 **Важно:** если вы также строите fibermap-engine, установите `auth.BearerOptional` на уровне fiber.App через `fibermap.WithUse(...)`, так что он запускается ДО engine-овского contextInit (который часто читает principal из Locals). Per-route enforcement использует factory-middleware `bearer: []` из `auth/fibermount`.
+
+### Scope / Role checks (AND + OR)
+
+```go
+// AND — все скоупы должны присутствовать
+app.Get("/admin/billing", authObj.RequireScope("admin:billing", "billing:read"), h)
+
+// OR — достаточно одного
+app.Get("/orders/:id", authObj.RequireAnyScope("orders:read", "admin:all"), h)
+
+// То же для ролей
+authObj.RequireRole("admin")
+authObj.RequireAnyRole("admin", "editor")
+```
+
+YAML-factories: `require_scope` / `require_role` (AND), `require_any_scope` / `require_any_role` (OR) — `auth/fibermount.MountMiddlewareFactories` регистрирует все четыре.
+
+### IP-extraction за CDN / прокси
+
+`c.IP()` зависит от `app.Config.ProxyHeader`. За CloudFlare / Fly / Render / nginx часто нужен свой header — `WithIPExtractor` направляет на единую точку, через которую auth читает IP для refresh-token meta, security log, rate-limit fallback:
+
+```go
+authObj, _ := auth.New[MyClaims](cfg,
+    auth.WithIPExtractor(func(c *fiber.Ctx) string {
+        if v := c.Get("CF-Connecting-IP"); v != "" { return v }
+        return c.IP()
+    }),
+)
+```
+
+Empty return — fallback на `c.IP()`. `KeyByIP` / `KeyBySubject` для `*Auth.RateLimit` / `*Auth.RateLimitBySubject` тоже используют этот extractor.
 
 ### Инспектирование аутентифицированного principal'а
 
@@ -197,6 +248,47 @@ middleware:
 Хеширование: каждый ключ — это `HMAC-SHA256(plain, APIKeyHashSecret)`. Хеш — это lookup-key — DB-dump alone не раскрывает сырые ключи без kit-секрета. Ротация `APIKeyHashSecret` инвалидирует каждый сохранённый хеш; относитесь как к долгоживущему signing-key. Используйте `auth.HashAPIKey(plain, secret)` на mint-time, так что таблица и verify-путь шарят одну хеш-функцию.
 
 Стабильные error Codes: `api_key_missing`, `api_key_invalid` (existence side-channel подавлен — unknown-ключи возвращают ту же форму, что и missing), `api_key_expired`, `api_key_revoked`.
+
+#### `LastUsedAt` audit (опциональный hook)
+
+`KeyStore` реализация может дополнительно сатисфаить интерфейс `auth.KeyUsageTracker`:
+
+```go
+type KeyUsageTracker interface {
+    MarkUsed(ctx context.Context, id string, t time.Time) error
+}
+```
+
+Если реализован — kit вызывает `MarkUsed` в **фоновой goroutine** после каждого hit'а (5s timeout). Hot-path остаётся без DB-roundtrip'а. Type-assertion проверяется один раз внутри middleware. Дроп ошибки сознательный — фейл аудита никогда не должен отклонять аутентифицированный запрос.
+
+Типичный паттерн в реализации:
+
+```go
+func (s *Store) MarkUsed(ctx context.Context, id string, t time.Time) error {
+    // Throttle: не пишем чаще раза в минуту на ключ
+    _, err := s.db.Exec(ctx, `
+        UPDATE api_keys SET last_used_at = $2
+        WHERE id = $1 AND (last_used_at IS NULL OR $2 - last_used_at > interval '1 minute')`,
+        id, t)
+    return err
+}
+```
+
+### Revoke access-токена (blacklist по JTI)
+
+Refresh-токены revocable по дизайну (`RefreshStore.RevokeFamily/RevokeSubject`). Access-токены живут до своего `exp` — если кредентиал утёк, до natural expiry ничего нельзя сделать. `WithRevokedAccessStore` затыкает gap:
+
+```go
+store := auth.NewMemRevokedAccessStore() // или Redis-backed (PXAT auto-eviction)
+authObj, _ := auth.New[MyClaims](cfg, auth.WithRevokedAccessStore(store))
+
+// В admin-handler:
+_ = authObj.RevokeAccess(ctx, claims) // ключует blacklist по claims.JTI до claims.ExpiresAt
+```
+
+Bearer-middleware консультирует store ПОСЛЕ успешного JWT verify. **Fail-OPEN** на backend-ошибку: транзиентный outage не лочит всех юзеров. Stable code: `token_revoked` (401).
+
+Redis-friendly паттерн backend'а: `SET <jti> "" PXAT <exp_millis>` — сам evict'нется в тот же момент, когда JWT истекает; blacklist остаётся bounded.
 
 ### Хеширование паролей
 
@@ -411,7 +503,7 @@ authObj, _ := auth.New[MyClaims](auth.Config{
 
 - [`auth/refreshpg`](refreshpg/README.md) — Postgres-backed `RefreshStore`
 - [`auth/refreshredis`](refreshredis/README.md) — Redis-backed `RefreshStore`
-- [`auth/fibermount`](fibermount/README.md) — one-call mount `bearer`/`require_scope`/`require_role` factory в fibermap-engine
+- [`auth/fibermount`](fibermount/README.md) — one-call mount `bearer`/`require_scope`/`require_role`/`require_any_scope`/`require_any_role` factory в fibermap-engine
 - [`errs`](../errs/README.md) — error-модель, используемая везде
 - [`examples/urlshort`](../examples/urlshort/README.md) — register → login → refresh → Bearer-защищённые роуты
 </content>

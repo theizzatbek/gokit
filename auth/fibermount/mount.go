@@ -22,6 +22,8 @@ func MountMiddlewareFactories[T, C any](eng *fibermap.Engine[T], a *auth.Auth[C]
 	fibermap.RegisterMiddlewareFactory(eng, "bearer", adapt[T](a.BearerFactory))
 	fibermap.RegisterMiddlewareFactory(eng, "require_scope", adapt[T](a.RequireScopeFactory))
 	fibermap.RegisterMiddlewareFactory(eng, "require_role", adapt[T](a.RequireRoleFactory))
+	fibermap.RegisterMiddlewareFactory(eng, "require_any_scope", adapt[T](a.RequireAnyScopeFactory))
+	fibermap.RegisterMiddlewareFactory(eng, "require_any_role", adapt[T](a.RequireAnyRoleFactory))
 	// Use the Auth-bound factories so YAML-mounted chains feed
 	// auth_ratelimit_denied_total / auth_idempotency_total when
 	// auth.WithMetrics is wired. The package-level factories still
