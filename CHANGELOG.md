@@ -9,6 +9,39 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `clients/webhooks/` — nine production-quality additions around the
+  Worker. Outbound flow gets per-target circuit breakers, custom
+  retry policy, lifecycle hooks, per-attempt timeout, panic
+  recovery, TraceContext propagation, pluggable signer, override-able
+  content-type, and a readiness Checker.
+  - `WorkerConfig.BreakerFactory(subID) *breaker.Breaker` builds a
+    per-subscription breaker on first sight and caches it in
+    `sync.Map`. Open-state surfaces as retryable, rescheduling the
+    delivery without burning the in-flight slot on a known-down
+    endpoint.
+  - `WorkerConfig.RetryClassifier(*http.Response, error) Outcome`
+    overrides the kit's 2xx/408/429/5xx mapping. `Outcome` type +
+    `OutcomeDelivered / OutcomeRetryable / OutcomeFatal` are
+    exported; `DefaultClassifier` exposes the kit default as a
+    building block.
+  - `WorkerConfig.OnAttempt(d, resp, err, outcome, elapsed)` and
+    `WorkerConfig.OnDLQ(d, status, errMsg)` are observability hooks.
+    Both recover from user-callback panics.
+  - `WorkerConfig.AttemptTimeout` replaces the hardcoded 30s.
+  - `WorkerConfig.SignerFunc(body, secret, now) (string, error)`
+    swaps the Stripe-style HMAC signature for any app-specific
+    scheme.
+  - `WorkerConfig.DefaultContentType` overrides hardcoded
+    `application/json`. `Delivery.Headers["Content-Type"]` still
+    wins on a per-call basis.
+  - `WorkerConfig.Propagator propagation.TextMapPropagator` injects
+    W3C TraceContext (`traceparent` / `tracestate`) onto outbound
+    headers. Same shape as `clients/nats` publish-side propagation.
+  - Panic recovery in the attempt goroutine — slot released,
+    delivery rescheduled via `fail()`, logged at Warn.
+  - `NewChecker(store, name) *Checker` is the /readyz adapter —
+    pings `DeliveryStore.Claim(ctx, 0)`. Same shape as
+    `clients/nats.Checker` + `clients/redis.Checker`.
 - `clients/cache/` — five additions: UniversalClient adapter, owned
   metrics, read-through helper with single-flight, TTL jitter,
   pluggable codec, and prefix-scoped invalidation.

@@ -1,32 +1,41 @@
 package webhooks
 
 import (
+	"net/http"
 	"testing"
 	"time"
 )
 
-func TestClassify_2xx(t *testing.T) {
-	if classify(200) != outcomeDelivered {
+func mkResp(status int) *http.Response { return &http.Response{StatusCode: status} }
+
+func TestDefaultClassifier_2xx(t *testing.T) {
+	if DefaultClassifier(mkResp(200), nil) != OutcomeDelivered {
 		t.Fatal("200 must be delivered")
 	}
-	if classify(204) != outcomeDelivered {
+	if DefaultClassifier(mkResp(204), nil) != OutcomeDelivered {
 		t.Fatal("204 must be delivered")
 	}
 }
 
-func TestClassify_RetryableServer(t *testing.T) {
+func TestDefaultClassifier_RetryableServer(t *testing.T) {
 	for _, s := range []int{408, 429, 500, 502, 503, 504} {
-		if classify(s) != outcomeRetryable {
+		if DefaultClassifier(mkResp(s), nil) != OutcomeRetryable {
 			t.Fatalf("%d should be retryable", s)
 		}
 	}
 }
 
-func TestClassify_FatalClient(t *testing.T) {
+func TestDefaultClassifier_FatalClient(t *testing.T) {
 	for _, s := range []int{400, 401, 403, 404, 410, 422} {
-		if classify(s) != outcomeFatal {
+		if DefaultClassifier(mkResp(s), nil) != OutcomeFatal {
 			t.Fatalf("%d should be fatal", s)
 		}
+	}
+}
+
+func TestDefaultClassifier_NetworkErrAsRetryable(t *testing.T) {
+	if DefaultClassifier(nil, http.ErrAbortHandler) != OutcomeRetryable {
+		t.Fatal("network err must be retryable (matches legacy fail() reschedule)")
 	}
 }
 
