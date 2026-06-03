@@ -9,6 +9,33 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `clients/redis/` — five additions covering production topologies,
+  hook composability, status observability, and resilience.
+  - `ConnectCluster(ctx, ClusterConfig, opts...)` (cluster mode via
+    `redis.NewClusterClient`) + `ConnectSentinel(ctx, SentinelConfig,
+    opts...)` (HA failover via `redis.NewFailoverClient`). `Client`
+    now wraps `redis.UniversalClient` internally; `Client.Universal()`
+    is the cross-mode escape hatch; `Client.Redis()` stays for
+    single-mode back-compat (returns nil under cluster/sentinel);
+    `Client.Mode()` reports the topology. Observability, breaker,
+    and default-timeout options work identically across modes.
+  - `WithClusterOptions(func(*redis.ClusterOptions))` /
+    `WithSentinelOptions(func(*redis.FailoverOptions))` are the
+    cluster/sentinel mutators paralleling `WithRedisOptions` for
+    single mode.
+  - `WithHook(redis.Hook)` appends user hooks AFTER the kit
+    observability hook. Multiple calls accumulate.
+  - `WithDefaultTimeout(d time.Duration)` wraps every command's ctx
+    via `context.WithTimeout(d)` when the caller has not already
+    set a deadline. Caller deadlines pass through unchanged.
+  - `WithBreaker(*breaker.Breaker)` routes every command through
+    `breaker.Execute`. `redis.Nil` is treated as success (the
+    "key not found" signal must not trip the breaker). Open-state
+    surfaces as `*errs.Error{KindUnavailable, Code:
+    "redis_circuit_open"}` wrapping `breaker.ErrOpen`.
+  - `redis_connection_status` gauge added under `WithMetrics` —
+    symmetric with `nats_connection_status`. Flips to 1 after a
+    successful Connect ping; flips to 0 in `Close`.
 - `clients/natsmap/` — five additions that open up the natsclient
   handler-resilience pack to natsmap users + add hooks, metrics,
   default-headers, and mock mode for unit-testing without NATS.

@@ -6,9 +6,9 @@ import (
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
-// Config is the required configuration for Connect. Tunables that
-// don't change connection identity (Logger, Metrics, custom redis
-// options) live on Option.
+// Config is the required configuration for Connect (single-node mode).
+// Tunables that don't change connection identity (Logger, Metrics,
+// custom redis options) live on Option.
 type Config struct {
 	// URL is the standard redis:// connection string. Required.
 	// Examples:
@@ -37,6 +37,71 @@ type Config struct {
 func (c Config) validate() error {
 	if c.URL == "" {
 		return xerrs.Validation(CodeMissingURL, "redisclient.Config.URL is required")
+	}
+	return nil
+}
+
+// ClusterConfig is the cluster-mode configuration consumed by
+// [ConnectCluster]. Mirrors the connect-retry shape of [Config].
+type ClusterConfig struct {
+	// Addrs is the list of seed cluster node addresses
+	// (`host:port`). Required (length >= 1).
+	Addrs []string
+
+	// Username / Password optional ACL credentials applied to every
+	// shard.
+	Username string
+	Password string
+
+	// ConnectMaxRetries / ConnectBackoffBase / ConnectBackoffMax —
+	// same semantics as [Config].
+	ConnectMaxRetries  int
+	ConnectBackoffBase time.Duration
+	ConnectBackoffMax  time.Duration
+}
+
+func (c ClusterConfig) validate() error {
+	if len(c.Addrs) == 0 {
+		return xerrs.Validation(CodeMissingURL, "redisclient.ClusterConfig.Addrs is required")
+	}
+	return nil
+}
+
+// SentinelConfig is the Redis Sentinel failover configuration
+// consumed by [ConnectSentinel]. Use when the deployment fronts
+// Redis with a Sentinel cluster for HA.
+type SentinelConfig struct {
+	// MasterName is the Sentinel "master name" identifier (set by
+	// the Sentinel operator). Required.
+	MasterName string
+
+	// SentinelAddrs is the list of Sentinel node addresses
+	// (`host:port`). Required.
+	SentinelAddrs []string
+
+	// DB / Username / Password optional credentials applied to the
+	// resolved master and replicas.
+	DB       int
+	Username string
+	Password string
+
+	// SentinelUsername / SentinelPassword optional ACL credentials
+	// for the Sentinel layer itself (separate from the data-plane
+	// creds above).
+	SentinelUsername string
+	SentinelPassword string
+
+	ConnectMaxRetries  int
+	ConnectBackoffBase time.Duration
+	ConnectBackoffMax  time.Duration
+}
+
+func (c SentinelConfig) validate() error {
+	if c.MasterName == "" {
+		return xerrs.Validation(CodeMissingURL, "redisclient.SentinelConfig.MasterName is required")
+	}
+	if len(c.SentinelAddrs) == 0 {
+		return xerrs.Validation(CodeMissingURL, "redisclient.SentinelConfig.SentinelAddrs is required")
 	}
 	return nil
 }

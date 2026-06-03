@@ -12,17 +12,26 @@ import (
 // db/metrics.go — implements prometheus.Collector so we register the
 // collector itself (not each individual metric) on the user's
 // Registerer.
-type metricsCollector struct {
-	rdb *redis.Client
-
-	commandsTotal *prometheus.CounterVec   // cmd, outcome=success|error
-	cmdDuration   *prometheus.HistogramVec // cmd
-	poolSize      *prometheus.GaugeVec     // state=hits|misses|idle|stale|total
+// poolStatser is the subset of go-redis client interfaces that
+// exposes PoolStats. *redis.Client, *redis.ClusterClient (aggregated
+// across shards), and *redis.SentinelClient all satisfy it.
+type poolStatser interface {
+	PoolStats() *redis.PoolStats
 }
 
-func newMetricsCollector(reg prometheus.Registerer, rdb *redis.Client) *metricsCollector {
+type metricsCollector struct {
+	rdb poolStatser
+
+	commandsTotal    *prometheus.CounterVec   // cmd, outcome=success|error
+	cmdDuration      *prometheus.HistogramVec // cmd
+	poolSize         *prometheus.GaugeVec     // state=hits|misses|idle|stale|total
+	connectionStatus prometheus.Gauge
+}
+
+func newMetricsCollector(reg prometheus.Registerer, rdb redis.UniversalClient) *metricsCollector {
+	ps, _ := rdb.(poolStatser)
 	mc := &metricsCollector{
-		rdb: rdb,
+		rdb: ps,
 		commandsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "redis_commands_total",
 			Help: "Number of Redis commands executed, labelled by command name and outcome (success|error).",
@@ -36,6 +45,10 @@ func newMetricsCollector(reg prometheus.Registerer, rdb *redis.Client) *metricsC
 			Name: "redis_pool_size_total",
 			Help: "Underlying connection pool state. state=hits|misses|idle|stale|total.",
 		}, []string{"state"}),
+		connectionStatus: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "redis_connection_status",
+			Help: "1 when the kit Redis client is connected (initial Connect ping succeeded); 0 after Close.",
+		}),
 	}
 	reg.MustRegister(mc)
 	return mc
@@ -45,6 +58,7 @@ func (m *metricsCollector) Describe(ch chan<- *prometheus.Desc) {
 	m.commandsTotal.Describe(ch)
 	m.cmdDuration.Describe(ch)
 	m.poolSize.Describe(ch)
+	m.connectionStatus.Describe(ch)
 }
 
 func (m *metricsCollector) Collect(ch chan<- prometheus.Metric) {
@@ -52,6 +66,18 @@ func (m *metricsCollector) Collect(ch chan<- prometheus.Metric) {
 	m.commandsTotal.Collect(ch)
 	m.cmdDuration.Collect(ch)
 	m.poolSize.Collect(ch)
+	m.connectionStatus.Collect(ch)
+}
+
+func (m *metricsCollector) setConnectionStatus(connected bool) {
+	if m == nil {
+		return
+	}
+	if connected {
+		m.connectionStatus.Set(1)
+	} else {
+		m.connectionStatus.Set(0)
+	}
 }
 
 // observe is called from the hook for every command. cmd is the
@@ -72,12 +98,16 @@ func (m *metricsCollector) observe(cmd string, elapsed time.Duration, err error)
 }
 
 // refreshPoolStats reads the live pool stats from go-redis and
-// updates the gauge. Called on every scrape.
+// updates the gauge. Called on every scrape. Cluster mode aggregates
+// across every shard's pool; single / sentinel are straight reads.
 func (m *metricsCollector) refreshPoolStats() {
-	if m.rdb == nil {
+	if m == nil || m.rdb == nil {
 		return
 	}
 	s := m.rdb.PoolStats()
+	if s == nil {
+		return
+	}
 	m.poolSize.WithLabelValues("hits").Set(float64(s.Hits))
 	m.poolSize.WithLabelValues("misses").Set(float64(s.Misses))
 	m.poolSize.WithLabelValues("idle").Set(float64(s.IdleConns))
