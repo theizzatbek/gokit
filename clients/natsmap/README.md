@@ -325,7 +325,18 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 
 // Опции
 func WithLogger(*slog.Logger) Option
-func WithMetrics(prometheus.Registerer) Option
+func WithMetrics(prometheus.Registerer) Option                  // natsmap-owned natsmap_* коллекторы
+func WithSubscribeOptions(...natsclient.SubscribeOption) Option // прокидка handler resilience pack (WithErrorClassifier, WithAckProgress, WithPanicHandler)
+func WithBeforeDispatch(func(name, subject string)) Option
+func WithAfterDispatch(func(name, subject string, err error, elapsed time.Duration)) Option
+func WithBeforePublish(func(ctx, name, subject string, headers map[string][]string)) Option
+func WithAfterPublish(func(ctx, name, subject string, err error, elapsed time.Duration)) Option
+func WithDefaultPublishHeaders(map[string][]string) Option
+
+// Engine-level per-subscriber overrides
+func (e *Engine) RegisterSubscriberOptions(name string, opts ...natsclient.SubscribeOption)
+func RegisterMockHandler[T any](e *Engine, name string,
+    h func(ctx context.Context, m natsclient.Msg[T]) error)  // unit-тестинг без NATS
 
 // Runtime — goroutine-safe
 func Publish[T any](ctx context.Context, r *Runtime, name string, payload T) error
@@ -339,6 +350,98 @@ func (r *Runtime) PublisherNames() []string                // отсортиро
 `PublishWithHeaders` мерджит per-call headers поверх YAML-declared статических headers; per-call записи побеждают на коллизии.
 
 ## Common patterns
+
+### Прокидка natsclient handler resilience опций
+
+`WithSubscribeOptions` engine-wide + `RegisterSubscriberOptions` per-subscriber — то же самое API, что у `apimap.WithHTTPCOptions` / `RegisterClientOptions`. Открывает handler resilience pack из `clients/nats`:
+
+```go
+rt, _ := e.Build(ctx, c,
+    natsmap.WithSubscribeOptions(
+        // По всем subscribers — auto-heartbeat для long-running handlers
+        natsclient.WithAckProgress(10*time.Second),
+        // Term валидационных ошибок (не redeliver'им)
+        natsclient.WithErrorClassifier(func(err error) natsclient.AckAction {
+            var e *errs.Error
+            if errors.As(err, &e) && e.Kind == errs.KindValidation {
+                return natsclient.AckActTerm
+            }
+            return natsclient.AckActNak
+        }),
+    ),
+)
+
+// Только конкретный subscriber видит свой panic handler
+e.RegisterSubscriberOptions("orders.paid",
+    natsclient.WithPanicHandler(func(p any) { sentry.CurrentHub().Recover(p) }),
+)
+```
+
+Build падает с `natsmap_unknown_subscriber` если зарегистрировали opts под именем не из YAML — ловит typo'ы.
+
+### Lifecycle hooks (subscribers + publishers)
+
+```go
+rt, _ := e.Build(ctx, c,
+    natsmap.WithBeforeDispatch(func(name, subject string) {
+        // span attrs, tenant scoping, audit-entry begin
+    }),
+    natsmap.WithAfterDispatch(func(name, subject string, err error, d time.Duration) {
+        auditLog.Record(name, statusOf(err), d)
+    }),
+    natsmap.WithBeforePublish(func(ctx context.Context, name, subject string, hdrs map[string][]string) {
+        // мутация hdrs здесь обновляет wire headers (трейс/audit-headers, ctx-aware)
+    }),
+    natsmap.WithAfterPublish(func(ctx context.Context, name, subject string, err error, d time.Duration) {
+        // DLQ-record при persistent failure
+    }),
+)
+```
+
+Hooks видят kit-стабильный `(name, subject)` из YAML — независимо от того, какой handler/publisher invocation reached тут. Multiple calls — last wins. Mock subscribers (см. ниже) **не** прогоняются через hooks по дизайну.
+
+### Default publish headers (общие headers для всех publish)
+
+```go
+rt, _ := e.Build(ctx, c, natsmap.WithDefaultPublishHeaders(map[string][]string{
+    "X-Service-Version": {appVersion},
+    "X-Region":          {region},
+}))
+// Layering: defaults → YAML publisher.headers → per-call headers (last wins на per-key конфликт).
+// X-Request-ID из ctx прокидывается над всем кроме explicit per-call значения.
+```
+
+### natsmap-owned metrics
+
+`WithMetrics(reg)` регистрирует:
+
+| Серия | Labels | Тип |
+|---|---|---|
+| `natsmap_handlers_total` | `name`, `outcome` (success/error) | Counter |
+| `natsmap_handler_duration_seconds` | `name` | Histogram |
+| `natsmap_publishes_total` | `name`, `outcome` (success/error) | Counter |
+
+Cardinality bounded по YAML-declared `name` (не subject). Subscription-level метрики остаются на `clients/nats` (`nats_handler_*`, `nats_publish_*`).
+
+### Mock mode (unit-тестинг без testcontainer)
+
+```go
+e := natsmap.New()
+_ = e.LoadBytes(yaml)
+natsmap.RegisterMockHandler[OrderCreated](e, "orders.created",
+    func(ctx context.Context, m natsclient.Msg[OrderCreated]) error {
+        // мок-логика проверяемая в тесте
+        return nil
+    })
+rt, _ := e.Build(ctx, nil)  // c=nil ок если все subscribers — mock и нет publishers
+
+// В тесте:
+err := natsmap.DispatchMock(ctx, rt, "orders.created", OrderCreated{ID: "x"}, nil)
+```
+
+`DispatchMock` зовёт mock-handler синхронно на caller goroutine. Mock-handlers **bypass-ят** before/after hooks по дизайну — это unit-тест path. Real-NATS subscribers всё ещё проходят через всю чейн.
+
+Publisher path в nil-client режиме: stub возвращает error на любой Publish-вызов — accident'ы surfac'ятся loud.
 
 ### Через `gokit/service`
 

@@ -9,6 +9,42 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `clients/natsmap/` — five additions that open up the natsclient
+  handler-resilience pack to natsmap users + add hooks, metrics,
+  default-headers, and mock mode for unit-testing without NATS.
+  - `WithSubscribeOptions(...natsclient.SubscribeOption)` engine-wide
+    + `Engine.RegisterSubscriberOptions(name, ...natsclient.SubscribeOption)`
+    per-subscriber. Per-subscriber opts are appended AFTER the global
+    slice at Build. Unknown subscriber names fail Build with
+    `natsmap_unknown_subscriber`.
+  - `WithBeforeDispatch(func(name, subject))` /
+    `WithAfterDispatch(func(name, subject, err, elapsed))` —
+    subscriber-side hooks visible from the YAML-declared name.
+    Wrapped around the user handler before SubscribeRaw so the
+    callbacks fire in-band; metrics observation rides the same
+    wrapper for outcome classification.
+  - `WithBeforePublish(func(ctx, name, subject, headers))` /
+    `WithAfterPublish(func(ctx, name, subject, err, elapsed))` —
+    publisher-side hooks. beforePublish gets the merged final
+    headers map and mutations land on the wire.
+  - `WithDefaultPublishHeaders(map[string][]string)` engine-wide
+    defaults merged into every Publish / PublishRaw. Layering:
+    defaults → YAML publisher static → per-call (last wins on
+    per-key conflict). X-Request-ID from ctx still auto-injects.
+  - `WithMetrics(reg)` now wires natsmap-owned collectors:
+    `natsmap_handlers_total{name,outcome}`,
+    `natsmap_handler_duration_seconds{name}`,
+    `natsmap_publishes_total{name,outcome}`. Cardinality bounded by
+    YAML-declared name; subscription-level series stay on
+    clients/nats.
+  - `RegisterMockHandler[T](e, name, fn)` + `DispatchMock[T](ctx,
+    runtime, name, payload, headers)`. Mock subscribers skip every
+    NATS-side wiring at Build; DispatchMock fires the registered fn
+    synchronously on the caller's goroutine. Production must NOT
+    call DispatchMock. Build now also tolerates a nil
+    *natsclient.Client when every subscriber is a mock and no
+    publisher is declared; publishers in that mode install
+    error-stubs so accidental Publish calls surface loud.
 - `clients/apimap/` — four additions that open up the new httpc
   features to apimap users + add mock-mode and default-Call layering.
   - `WithHTTPCOptions(...httpc.Option)` engine-wide passthrough +

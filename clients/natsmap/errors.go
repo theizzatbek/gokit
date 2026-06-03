@@ -52,4 +52,5 @@ const (
 	CodeUnknownPublisher      = "natsmap_unknown_publisher"
 	CodePublisherTypeMismatch = "natsmap_publisher_type_mismatch"
 	CodePublishFailed         = "natsmap_publish_failed"
+	CodeUnknownSubscriber     = "natsmap_unknown_subscriber"
 )
