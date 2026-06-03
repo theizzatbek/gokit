@@ -9,6 +9,34 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `sentrykit/` — six additions around the existing bootstrap:
+  process-wide Stats, per-fingerprint event rate limit,
+  FiberMiddleware route filter, RecoverGo for background goroutines,
+  AddBreadcrumb + SetUser helpers, and a default PII scrubber.
+  - `GetStats() Stats` returns `{EventsCaptured, EventsDeduped,
+    EventsRateLimited, BreadcrumbsEmitted, DedupeCacheSize}` —
+    atomic counters for /admin observability of sentrykit itself.
+  - `WithCaptureRateLimit(maxPerMin int)` adds a hard cap on Sentry
+    events per fingerprint per minute. Composes with the existing
+    window-based dedupe; suppressed events tick
+    `Stats.EventsRateLimited`. Breadcrumbs still emit so downstream
+    event timelines remain intact.
+  - `FiberMiddlewareWithOptions(opts...)` is the option-driven
+    variant of `FiberMiddleware`. `WithRouteFilter(fn)` skips hub
+    cloning + scope populating for noisy paths;
+    `DefaultRouteSkipFn` covers /healthz, /readyz, /metrics,
+    /favicon.ico out of the box.
+  - `RecoverGo(fn func())` wraps fn with recover + Sentry capture +
+    Warn log. Canonical fire-and-forget goroutine pattern for code
+    that can't tie a panic to a request lifecycle.
+  - `AddBreadcrumb(ctx, category, message, data)` + `SetUser(ctx,
+    id, email)` are short helpers over the hub resolved from ctx.
+    No-op when no hub is configured.
+  - `ScrubPII()` returns a BeforeSend hook that redacts
+    Authorization / Cookie / X-API-Key / Set-Cookie headers and
+    token-like query parameters (`token`, `secret`, `password`,
+    `api_key`, `access_token`, `refresh_token`). `WithoutPII()` is
+    the one-liner that installs it as the BeforeSend.
 - `fibermap/` — seven opt-in middleware/RunOption additions covering
   common production HTTP needs: CORS, IP-keyed rate limit, body size
   cap, response compression, trusted proxies, slow-request level
