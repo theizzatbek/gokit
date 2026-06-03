@@ -9,6 +9,33 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `batch/` — six production-quality additions around the existing
+  Batcher. Panic recovery, backpressure cap, worker pool, retry
+  policy, lifecycle hooks, and an /admin-friendly Stats() snapshot.
+  - HandlerFn panics are recovered inside `runHandlerSafely` and
+    surface as a regular error to the retry loop and ack callbacks.
+    The flushLoop survives.
+  - `Config.MaxPending` (default 0 = unbounded) caps the in-memory
+    buffer. Submit drops the item and calls ack with
+    `ErrPendingFull`; `TrySubmit(item, ack) error` returns the
+    sentinel synchronously for callers needing immediate
+    backpressure signal.
+  - `Config.MaxInFlightHandlers` (default 1 = sequential —
+    back-compat). When > 1, Flush spawns the dispatch into a
+    goroutine; concurrent dispatches are bounded by a semaphore.
+    Close waits for the in-flight dispatches.
+  - `Config.MaxRetries` + `Config.RetryBackoffBase/Max`. Per-batch
+    retry loop with exponential backoff; ack fires only after the
+    final attempt.
+  - `Config.OnBatchStart(ctx, size)` + `Config.OnBatchComplete(ctx,
+    size, err, elapsed)` lifecycle hooks. Both panic-safe. Use for
+    tracing span attrs and audit logging.
+  - `Config.ContextFn func() context.Context` supplies the
+    per-dispatch HandlerFn ctx (typically a tracing-aware ctx).
+    Caller `Flush(ctx)` with non-Background ctx still wins.
+  - `Batcher.Stats() Stats` returns `{Pending, InFlightHandlers,
+    DispatchedTotal, FailedHandlers, RetriedAttempts}`. One mu
+    acquire; nil-receiver safe.
 - `breaker/` — five additions covering adaptive recovery, K-of-N
   half-open semantics, operator overrides, lifecycle hook, and an
   /admin-friendly snapshot.
