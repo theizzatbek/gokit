@@ -123,9 +123,70 @@ func New(cfg Config) (*Breaker, error)
 func (b *Breaker) State() State
 func (b *Breaker) Allow() (allowed bool, done func(success bool))
 func (b *Breaker) Execute(fn func() error) error
+func (b *Breaker) Stats() Stats              // cheap snapshot for /admin
+func (b *Breaker) ForceOpen(d time.Duration) // operator override
+func (b *Breaker) ForceClose()               // operator override
 
 var ErrOpen = errors.New("breaker: circuit open")
 ```
+
+### Adaptive `OpenInterval`
+
+```go
+Config{
+    OpenInterval:           10 * time.Second,
+    OpenIntervalMultiplier: 3.0,             // 10s → 30s → 90s → ...
+    OpenIntervalMax:        5 * time.Minute, // cap
+}
+```
+
+Каждый последовательный re-trip (без успешного close между ними) увеличивает effective open duration в `Multiplier` раз, до `OpenIntervalMax`. Successful close сбрасывает счётчик — следующий fresh trip начинает с base `OpenInterval`. По умолчанию `Multiplier=1.0` (back-compat — константный interval).
+
+### `HalfOpenSuccessThreshold` (K of N)
+
+Сейчас по умолчанию ALL `HalfOpenMaxProbes` должны succeed. Для шумных upstream'ов:
+
+```go
+Config{
+    HalfOpenMaxProbes:        5,
+    HalfOpenSuccessThreshold: 3, // 3 of 5 probes ok → close
+}
+```
+
+Любой failure всё ещё rotates обратно в open независимо от running success counter.
+
+### `OnStateChange` hook
+
+```go
+Config{
+    OnStateChange: func(from, to breaker.State) {
+        slack.Notify("breaker '%s' %s → %s", cfg.Name, from, to)
+    },
+}
+```
+
+Fires внутри breaker mutex AFTER каждого перехода. Panic-safe — kit recover'ит panic'и из callback'а.
+
+### Operator override: `ForceOpen` / `ForceClose`
+
+```go
+b.ForceOpen(30 * time.Minute) // maintenance window
+// ...
+b.ForceClose() // manual reset after incident resolved
+```
+
+`ForceOpen(d)` jumps to open и holds it under supplied window (overrides adaptive curve). `ForceClose()` jumps to closed, clears window + counters. Оба fire transition hooks + metrics.
+
+### `Stats()` snapshot
+
+```go
+s := b.Stats()
+// Stats{State, Generation, WindowRequests, WindowFailures,
+//       HalfOpenInFlight, HalfOpenSucceeded, OpenedAt, RemainingOpen,
+//       ConsecutiveTrips, CurrentOpenInterval, ForcedOpenUntil}
+```
+
+Cheap (one mu acquire). Suitable для /admin или /healthz endpoints. Nil-receiver returns zero value.
 
 `(*Breaker)(nil)` — safe no-op receiver: `Allow` всегда permit'ит, `Execute`
 просто запускает `fn`, `State` возвращает `StateClosed`. Это даёт callsite'ам

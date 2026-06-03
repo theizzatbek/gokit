@@ -44,6 +44,21 @@ type Config struct {
 	// Metrics, when non-nil, registers the kit's standard four
 	// bulkhead_* collectors. nil = zero Prometheus footprint.
 	Metrics prometheus.Registerer
+
+	// OnCapacityChange fires AFTER SetCapacity (manual or adaptive
+	// tick) applied a new capacity. prev / next are the values
+	// before and after the change; same value means no-op (the
+	// callback is suppressed in that case). Use for audit /
+	// alerting on adaptive cap reductions ("bulkhead 'stripe'
+	// shrank from 128 to 32"). Panic-safe — the kit recovers from
+	// callback panics so a broken hook never blocks SetCapacity.
+	OnCapacityChange func(prev, next int)
+
+	// StatsWindow is the rolling-window length used to populate
+	// [Stats.LatencyP50] / [Stats.LatencyP99] / [Stats.AvgWait].
+	// Default 10s when zero. The window is bounded so /healthz
+	// reads stay O(N) on a small N.
+	StatsWindow time.Duration
 }
 
 func (c Config) validate() error {
