@@ -9,6 +9,39 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `clients/nats/` — five additions covering handler resilience, sync
+  consumption, and federation.
+  - `WithErrorClassifier(func(error) AckAction)` — declarative
+    routing of handler errors to Ack / Nak / Term. Default keeps the
+    legacy contract (nil → Ack, ErrPoison → Term, anything else →
+    Nak). Lets validation errors Term while transient errors Nak.
+  - Panic recovery inside `dispatchRaw` — the goroutine slot is
+    released regardless of what the handler does; the panic becomes a
+    Nak with a Warn-log; `WithPanicHandler(func(any))` is the optional
+    app-side callback (Sentry capture, custom counter).
+  - `WithAckProgress(d)` auto-heartbeat — kit fires `InProgress()`
+    every `d` while the handler runs so long-running work survives
+    AckWait without manual heartbeats. `Msg[T].InProgress()` /
+    `RawMsg.InProgress()` are the manual escape hatch.
+  - `NewPullSubscription[T]` + `(*PullSubscription).Fetch` / `.Run` /
+    `.Drain` — typed pull-mode consumer for cron-style /
+    backpressure-sensitive workers. Decoded into `PendingMsg[T]` with
+    explicit Ack / Nak / Term. Decode failures auto-Term'd as
+    poison-pills inside Fetch; successful decodes still come through.
+  - `WithTLSConfig` / `WithRootCAs` / `WithClientCert` — TLS material
+    for public-internet NATS. WithTLSConfig is verbatim; WithRootCAs +
+    WithClientCert compose piecewise (mutually exclusive with
+    WithTLSConfig). Partial WithClientCert wiring is caught at
+    Connect.
+  - `Request[Req, Resp]` / `Reply[Req, Resp]` — typed RPC primitives
+    over `conn.RequestMsgWithContext`. Both sides go through the
+    client codec; trace context is propagated. New `Code*` constants
+    `request_timeout` / `request_failed`.
+  - `EnsureKVBucket(ctx, KVConfig) → nats.KeyValue` +
+    `NewKV[T](c, bucket) *KV[T]` — typed handle over JetStream KV.
+    Get / Put / Update (CAS via revision) / Delete / Raw().
+    `kv_key_not_found` (NotFound) and `kv_op_failed` (Conflict for
+    Update, Unavailable for other ops) are stable codes.
 - `auth/` — six additions covering federation, operator UX, and SecOps.
   - `Auth.JWKSHandler(maxAge int)` + `KeySet.JWKS() ([]byte, error)`
     render the verify set as RFC 7517 JWKS. EdDSA → `kty=OKP/crv=Ed25519/x`,
