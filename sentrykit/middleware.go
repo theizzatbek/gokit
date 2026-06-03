@@ -31,7 +31,21 @@ type hubKey struct{}
 // re-thrown panic propagates up through otelfiber/metrics/reqlog
 // until fibermap.Recover catches it and renders 500.
 func FiberMiddleware() fiber.Handler {
+	return FiberMiddlewareWithOptions()
+}
+
+// FiberMiddlewareWithOptions is the option-driven variant of
+// [FiberMiddleware]. Use [WithRouteFilter] to skip per-request hub
+// cloning + scope population for noisy paths (k8s probes, metrics).
+func FiberMiddlewareWithOptions(opts ...FiberMiddlewareOption) fiber.Handler {
+	cfg := &fiberMiddlewareConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
 	return func(c *fiber.Ctx) error {
+		if cfg.skipFn != nil && cfg.skipFn(c.Path()) {
+			return c.Next()
+		}
 		hub := sentry.CurrentHub().Clone()
 		populateScope(c, hub.Scope())
 		c.Locals(hubKey{}, hub)

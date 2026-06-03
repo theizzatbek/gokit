@@ -15,14 +15,15 @@ import (
 type HandlerOption func(*handlerConfig)
 
 type handlerConfig struct {
-	includeDebug   bool
-	categoryAttr   string
-	maxValueLen    int
-	attrFilter     func(string) bool
-	captureLevel   slog.Level // records >= this level capture as events (in addition to breadcrumb)
-	captureEnabled bool       // tri-state: false = capture off entirely
-	errorAttrKeys  []string   // attrs whose error-typed value drives CaptureException
-	dedupeWindow   time.Duration
+	includeDebug     bool
+	categoryAttr     string
+	maxValueLen      int
+	attrFilter       func(string) bool
+	captureLevel     slog.Level // records >= this level capture as events (in addition to breadcrumb)
+	captureEnabled   bool       // tri-state: false = capture off entirely
+	errorAttrKeys    []string   // attrs whose error-typed value drives CaptureException
+	dedupeWindow     time.Duration
+	captureRateLimit int // per-fingerprint events per minute; 0 = disabled
 }
 
 // WithDebugBreadcrumbs enables Debug-level records as breadcrumbs.
@@ -128,6 +129,9 @@ func SlogHandler(inner slog.Handler, opts ...HandlerOption) slog.Handler {
 	if cfg.captureEnabled && cfg.dedupeWindow > 0 {
 		h.dedupe = &dedupeCache{}
 	}
+	if cfg.captureEnabled && cfg.captureRateLimit > 0 {
+		h.rateLimiter = newRateLimitState()
+	}
 	return h
 }
 
@@ -152,6 +156,8 @@ func (d *dedupeCache) shouldEmit(fp string, now time.Time, window time.Duration)
 		if now.Sub(last) < window {
 			return false
 		}
+	} else {
+		statsGlobal.dedupeCacheSize.Add(1)
 	}
 	d.m.Store(fp, now)
 	return true
@@ -162,17 +168,15 @@ type slogHandler struct {
 	cfg   *handlerConfig
 	// preAttrs are accumulated from WithAttrs, with keys already
 	// prefixed by whatever group path was active at WithAttrs time.
-	// That snapshots slog's "groups affect subsequent attrs" rule
-	// without re-traversing the chain at Handle time.
 	preAttrs []slog.Attr
-	// groupPrefix is the dotted path imposed by every WithGroup call
-	// so far (e.g. "event." or "event.payload."). Empty by default.
-	// Record-time attrs and any future WithAttrs use this prefix.
+	// groupPrefix is the dotted path imposed by every WithGroup call.
 	groupPrefix string
 	// dedupe is non-nil iff WithCaptureLevel was set AND
-	// dedupeWindow > 0. Shared across all WithAttrs/WithGroup clones
-	// so dedupe state isn't per-logger-instance.
+	// dedupeWindow > 0. Shared across all WithAttrs/WithGroup clones.
 	dedupe *dedupeCache
+	// rateLimiter is non-nil iff WithCaptureRateLimit > 0. Shared
+	// across clones for the same reason as dedupe.
+	rateLimiter *rateLimitState
 }
 
 func (h *slogHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -224,17 +228,24 @@ func (h *slogHandler) Handle(ctx context.Context, r slog.Record) error {
 		bc.Timestamp = time.Now()
 	}
 	hub.AddBreadcrumb(bc, nil)
+	statsGlobal.breadcrumbs.Add(1)
 
 	// Capture as a Sentry event when the record is at or above the
-	// configured threshold AND the dedupe cache lets it through.
-	// Breadcrumb is always added first so even dedupe-suppressed
-	// records still show up in any subsequent event's timeline.
+	// configured threshold AND the dedupe cache lets it through AND
+	// the rate limiter is not saturated.
 	if h.cfg.captureEnabled && r.Level >= h.cfg.captureLevel {
 		now := time.Now()
 		fp := h.fingerprint(r.Level, category, r.Message)
-		if h.dedupe == nil || h.dedupe.shouldEmit(fp, now, h.cfg.dedupeWindow) {
-			h.captureEvent(hub, r, category, data)
+		if h.dedupe != nil && !h.dedupe.shouldEmit(fp, now, h.cfg.dedupeWindow) {
+			statsGlobal.eventsDeduped.Add(1)
+			return innerErr
 		}
+		if h.rateLimiter != nil && !h.rateLimiter.shouldEmit(fp, h.cfg.captureRateLimit, now) {
+			statsGlobal.eventsRateLimited.Add(1)
+			return innerErr
+		}
+		h.captureEvent(hub, r, category, data)
+		statsGlobal.eventsCaptured.Add(1)
 	}
 	return innerErr
 }
@@ -339,6 +350,7 @@ func (h *slogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	clone := *h
 	clone.inner = h.inner.WithAttrs(attrs)
 	clone.dedupe = h.dedupe // shared cache across clones
+	clone.rateLimiter = h.rateLimiter
 	// Snapshot the attrs with the CURRENT group prefix applied so
 	// later WithGroup calls don't retroactively re-prefix them.
 	prefixed := make([]slog.Attr, len(attrs))
@@ -353,6 +365,7 @@ func (h *slogHandler) WithGroup(name string) slog.Handler {
 	clone := *h
 	clone.inner = h.inner.WithGroup(name)
 	clone.dedupe = h.dedupe // shared cache across clones
+	clone.rateLimiter = h.rateLimiter
 	if name != "" {
 		clone.groupPrefix = h.groupPrefix + name + "."
 	}

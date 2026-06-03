@@ -112,6 +112,76 @@ Fallback'ится на `sentry.CurrentHub()` (process-global), когда
 middleware не в цепочке — caller'ы всегда могут эмитить, они просто
 теряют request-scoped тэги.
 
+## Route filtering
+
+`FiberMiddleware` обрабатывает каждый запрос. На public API'ах с k8s probes / Prometheus scrape — это лишнее. `FiberMiddlewareWithOptions` принимает `WithRouteFilter`:
+
+```go
+app.Use(sentrykit.FiberMiddlewareWithOptions(
+    sentrykit.WithRouteFilter(sentrykit.DefaultRouteSkipFn), // /healthz /readyz /metrics /favicon.ico
+))
+
+// Custom filter:
+sentrykit.WithRouteFilter(func(path string) bool {
+    return strings.HasPrefix(path, "/internal/")
+})
+```
+
+Skipped paths не получают hub-clone — bandwidth + Sentry-cost savings.
+
+## Helpers: AddBreadcrumb / SetUser / RecoverGo
+
+```go
+// Explicit breadcrumb beyond the slog pipeline
+sentrykit.AddBreadcrumb(ctx, "billing", "charge submitted",
+    map[string]any{"amount": 1999})
+
+// Per-request user attribution (call after auth):
+sentrykit.SetUser(ctx, principal.Subject, principal.Email)
+
+// Background goroutine panic safety:
+go sentrykit.RecoverGo(func() {
+    // ... long-running work; panic captures to global hub + logs Warn
+})
+```
+
+## PII scrubbing
+
+`ScrubPII()` is a `BeforeSend` hook that redacts sensitive request headers (Authorization, Cookie, X-API-Key, Set-Cookie) and token-like query parameters (`token`, `secret`, `password`, `api_key`, `access_token`, …) before the event ships:
+
+```go
+sentrykit.Setup(ctx, dsn, sentrykit.WithoutPII())   // installs ScrubPII as BeforeSend
+// or compose with custom BeforeSend:
+sentrykit.WithBeforeSend(func(e *sentry.Event, h *sentry.EventHint) *sentry.Event {
+    return sentrykit.ScrubPII()(e, h) // chain
+})
+```
+
+Defence in depth — Sentry project's server-side PII rules remain the authoritative redaction layer.
+
+## /admin: Stats()
+
+```go
+s := sentrykit.GetStats()
+// Stats{EventsCaptured, EventsDeduped, EventsRateLimited, BreadcrumbsEmitted, DedupeCacheSize}
+```
+
+Cheap atomic counters; nil-safe. Use на /admin endpoint для visibility в sentrykit-own поведение.
+
+## WithCaptureRateLimit (per-fingerprint hard cap)
+
+Window-based dedupe ([`WithCaptureDedupeWindow`](#subsystem-breadcrumbs-slog-мост)) защищает от тысяч одинаковых events в 60s, но иногда нужно ещё hard cap "max N events per minute per fingerprint" (e.g. validation-failure boundary that varies error string every call → dedupe doesn't match, but you still want to bound spend):
+
+```go
+sentrykit.SlogHandler(inner,
+    sentrykit.WithCaptureLevel(slog.LevelError),
+    sentrykit.WithCaptureDedupeWindow(60 * time.Second),
+    sentrykit.WithCaptureRateLimit(10), // max 10 events / min / fingerprint
+)
+```
+
+Suppressed events tick `Stats.EventsRateLimited`. Breadcrumb still emits (timeline integrity for downstream events).
+
 ## WrapErrorHandler
 
 ```go
