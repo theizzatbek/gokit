@@ -58,4 +58,9 @@ const (
 	// CodeEnvVarMalformed — a ${...} block had bad syntax (e.g.
 	// unterminated, invalid identifier).
 	CodeEnvVarMalformed = "cronmap_env_var_malformed"
+
+	// CodeUnknownJob — Stats / NextRun / PauseJob / ResumeJob /
+	// TriggerJob were called with a name that was not in the
+	// runtime's plan.
+	CodeUnknownJob = "cronmap_unknown_job"
 )

@@ -9,6 +9,35 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `cronmap/` — six additions around the existing scheduler: per-job
+  retry policy, lifecycle hooks, /admin-friendly Stats() snapshot,
+  manual TriggerJob + NextRun prediction, and per-job Pause/Resume.
+  - YAML `max_retries` + `retry_backoff` for per-job retry on err /
+    timeout / panic. Backoff doubles per attempt, capped at base × 8.
+    Successful retries surface as `success` outcome in metrics;
+    exhausted retries fall through to `failure` / `timeout` based on
+    the final attempt's error. Default = no retry (back-compat).
+  - `WithOnTickStart(fn)` + `WithOnTickComplete(fn)` panic-safe
+    lifecycle hooks fired before and after the (potentially retried)
+    handler chain. Use for tracing span attrs, audit logs.
+  - `Runtime.Stats() []JobStats` returns per-job snapshot:
+    `{Name, Paused, TotalRuns, SuccessCount, FailureCount,
+    TimeoutCount, SkippedCount, LastRunAt, LastOutcome,
+    LastRunDuration, NextRunAt}`. atomic counters + mu only for
+    last-run trio. Nil-receiver safe.
+  - `Runtime.TriggerJob(ctx, name)` fires the named job
+    synchronously, bypassing singleton lock and paused guard
+    (operator /admin convention). Retry / hooks / metrics fire as
+    on a normal tick. NotFound on unknown name. Works on a
+    stopped runtime too (manual-only mode).
+  - `Runtime.NextRun(name) (time.Time, error)` predicts the
+    schedule's next fire time via `Schedule.Next(time.Now())`.
+    NotFound on unknown name.
+  - `Runtime.PauseJob(name) / ResumeJob(name)` toggle the
+    scheduler-tick guard for individual jobs. Paused jobs accumulate
+    `JobStats.SkippedCount` and Debug-log; TriggerJob ignores
+    pause by design (operator override). Stable error code:
+    `cronmap_unknown_job`.
 - `batch/` — six production-quality additions around the existing
   Batcher. Panic recovery, backpressure cap, worker pool, retry
   policy, lifecycle hooks, and an /admin-friendly Stats() snapshot.

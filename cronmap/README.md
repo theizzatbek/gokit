@@ -79,6 +79,8 @@ New → LoadFile/LoadBytes (n) → RegisterHandler (n) → Build (once) → Runt
 | `timeout` | нет | 0 (no deadline) | Go duration. Per-run wraps fn в `context.WithTimeout`. |
 | `singleton` | нет | false | Если true — требует `WithSingletonLocker` на Build. |
 | `sentry_slug` | нет | `slugify(name)` | Передаётся в `sentrykit.MonitorCron` если `WithSentry()`. |
+| `max_retries` | нет | 0 (no retry) | Caps re-invocations on err / timeout / panic. Default behaviour — no retry. |
+| `retry_backoff` | нет | 0 (no wait) | Initial delay между attempts; doubles per attempt capped at base × 8. |
 
 `${VAR}` substitution работает в любом string-поле (как в apimap/natsmap):
 
@@ -123,15 +125,89 @@ func WithLogger(l *slog.Logger) BuildOption
 func WithMetrics(r prometheus.Registerer) BuildOption
 func WithSingletonLocker(l SingletonLocker) BuildOption
 func WithSentry() BuildOption
+func WithOnTickStart(fn func(ctx, name string)) BuildOption
+func WithOnTickComplete(fn func(ctx, name string, err error, elapsed time.Duration)) BuildOption
 
 // Runtime
 func (r *Runtime) Start(ctx context.Context) error
 func (r *Runtime) Stop(ctx context.Context) error
 func (r *Runtime) JobNames() []string
 
+// /admin endpoints
+func (r *Runtime) Stats() []JobStats                              // per-job snapshot
+func (r *Runtime) NextRun(name string) (time.Time, error)         // schedule.Next(now)
+func (r *Runtime) TriggerJob(ctx context.Context, name string) error  // manual run (bypass singleton + pause)
+func (r *Runtime) PauseJob(name string) error                     // skip scheduled ticks
+func (r *Runtime) ResumeJob(name string) error                    // re-enable
+
+type JobStats struct {
+    Name            string
+    Paused          bool
+    TotalRuns       int64
+    SuccessCount    int64
+    FailureCount    int64
+    TimeoutCount    int64
+    SkippedCount    int64
+    LastRunAt       time.Time
+    LastOutcome     string
+    LastRunDuration time.Duration
+    NextRunAt       time.Time
+}
+
 // PG-backed Locker (uses db/lock advisory locks)
 func PGLocker(d *db.DB) SingletonLocker
 ```
+
+## Retry policy
+
+```yaml
+jobs:
+  - name: nightly-rollup
+    handler: rollup
+    schedule: "0 3 * * *"
+    max_retries: 3
+    retry_backoff: 30s   # 30s → 60s → 120s (× 2^N, capped at base × 8)
+```
+
+Применяется к err / timeout / panic. Успешный retry surface'ит как `success` outcome в metrics. Exhausted retries → `failure` (or `timeout` если последняя попытка дала DeadlineExceeded). Ack-like behaviour — Stats и hooks fire после final attempt.
+
+## Lifecycle hooks
+
+```go
+rt, _ := eng.Build(
+    cronmap.WithOnTickStart(func(ctx context.Context, name string) {
+        span := trace.SpanFromContext(ctx); span.SetAttributes(attribute.String("cron.name", name))
+    }),
+    cronmap.WithOnTickComplete(func(ctx context.Context, name string, err error, d time.Duration) {
+        auditLog.Record(name, statusOf(err), d)
+    }),
+)
+```
+
+Hooks panic-safe (recover + Warn-log). Multiple calls — last wins. `elapsed` — total wall-clock time всех attempts вместе.
+
+## /admin operations
+
+```go
+// Snapshot для /admin/cron-status
+for _, s := range rt.Stats() {
+    fmt.Printf("%s: %d runs, %d failures, next=%s\n",
+        s.Name, s.TotalRuns, s.FailureCount, s.NextRunAt)
+}
+
+// Operator triggers job out-of-band ("force-run now"):
+_ = rt.TriggerJob(ctx, "nightly-rollup") // bypasses singleton + pause
+
+// Operator disables a job temporarily:
+_ = rt.PauseJob("nightly-rollup")
+// ... fix the upstream, then:
+_ = rt.ResumeJob("nightly-rollup")
+
+// Predict next fire-at:
+next, _ := rt.NextRun("nightly-rollup")
+```
+
+Все эти operations fire metrics + hooks как обычный tick.
 
 ## Шаблоны cron expressions
 
