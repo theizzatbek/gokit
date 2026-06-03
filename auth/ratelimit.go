@@ -50,20 +50,36 @@ func RateLimit(rps float64, burst int) fiber.Handler {
 // RateLimit (method form) is the *Auth[C]-bound convenience for the
 // package-level RateLimit. Unlike the free function, this variant
 // increments `auth_ratelimit_denied_total` on each rejection when
-// [WithMetrics] was wired — prefer it over the package-level form
-// in services that scrape metrics.
+// [WithMetrics] was wired AND routes IP extraction through
+// [WithIPExtractor] when configured — prefer it over the package-level
+// form in services that scrape metrics or sit behind a CDN.
 func (a *Auth[C]) RateLimit(rps float64, burst int) fiber.Handler {
-	return rateLimitBy(rps, burst, KeyByIP, a.metrics)
+	return rateLimitBy(rps, burst, a.keyByIP, a.metrics)
 }
 
 // RateLimitBySubject keys the limiter on the authenticated principal.
-// Anonymous requests fall back to client IP. Mount auth.Bearer
-// upstream so the principal is populated when present.
+// Anonymous requests fall back to the [WithIPExtractor]-resolved IP.
+// Mount auth.Bearer upstream so the principal is populated when present.
 //
 // Counts denials in `auth_ratelimit_denied_total` when [WithMetrics]
 // is wired.
 func (a *Auth[C]) RateLimitBySubject(rps float64, burst int) fiber.Handler {
-	return rateLimitBy(rps, burst, KeyBySubject[C], a.metrics)
+	return rateLimitBy(rps, burst, a.keyBySubject, a.metrics)
+}
+
+// keyByIP is the Auth-bound IP keyer — routes through clientIP so
+// WithIPExtractor wins over c.IP() when wired.
+func (a *Auth[C]) keyByIP(c *fiber.Ctx) string { return a.clientIP(c) }
+
+// keyBySubject is the Auth-bound subject keyer with IP fallback. Same
+// shape as the package-level KeyBySubject; uses clientIP for the
+// fallback so CF-Connecting-IP / X-Real-IP land in the bucket key when
+// WithIPExtractor is wired.
+func (a *Auth[C]) keyBySubject(c *fiber.Ctx) string {
+	if s := Subject[C](c); s != "" {
+		return "sub:" + s
+	}
+	return "ip:" + a.clientIP(c)
 }
 
 // RateLimitBy is the explicit-key variant of [RateLimit]. keyFn picks

@@ -22,6 +22,7 @@ const (
 	CodeKeyNotLoaded        = "key_not_loaded"
 	CodeStoreUnavailable    = "store_unavailable"
 	CodeRateLimited         = "rate_limited"
+	CodeTokenRevoked        = "token_revoked"
 )
 
 // wwwAuthenticate renders an RFC 6750 §3 challenge string suitable for the

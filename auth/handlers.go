@@ -43,7 +43,7 @@ const refreshCookieName = "refresh_token"
 func (a *Auth[C]) IssueLogin(c *fiber.Ctx, res LoginResult[C]) error {
 	pair, err := a.IssueTokens(c.UserContext(), res, IssueMeta{
 		UserAgent: c.Get(fiber.HeaderUserAgent),
-		IP:        c.IP(),
+		IP:        a.clientIP(c),
 	})
 	if err != nil {
 		return err
@@ -88,7 +88,7 @@ func (a *Auth[C]) IssueRefresh(c *fiber.Ctx) error {
 	raw := c.Cookies(refreshCookieName)
 	pair, err := a.RotateRefresh(c.UserContext(), raw, IssueMeta{
 		UserAgent: c.Get(fiber.HeaderUserAgent),
-		IP:        c.IP(),
+		IP:        a.clientIP(c),
 	})
 	if err != nil {
 		if e, ok := errors.AsType[*xerrs.Error](err); ok && e.Code == CodeRefreshReused {

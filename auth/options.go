@@ -12,6 +12,7 @@ type Option func(*options)
 
 type options struct {
 	refreshStore   RefreshStore
+	revokedAccess  RevokedAccessStore
 	logger         *slog.Logger
 	securityLogger *slog.Logger
 	metrics        prometheus.Registerer
@@ -20,6 +21,7 @@ type options struct {
 	cookieSecure   *bool // tri-state: nil = default (true)
 	leewayOverride time.Duration
 	now            func() time.Time
+	ipExtractor    IPExtractor
 }
 
 // WithRefreshStore wires the persistence backend for refresh tokens.

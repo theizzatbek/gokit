@@ -30,7 +30,9 @@ type Auth[C any] struct {
 	now              func() time.Time
 	apiKeyHashSecret []byte
 
-	refresher ClaimsRefresher[C]
+	refresher     ClaimsRefresher[C]
+	revokedAccess RevokedAccessStore
+	ipExtractor   IPExtractor
 }
 
 // ClaimsRefresher re-reads up-to-date scopes/roles/custom from the source of
@@ -99,6 +101,8 @@ func New[C any](cfg Config, opts ...Option) (*Auth[C], error) {
 		refreshTTL:       cfg.RefreshTTL,
 		now:              now,
 		apiKeyHashSecret: cfg.APIKeyHashSecret,
+		revokedAccess:    o.revokedAccess,
+		ipExtractor:      o.ipExtractor,
 	}
 	return a, nil
 }
@@ -108,6 +112,41 @@ func (a *Auth[C]) Sign(c Claims[C]) (string, error) { return a.eng.sign(c) }
 
 // Verify parses and validates a JWT and returns the typed claims.
 func (a *Auth[C]) Verify(tok string) (Claims[C], error) { return a.eng.verify(tok) }
+
+// KeySet returns the currently-active KeySet via an atomic load.
+// Useful for callers that want to serve the kit's JWKS document
+// themselves (the canonical handler is Auth.JWKSHandler).
+func (a *Auth[C]) KeySet() *KeySet { return a.eng.keySet() }
+
+// RotateKeys hot-swaps the signing/verification key set without
+// dropping in-flight Sign / Verify calls. Use during operator-driven
+// rotation (KMS / Vault publishes a new active key; the old kid stays
+// in the verify set until grace expires; eventually it's dropped).
+//
+// Returns *errs.Error{KindValidation, …} when:
+//
+//   - ks is nil
+//   - ks.active.Priv == nil (active kid is verify-only)
+//   - ks has zero verify entries
+//
+// Otherwise the swap is atomic — the next Sign uses the new active
+// key, the next Verify accepts every kid in the new verify set. Any
+// Sign / Verify already running against the OLD KeySet completes
+// against that pointer; the next call to Sign or Verify picks up the
+// new one. No mutex, no blocking.
+func (a *Auth[C]) RotateKeys(ks *KeySet) error {
+	if ks == nil {
+		return xerrs.Validation("invalid_keys", "auth: RotateKeys nil KeySet")
+	}
+	if len(ks.verify) == 0 {
+		return xerrs.Validation("invalid_keys", "auth: RotateKeys KeySet has no verify entries")
+	}
+	if ks.active.KID != "" && ks.active.Priv == nil {
+		return xerrs.Validation("invalid_keys", "auth: RotateKeys active key is verify-only (no private material)")
+	}
+	a.eng.rotateKeys(ks)
+	return nil
+}
 
 // SetClaimsRefresher registers an optional callback used by RotateRefresh /
 // IssueRefresh to pull fresh scopes/roles/custom claims for the rotated

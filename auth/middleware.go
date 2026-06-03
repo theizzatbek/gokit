@@ -48,6 +48,19 @@ func (a *Auth[C]) Bearer(mode BearerMode) fiber.Handler {
 			a.maybeSecurityLog(c, "bearer_verify_failed", err)
 			return bearerReject(c, err)
 		}
+		if a.revokedAccess != nil && claims.JTI != "" {
+			revoked, rerr := a.revokedAccess.IsRevoked(c.UserContext(), claims.JTI)
+			if rerr != nil {
+				// Fail-OPEN: a transient blacklist outage does not lock
+				// out every user. Log and proceed; the security logger
+				// gets the failure for SIEM follow-up.
+				a.maybeSecurityLog(c, "revoked_access_lookup_failed", rerr)
+			} else if revoked {
+				a.metrics.incBearerVerify("invalid")
+				a.maybeSecurityLog(c, "token_revoked", nil)
+				return bearerReject(c, xerrs.Unauthorized(CodeTokenRevoked, "access token revoked"))
+			}
+		}
 		a.metrics.incBearerVerify("ok")
 		c.Locals(principalKey{}, claimsToPrincipal(claims, tok))
 		return c.Next()
@@ -91,7 +104,7 @@ func (a *Auth[C]) maybeSecurityLog(c *fiber.Ctx, event string, err error) {
 	}
 	a.securityLogger.WarnContext(c.UserContext(), event,
 		"err", err,
-		"ip", c.IP(),
+		"ip", a.clientIP(c),
 		"ua", c.Get(fiber.HeaderUserAgent),
 		"path", c.Path(),
 	)
@@ -106,7 +119,7 @@ func (a *Auth[C]) maybeSecurityInfo(c *fiber.Ctx, event string, attrs ...any) {
 		return
 	}
 	args := []any{
-		"ip", c.IP(),
+		"ip", a.clientIP(c),
 		"ua", c.Get(fiber.HeaderUserAgent),
 		"path", c.Path(),
 	}
@@ -134,6 +147,31 @@ func (a *Auth[C]) RequireScope(scopes ...string) fiber.Handler {
 	}
 }
 
+// RequireAnyScope is the OR-semantic counterpart of RequireScope: the
+// request passes when the principal carries AT LEAST ONE of the named
+// scopes. Same 403 on miss; the WithDetails field lists every
+// candidate. Use when an endpoint accepts multiple authorisation
+// dimensions (e.g. `orders:read` ИЛИ `admin:all`).
+func (a *Auth[C]) RequireAnyScope(scopes ...string) fiber.Handler {
+	required := append([]string(nil), scopes...)
+	return func(c *fiber.Ctx) error {
+		p, err := MustFrom[C](c)
+		if err != nil {
+			return err
+		}
+		for _, want := range required {
+			if containsString(p.Scopes, want) {
+				return c.Next()
+			}
+		}
+		details := make([]xerrs.FieldError, 0, len(required))
+		for _, want := range required {
+			details = append(details, xerrs.FieldError{Field: "scope", Rule: "any", Param: want, Message: "one of the listed scopes required"})
+		}
+		return xerrs.Permission(CodeMissingScope, "missing required scope (any-of)").WithDetails(details...)
+	}
+}
+
 // RequireRole is RequireScope but reading from principal.Roles. Same AND
 // semantics, same 403 on miss.
 func (a *Auth[C]) RequireRole(roles ...string) fiber.Handler {
@@ -150,6 +188,29 @@ func (a *Auth[C]) RequireRole(roles ...string) fiber.Handler {
 			}
 		}
 		return c.Next()
+	}
+}
+
+// RequireAnyRole is the OR-semantic counterpart of RequireRole: the
+// request passes when the principal carries AT LEAST ONE of the named
+// roles.
+func (a *Auth[C]) RequireAnyRole(roles ...string) fiber.Handler {
+	required := append([]string(nil), roles...)
+	return func(c *fiber.Ctx) error {
+		p, err := MustFrom[C](c)
+		if err != nil {
+			return err
+		}
+		for _, want := range required {
+			if containsString(p.Roles, want) {
+				return c.Next()
+			}
+		}
+		details := make([]xerrs.FieldError, 0, len(required))
+		for _, want := range required {
+			details = append(details, xerrs.FieldError{Field: "role", Rule: "any", Param: want, Message: "one of the listed roles required"})
+		}
+		return xerrs.Permission(CodeMissingRole, "missing required role (any-of)").WithDetails(details...)
 	}
 }
 
@@ -211,6 +272,29 @@ func (a *Auth[C]) RequireRoleFactory(args []any) (fiber.Handler, error) {
 		return nil, err
 	}
 	return a.RequireRole(roles...), nil
+}
+
+// RequireAnyScopeFactory adapts RequireAnyScope to the fibermap
+// middleware-factory contract. YAML form mirrors require_scope but
+// passes when the principal carries any one of the listed scopes:
+//
+//	middleware:
+//	  - require_any_scope: ["orders:read", "admin:all"]
+func (a *Auth[C]) RequireAnyScopeFactory(args []any) (fiber.Handler, error) {
+	scopes, err := stringSliceArgs("require_any_scope", args)
+	if err != nil {
+		return nil, err
+	}
+	return a.RequireAnyScope(scopes...), nil
+}
+
+// RequireAnyRoleFactory adapts RequireAnyRole.
+func (a *Auth[C]) RequireAnyRoleFactory(args []any) (fiber.Handler, error) {
+	roles, err := stringSliceArgs("require_any_role", args)
+	if err != nil {
+		return nil, err
+	}
+	return a.RequireAnyRole(roles...), nil
 }
 
 func stringSliceArgs(name string, args []any) ([]string, error) {
