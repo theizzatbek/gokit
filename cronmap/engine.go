@@ -171,12 +171,14 @@ func (e *Engine) Build(opts ...BuildOption) (*Runtime, error) {
 		}
 
 		plan = append(plan, plannedJob{
-			name:      j.Name,
-			handler:   fn,
-			schedule:  sched,
-			timeout:   j.Timeout,
-			singleton: j.Singleton,
-			slug:      slug,
+			name:         j.Name,
+			handler:      fn,
+			schedule:     sched,
+			timeout:      j.Timeout,
+			singleton:    j.Singleton,
+			slug:         slug,
+			maxRetries:   j.MaxRetries,
+			retryBackoff: j.RetryBackoff,
 		})
 	}
 
@@ -193,10 +195,16 @@ func (e *Engine) Build(opts ...BuildOption) (*Runtime, error) {
 	e.built = true
 
 	rt := &Runtime{
-		jobs:      plan,
-		locker:    o.locker,
-		logger:    o.logger,
-		useSentry: o.useSentry,
+		jobs:           plan,
+		locker:         o.locker,
+		logger:         o.logger,
+		useSentry:      o.useSentry,
+		onTickStart:    o.onTickStart,
+		onTickComplete: o.onTickComplete,
+		states:         make(map[string]*jobState, len(plan)),
+	}
+	for i := range plan {
+		rt.states[plan[i].name] = &jobState{}
 	}
 	rt.collectors = newMetricsCollector(o.metrics)
 	rt.collectors.setJobs(float64(len(plan)))
@@ -208,14 +216,18 @@ func (e *Engine) Build(opts ...BuildOption) (*Runtime, error) {
 }
 
 // plannedJob is the resolved per-job runtime data — built once at
-// Build time and read on every tick.
+// Build time and read on every tick. Mutable counters live on
+// jobState (separate map keyed by name) so plannedJob stays a
+// read-only slice across goroutines.
 type plannedJob struct {
-	name      string
-	handler   HandlerFn
-	schedule  cron.Schedule
-	timeout   time.Duration
-	singleton bool
-	slug      string
+	name         string
+	handler      HandlerFn
+	schedule     cron.Schedule
+	timeout      time.Duration
+	singleton    bool
+	slug         string
+	maxRetries   int
+	retryBackoff time.Duration
 }
 
 // slugify turns a human job name ("Daily Rollup") into a

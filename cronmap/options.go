@@ -3,6 +3,7 @@ package cronmap
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/robfig/cron/v3"
@@ -50,11 +51,13 @@ func WithEnv(m map[string]string) EngineOption {
 type BuildOption func(*buildOptions)
 
 type buildOptions struct {
-	parser    cron.Parser
-	logger    *slog.Logger
-	metrics   prometheus.Registerer
-	locker    SingletonLocker
-	useSentry bool
+	parser         cron.Parser
+	logger         *slog.Logger
+	metrics        prometheus.Registerer
+	locker         SingletonLocker
+	useSentry      bool
+	onTickStart    func(ctx context.Context, name string)
+	onTickComplete func(ctx context.Context, name string, err error, elapsed time.Duration)
 }
 
 // defaultParser is the 5-field cron expression set (no seconds) plus
@@ -106,4 +109,20 @@ func WithSingletonLocker(l SingletonLocker) BuildOption {
 // itself was never initialised.
 func WithSentry() BuildOption {
 	return func(o *buildOptions) { o.useSentry = true }
+}
+
+// WithOnTickStart registers a callback fired BEFORE the handler runs
+// (and before any retry loop). Use for tracing span starts, audit
+// log begin, request_id stamping. Panic-safe — the kit recovers
+// callback panics so a broken hook does not kill the tick.
+func WithOnTickStart(fn func(ctx context.Context, name string)) BuildOption {
+	return func(o *buildOptions) { o.onTickStart = fn }
+}
+
+// WithOnTickComplete registers a callback fired AFTER the handler
+// (or final retry attempt) returns. err is nil on success;
+// elapsed is the total wall-clock time spent across all attempts.
+// Panic-safe — same convention as [WithOnTickStart].
+func WithOnTickComplete(fn func(ctx context.Context, name string, err error, elapsed time.Duration)) BuildOption {
+	return func(o *buildOptions) { o.onTickComplete = fn }
 }
