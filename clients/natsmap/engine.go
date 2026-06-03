@@ -46,6 +46,9 @@ type Engine struct {
 	streams     rawStreamsBlock
 	serverGroup string
 
+	subscriberOptions map[string][]natsclient.SubscribeOption
+	mockHandlers      map[string]func(ctx context.Context, ptr any, meta msgMeta) error
+
 	built bool
 }
 
@@ -92,11 +95,28 @@ func New(opts ...EngineOption) *Engine {
 		handlerFns:        map[string]func(ctx context.Context, ptr any, meta msgMeta) error{},
 		batchedHandlerFns: map[string]func(ctx context.Context, ptrs []any, metas []msgMeta) error{},
 		publisherTypes:    map[string]reflect.Type{},
+		subscriberOptions: map[string][]natsclient.SubscribeOption{},
+		mockHandlers:      map[string]func(ctx context.Context, ptr any, meta msgMeta) error{},
 	}
 	for _, fn := range opts {
 		fn(e)
 	}
 	return e
+}
+
+// RegisterSubscriberOptions records per-subscriber [natsclient.SubscribeOption]
+// values. Merged AFTER any engine-wide [WithSubscribeOptions] at Build
+// so subscriber-specific options refine the global baseline.
+//
+// Panics with *errs.Error on post-Build registration. Build fails
+// with natsmap_unknown_subscriber when the name does not match any
+// YAML subscriber.
+func (e *Engine) RegisterSubscriberOptions(name string, opts ...natsclient.SubscribeOption) {
+	if e.built {
+		panic(xerrs.Validationf(CodeAlreadyBuilt,
+			"natsmap: cannot RegisterSubscriberOptions %q after Build", name))
+	}
+	e.subscriberOptions[name] = append(e.subscriberOptions[name], opts...)
 }
 
 // LoadFile reads a YAML file (subscribers, publishers, or both) and
@@ -223,6 +243,58 @@ func RegisterBatchedHandler[T any](e *Engine, name string,
 	}
 }
 
+// RegisterMockHandler swaps the YAML-described subscription for an
+// in-process mock. The named subscriber will NOT open a JetStream
+// subscription at Build; instead, calls to Publish that route
+// (locally) to this name fire the supplied function synchronously
+// inside the test's goroutine.
+//
+// Intended for unit tests of services that wire natsmap without
+// spinning up a NATS testcontainer. Tests can invoke the publisher
+// path via natsmap.Publish and assert on side effects without any
+// network involvement.
+//
+// IMPORTANT: mock handlers DO NOT receive messages from real NATS —
+// they fire only when [DispatchMock] is invoked from the test
+// harness. Production code must NEVER call this.
+//
+// Panics on duplicate, post-Build, or type-mismatched registration.
+func RegisterMockHandler[T any](e *Engine, name string,
+	h func(ctx context.Context, m natsclient.Msg[T]) error) {
+	if e.built {
+		panic(xerrs.Validationf(CodeAlreadyBuilt,
+			"natsmap: cannot register mock handler for %q after Build", name))
+	}
+	if _, exists := e.handlerTypes[name]; exists {
+		panic(xerrs.Validationf(CodeDuplicateSubscriber,
+			"natsmap: duplicate handler registration for %q", name))
+	}
+	t := reflect.TypeOf((*T)(nil)).Elem()
+	e.handlerTypes[name] = t
+	shim := func(ctx context.Context, ptr any, meta msgMeta) error {
+		data, ok := ptr.(*T)
+		if !ok {
+			return xerrs.Internalf(CodePublisherTypeMismatch,
+				"natsmap: mock handler %q got wrong payload type %T", name, ptr)
+		}
+		msg := natsclient.Msg[T]{
+			Data:         *data,
+			Subject:      meta.Subject,
+			Headers:      meta.Headers,
+			Sequence:     meta.Sequence,
+			Redeliveries: meta.Redeliveries,
+			Reply:        meta.Reply,
+			Timestamp:    meta.Timestamp,
+		}
+		return h(ctx, msg)
+	}
+	// Mock handlers populate handlerFns too so the runtime can route
+	// DispatchMock calls through the same shim. The mockHandlers entry
+	// signals "skip JetStream subscribe at Build".
+	e.handlerFns[name] = shim
+	e.mockHandlers[name] = shim
+}
+
 // RegisterPublisher records the Go type used by natsmap.Publish[T] for
 // the named publisher. Panics on duplicate or post-Build registration.
 func RegisterPublisher[T any](e *Engine, name string) {
@@ -274,29 +346,66 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 		fn(o)
 	}
 
+	// Cross-check engine-level registrations against the YAML
+	// subscriber set so a typo / renamed subscriber surfaces loud.
+	knownSubs := map[string]struct{}{}
+	for i := range e.subscribers {
+		knownSubs[e.subscribers[i].Name] = struct{}{}
+	}
+	var preBuildErrs []error
+	for name := range e.subscriberOptions {
+		if _, ok := knownSubs[name]; !ok {
+			preBuildErrs = append(preBuildErrs, xerrs.Validationf(CodeUnknownSubscriber,
+				"natsmap: RegisterSubscriberOptions references unknown subscriber %q", name))
+		}
+	}
+	if err := errors.Join(preBuildErrs...); err != nil {
+		return nil, err
+	}
+
+	var collectors *natsmapMetrics
+	if o.metrics != nil {
+		collectors = newNatsmapMetrics(o.metrics)
+	}
+
 	rt := &Runtime{
-		publishers: map[string]publishShim{},
+		publishers:         map[string]publishShim{},
+		mockHandlers:       map[string]func(ctx context.Context, ptr any, meta msgMeta) error{},
+		mockTypes:          map[string]reflect.Type{},
+		defaultPublishHdrs: o.defaultPublishHdrs,
+		beforeDispatch:     o.beforeDispatch,
+		afterDispatch:      o.afterDispatch,
+		beforePublish:      o.beforePublish,
+		afterPublish:       o.afterPublish,
+		metrics:            collectors,
 	}
 
 	// Resolve streams: explicit list OR auto-derived from subjects.
-	streamsToEnsure := e.streams.List
-	if e.streams.Auto {
-		streamsToEnsure = deriveStreamsFromSubjects(e.subscribers, e.publishers)
-	}
-	for i := range streamsToEnsure {
-		s := &streamsToEnsure[i]
-		streamCfg, err := buildStreamConfig(s)
-		if err != nil {
-			return nil, err
+	// When c == nil (test mode — only mock subscribers + no real
+	// publishers), stream wiring is skipped entirely.
+	if c != nil {
+		streamsToEnsure := e.streams.List
+		if e.streams.Auto {
+			streamsToEnsure = deriveStreamsFromSubjects(e.subscribers, e.publishers)
 		}
-		if err := c.EnsureStream(ctx, streamCfg); err != nil {
-			return nil, xerrs.Wrapf(err, xerrs.KindUnavailable,
-				CodeEnsureStreamFailed, "natsmap: ensure stream %q", s.Name)
+		for i := range streamsToEnsure {
+			s := &streamsToEnsure[i]
+			streamCfg, err := buildStreamConfig(s)
+			if err != nil {
+				return nil, err
+			}
+			if err := c.EnsureStream(ctx, streamCfg); err != nil {
+				return nil, xerrs.Wrapf(err, xerrs.KindUnavailable,
+					CodeEnsureStreamFailed, "natsmap: ensure stream %q", s.Name)
+			}
 		}
 	}
 
 	// Subscribers
-	codec := c.Codec()
+	codec := natsclient.DefaultCodec()
+	if c != nil {
+		codec = c.Codec()
+	}
 	var buildErrs []error
 	for i := range e.subscribers {
 		s := &e.subscribers[i]
@@ -304,6 +413,25 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 		_, hasRegular := e.handlerFns[s.Name]
 		batchedFn, hasBatched := e.batchedHandlerFns[s.Name]
 		durable, queueGroup := resolveDurableQueueGroup(s, e.serverGroup)
+
+		// Mock subscribers skip every NATS-side wiring. They're
+		// registered onto the Runtime's mock map so DispatchMock can
+		// route to them directly from tests.
+		if mockFn, isMock := e.mockHandlers[s.Name]; isMock {
+			rt.mockHandlers[s.Name] = mockFn
+			rt.mockTypes[s.Name] = handlerType
+			rt.subscriberNames = append(rt.subscriberNames, s.Name)
+			continue
+		}
+
+		if c == nil {
+			// Non-mock subscriber in nil-client (test) mode: surface
+			// as a Build error rather than silently dropping the
+			// subscription.
+			buildErrs = append(buildErrs, xerrs.Validationf(CodeSubscribeFailed,
+				"natsmap: subscriber %q has no mock handler and no NATS client provided", s.Name))
+			continue
+		}
 
 		// Mode cross-check: YAML batch_size declares the subscriber's
 		// mode. A regular handler against a batched subscriber (or
@@ -339,11 +467,18 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 		// Regular mode: existing push-subscribe + auto-ack path.
 		_ = hasRegular
 		handlerFn := e.handlerFns[s.Name]
+		// Wrap handlerFn with hooks + metrics so per-subscriber name
+		// flows naturally without ctx-key plumbing.
+		handlerFn = wrapWithDispatchHooks(s.Name, s.Subject, handlerFn, o.beforeDispatch, o.afterDispatch, collectors)
 		subOpts, sferr := buildSubscribeOptions(s, durable, queueGroup)
 		if sferr != nil {
 			buildErrs = append(buildErrs, sferr)
 			continue
 		}
+		// Engine-wide subscribeOpts FIRST, then per-subscriber opts so
+		// subscriber overrides win. Matches the apimap convention.
+		subOpts = append(subOpts, o.subscribeOpts...)
+		subOpts = append(subOpts, e.subscriberOptions[s.Name]...)
 		raw := makeRawHandler(handlerType, codec, handlerFn)
 		sub, err := natsclient.SubscribeRaw(ctx, c, s.Subject, raw, subOpts...)
 		if err != nil {
@@ -356,22 +491,38 @@ func (e *Engine) Build(ctx context.Context, c *natsclient.Client, opts ...Option
 	}
 
 	// Publishers: expand map[string]string → map[string][]string for shim.
+	// When c == nil (test mode), publishers install a stub that errors
+	// at call time — tests focused on mock subscribers can build a
+	// Runtime without instantiating a real NATS client, but any
+	// accidental Publish call surfaces a loud error.
 	for i := range e.publishers {
 		p := &e.publishers[i]
 		payloadType := e.publisherTypes[p.Name]
 		subject := p.Subject
 		staticHdrs := expandHeaders(p.Headers)
-		rt.publishers[p.Name] = publishShim{
+		shim := publishShim{
 			subject:     subject,
 			staticHdrs:  staticHdrs,
 			payloadType: payloadType,
-			publish: func(ctx context.Context, payload any, callHdrs map[string][]string) error {
-				return natsclient.PublishViaCodec(ctx, c, subject, payload, callHdrs)
-			},
-			publishRaw: func(ctx context.Context, body []byte, callHdrs map[string][]string) error {
-				return natsclient.PublishRaw(ctx, c, subject, body, callHdrs)
-			},
 		}
+		if c == nil {
+			shim.publish = func(context.Context, any, map[string][]string) error {
+				return xerrs.Internal(CodePublishFailed,
+					"natsmap: publish invoked on nil-client test Runtime")
+			}
+			shim.publishRaw = func(context.Context, []byte, map[string][]string) error {
+				return xerrs.Internal(CodePublishFailed,
+					"natsmap: publish invoked on nil-client test Runtime")
+			}
+		} else {
+			shim.publish = func(ctx context.Context, payload any, callHdrs map[string][]string) error {
+				return natsclient.PublishViaCodec(ctx, c, subject, payload, callHdrs)
+			}
+			shim.publishRaw = func(ctx context.Context, body []byte, callHdrs map[string][]string) error {
+				return natsclient.PublishRaw(ctx, c, subject, body, callHdrs)
+			}
+		}
+		rt.publishers[p.Name] = shim
 	}
 
 	if err := errors.Join(buildErrs...); err != nil {
