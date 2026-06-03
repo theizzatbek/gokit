@@ -10,11 +10,38 @@ import (
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
-// Client is the kit's Redis handle. Wraps a *redis.Client + optional
-// observability collectors. Owns the connection — call Close once
-// when shutting down (idempotent + nil-safe).
+// Mode identifies which Redis topology the kit Client wraps. Returned
+// from [Client.Mode] so callers can branch on the deployment shape
+// when needed.
+type Mode int
+
+const (
+	ModeSingle Mode = iota
+	ModeCluster
+	ModeSentinel
+)
+
+func (m Mode) String() string {
+	switch m {
+	case ModeSingle:
+		return "single"
+	case ModeCluster:
+		return "cluster"
+	case ModeSentinel:
+		return "sentinel"
+	default:
+		return "unknown"
+	}
+}
+
+// Client is the kit's Redis handle. Wraps a `redis.UniversalClient`
+// (one of *redis.Client / *redis.ClusterClient / *redis.SentinelClient)
+// + optional observability collectors. Owns the connection — call
+// Close once when shutting down (idempotent + nil-safe).
 type Client struct {
-	rdb     *redis.Client
+	universal redis.UniversalClient
+	mode      Mode
+
 	logger  *slog.Logger
 	metrics *metricsCollector
 }
@@ -44,30 +71,109 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*Client, error) {
 	}
 
 	rdb := redis.NewClient(redisOpts)
+	return finishConnect(ctx, rdb, ModeSingle, cfg.ConnectMaxRetries, cfg.ConnectBackoffBase, cfg.ConnectBackoffMax, o)
+}
 
+// ConnectCluster opens a cluster-mode connection using
+// redis.NewClusterClient. Returns the same kit *Client so callers can
+// move between modes by swapping Connect/ConnectCluster only; the
+// rest of the surface (Universal, Close, Logger) stays identical.
+//
+// Observability (hook, metrics, breaker, default-timeout) works the
+// same as in single-mode — go-redis routes them through every shard.
+func ConnectCluster(ctx context.Context, cfg ClusterConfig, opts ...Option) (*Client, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	o := &options{}
+	for _, fn := range opts {
+		fn(o)
+	}
+	clusterOpts := &redis.ClusterOptions{
+		Addrs:    append([]string(nil), cfg.Addrs...),
+		Username: cfg.Username,
+		Password: cfg.Password,
+	}
+	if o.redisOptions != nil {
+		// Reuse the single-node mutator by re-routing through the
+		// universal shape: ClusterOptions exposes the same hot fields
+		// (PoolSize, MinIdleConns, ReadTimeout, TLSConfig) so a
+		// caller-supplied mutator built for *redis.Options would
+		// need adaptation. We surface clusterOptions via a separate
+		// option (see WithClusterOptions) so the legacy
+		// WithRedisOptions stays single-mode.
+	}
+	if o.clusterMutator != nil {
+		o.clusterMutator(clusterOpts)
+	}
+	rdb := redis.NewClusterClient(clusterOpts)
+	return finishConnect(ctx, rdb, ModeCluster, cfg.ConnectMaxRetries, cfg.ConnectBackoffBase, cfg.ConnectBackoffMax, o)
+}
+
+// ConnectSentinel opens a Sentinel-mode failover connection using
+// redis.NewFailoverClient. The resulting *Client transparently
+// routes commands to the current master.
+func ConnectSentinel(ctx context.Context, cfg SentinelConfig, opts ...Option) (*Client, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	o := &options{}
+	for _, fn := range opts {
+		fn(o)
+	}
+	failoverOpts := &redis.FailoverOptions{
+		MasterName:       cfg.MasterName,
+		SentinelAddrs:    append([]string(nil), cfg.SentinelAddrs...),
+		DB:               cfg.DB,
+		Username:         cfg.Username,
+		Password:         cfg.Password,
+		SentinelUsername: cfg.SentinelUsername,
+		SentinelPassword: cfg.SentinelPassword,
+	}
+	if o.sentinelMutator != nil {
+		o.sentinelMutator(failoverOpts)
+	}
+	rdb := redis.NewFailoverClient(failoverOpts)
+	return finishConnect(ctx, rdb, ModeSentinel, cfg.ConnectMaxRetries, cfg.ConnectBackoffBase, cfg.ConnectBackoffMax, o)
+}
+
+// finishConnect is the shared post-construction wire-up: hooks,
+// metrics, ping retry. Identical across single / cluster / sentinel
+// modes because every universal client implements AddHook + Ping +
+// Close uniformly.
+func finishConnect(ctx context.Context, rdb redis.UniversalClient, mode Mode, retries int, base, max time.Duration, o *options) (*Client, error) {
 	c := &Client{
-		rdb:    rdb,
-		logger: o.logger,
+		universal: rdb,
+		mode:      mode,
+		logger:    o.logger,
 	}
 	if o.metrics != nil {
 		c.metrics = newMetricsCollector(o.metrics, rdb)
 	}
-	// Install the observability hook when EITHER logger or metrics
-	// is wired. metricsCollector is nil-safe inside the hook so
-	// logger-only mode still works.
-	if o.metrics != nil || o.logger != nil {
-		rdb.AddHook(newHook(c.metrics, o.logger))
+	// Install the kit observability hook when EITHER logger or
+	// metrics is wired. metricsCollector is nil-safe inside the hook
+	// so logger-only mode still works. defaultTimeout / breaker wrap
+	// into the same hook chain.
+	needHook := o.metrics != nil || o.logger != nil || o.defaultTimeout > 0 || o.breaker != nil
+	if needHook {
+		rdb.AddHook(newHook(c.metrics, o.logger, o.defaultTimeout, o.breaker))
+	}
+	for _, h := range o.extraHooks {
+		if h != nil {
+			rdb.AddHook(h)
+		}
 	}
 
 	// Retry the initial ping. Same backoff semantics as nats / db.
 	var pingErr error
-	for attempt := 0; attempt <= cfg.ConnectMaxRetries; attempt++ {
+	for attempt := 0; attempt <= retries; attempt++ {
 		if attempt > 0 {
-			wait := backoffWait(attempt, cfg.ConnectBackoffBase, cfg.ConnectBackoffMax)
+			wait := backoffWait(attempt, base, max)
 			if o.logger != nil {
 				o.logger.Warn("redisclient: connect failed, retrying",
+					"mode", mode.String(),
 					"attempt", attempt,
-					"max_retries", cfg.ConnectMaxRetries,
+					"max_retries", retries,
 					"wait", wait,
 					"err", pingErr)
 			}
@@ -83,6 +189,9 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*Client, error) {
 		pingErr = rdb.Ping(pingCtx).Err()
 		cancel()
 		if pingErr == nil {
+			if c.metrics != nil {
+				c.metrics.setConnectionStatus(true)
+			}
 			return c, nil
 		}
 	}
@@ -100,24 +209,51 @@ func (c *Client) Logger() *slog.Logger {
 	return c.logger
 }
 
-// Redis returns the underlying *redis.Client. Use any go-redis API
-// the wrapper doesn't expose directly. The lifetime is owned by
-// *Client; do NOT close the returned client yourself.
+// Redis returns the underlying *redis.Client when the kit Client
+// runs in single-node mode (the default). Returns nil under cluster
+// / sentinel modes — use [Client.Universal] there.
 func (c *Client) Redis() *redis.Client {
 	if c == nil {
 		return nil
 	}
-	return c.rdb
+	if single, ok := c.universal.(*redis.Client); ok {
+		return single
+	}
+	return nil
+}
+
+// Universal returns the underlying redis.UniversalClient regardless
+// of mode. Use as the cross-mode escape hatch (HSet / Pipeline /
+// Subscribe etc are all on the interface). Single-mode callers can
+// still use Redis() for *redis.Client-only APIs.
+func (c *Client) Universal() redis.UniversalClient {
+	if c == nil {
+		return nil
+	}
+	return c.universal
+}
+
+// Mode reports which Redis topology the kit Client wraps. Use to
+// branch on mode when an API is only meaningful for single-node
+// (e.g. SUBSCRIBE-style PubSub through *redis.Client).
+func (c *Client) Mode() Mode {
+	if c == nil {
+		return ModeSingle
+	}
+	return c.mode
 }
 
 // Close releases the underlying connection pool. Idempotent +
 // nil-safe — service.Close calls this unconditionally.
 func (c *Client) Close() error {
-	if c == nil || c.rdb == nil {
+	if c == nil || c.universal == nil {
 		return nil
 	}
-	err := c.rdb.Close()
-	c.rdb = nil
+	if c.metrics != nil {
+		c.metrics.setConnectionStatus(false)
+	}
+	err := c.universal.Close()
+	c.universal = nil
 	return err
 }
 

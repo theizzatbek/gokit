@@ -44,10 +44,10 @@ func (c *Checker) Name() string { return c.name }
 // never crash. PING is the canonical liveness probe for Redis;
 // it round-trips the protocol and reflects auth/permission failures.
 func (c *Checker) Check(ctx context.Context) error {
-	if c == nil || c.cl == nil || c.cl.rdb == nil {
+	if c == nil || c.cl == nil || c.cl.universal == nil {
 		return xerrs.Unavailable(CodeNotReady, "redis: client not initialised")
 	}
-	if err := c.cl.rdb.Ping(ctx).Err(); err != nil {
+	if err := c.cl.universal.Ping(ctx).Err(); err != nil {
 		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeNotReady, "redis: ping failed")
 	}
 	return nil

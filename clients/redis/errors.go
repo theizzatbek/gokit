@@ -13,4 +13,8 @@ const (
 	// CodeConnectFailed — the initial PING failed after exhausting
 	// ConnectMaxRetries. Wraps the last underlying go-redis error.
 	CodeConnectFailed = "redis_connect_failed"
+
+	// CodeCircuitOpen — request short-circuited by an open breaker
+	// installed via WithBreaker. Cause = breaker.ErrOpen.
+	CodeCircuitOpen = "redis_circuit_open"
 )
