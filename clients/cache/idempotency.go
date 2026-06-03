@@ -32,7 +32,7 @@ import (
 // likewise. This keeps the middleware Liveness-friendly: a Redis
 // blip can NEVER turn a write into a 500.
 type RedisIdempotencyStore struct {
-	rdb    *redis.Client
+	rdb    redis.UniversalClient
 	prefix string
 	logger *slog.Logger
 }
@@ -55,7 +55,7 @@ func NewIdempotencyStore(rc *redisclient.Client, prefix string) *RedisIdempotenc
 		panic("cache.NewIdempotencyStore: prefix is required to avoid key collisions on shared Redis")
 	}
 	return &RedisIdempotencyStore{
-		rdb:    rc.Redis(),
+		rdb:    rc.Universal(),
 		prefix: prefix,
 		logger: rc.Logger(),
 	}

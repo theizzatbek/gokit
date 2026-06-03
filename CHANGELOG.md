@@ -9,6 +9,37 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `clients/cache/` — five additions: UniversalClient adapter, owned
+  metrics, read-through helper with single-flight, TTL jitter,
+  pluggable codec, and prefix-scoped invalidation.
+  - `New[T]` now accepts `redis.UniversalClient` so the same cache
+    type works against single-node, cluster, and sentinel
+    deployments. `For[T]` threads through `rc.Universal()`. Same
+    surface for the in-package `RedisIdempotencyStore`.
+  - `Config.Name` + `Config.MetricsReg` register
+    `cache_operations_total{name,operation,outcome}` and
+    `cache_operation_duration_seconds{name,operation}`. Name is
+    required when MetricsReg is set. Operations: `get` /
+    `set` / `set_not_found` / `invalidate` / `invalidate_prefix`.
+    Outcomes: `hit` / `miss` / `negative` / `ok` / `error`.
+  - `(*Redis[T]).GetOrLoad(ctx, key, LoaderFn[T])` is the
+    read-through helper. `LoaderFn[T] = func(ctx, key) (T, bool,
+    error)` — `(val, true, nil)` → positive cache; `(zero, false,
+    nil)` → SetNotFound (negative cache); `(zero, false, err)` →
+    surface to caller without poisoning the cache. Internal
+    `singleflight.Group` collapses concurrent requests on the same
+    key into one loader invocation.
+  - `Config.TTLJitter` applies ±fraction uniform noise to the
+    effective PositiveTTL / NegativeTTL on every Set call.
+    Defaults to 0 (no jitter); typical production values 0.10 -
+    0.25. Defends popular keys against synchronised expiry storms.
+  - `Codec` interface + `JSONCodec` default + `Config.Codec`
+    override. Plug msgpack / protobuf / custom shapes without
+    forking the cache.
+  - `(*Redis[T]).InvalidatePrefix(ctx, partial)` walks the
+    keyspace via SCAN + pipelined DEL — bounded round-trips, no
+    KEYS. Best-effort error policy. Cluster-mode caveat: SCAN runs
+    per-shard; pin tenant keys via hashtag for full coverage.
 - `clients/redis/` — five additions covering production topologies,
   hook composability, status observability, and resilience.
   - `ConnectCluster(ctx, ClusterConfig, opts...)` (cluster mode via
