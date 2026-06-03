@@ -2,6 +2,7 @@ package natsclient
 
 import (
 	"context"
+	"crypto/tls"
 	"sync"
 	"time"
 
@@ -120,6 +121,27 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*Client, error) {
 			return nil, xerrs.Wrap(err, xerrs.KindValidation, CodeInvalidNKey, "natsclient: NKeySeed invalid")
 		}
 		natsOpts = append(natsOpts, opt)
+	}
+
+	if o.tlsConfig != nil && (o.rootCAs != nil || o.clientCertFile != "" || o.clientKeyFile != "") {
+		return nil, xerrs.Validation(CodeAuthAmbiguous,
+			"natsclient: WithTLSConfig is mutually exclusive with WithRootCAs / WithClientCert")
+	}
+	if (o.clientCertFile != "") != (o.clientKeyFile != "") {
+		return nil, xerrs.Validation(CodeAuthAmbiguous,
+			"natsclient: WithClientCert requires both certFile and keyFile")
+	}
+	if o.tlsConfig != nil {
+		natsOpts = append(natsOpts, nats.Secure(o.tlsConfig))
+	}
+	if o.rootCAs != nil {
+		// nats.go's RootCAs takes file paths; for an in-memory pool we
+		// fall through to a synthesised tls.Config and Secure().
+		cfg := &tls.Config{RootCAs: o.rootCAs}
+		natsOpts = append(natsOpts, nats.Secure(cfg))
+	}
+	if o.clientCertFile != "" {
+		natsOpts = append(natsOpts, nats.ClientCert(o.clientCertFile, o.clientKeyFile))
 	}
 
 	if o.reconnectHandler != nil {

@@ -15,4 +15,8 @@ const (
 	CodeMissingURL           = "missing_url"
 	CodeInvalidNKey          = "invalid_nkey"
 	CodeEncodeFailed         = "encode_failed"
+	CodeRequestTimeout       = "request_timeout"
+	CodeRequestFailed        = "request_failed"
+	CodeKVOpFailed           = "kv_op_failed"
+	CodeKVKeyNotFound        = "kv_key_not_found"
 )

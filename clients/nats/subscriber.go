@@ -99,6 +99,86 @@ type subOptions struct {
 	startPolicy   StartPolicy
 	filterSubject string
 	queueGroup    string
+
+	classifier   func(error) AckAction
+	ackProgress  time.Duration
+	panicHandler func(any)
+}
+
+// AckAction is the decision the dispatcher takes on the message after
+// the handler returns. The classifier wired by [WithErrorClassifier]
+// produces one of these from the handler's error.
+type AckAction int
+
+const (
+	// AckActAck — message processed, no redelivery. Default for nil err.
+	AckActAck AckAction = iota
+	// AckActNak — transient failure; NATS redelivers after backoff.
+	// Default for any non-nil error not marked ErrPoison.
+	AckActNak
+	// AckActTerm — permanent failure (poison pill); NATS NEVER
+	// redelivers. Default when errors.Is(err, ErrPoison).
+	AckActTerm
+)
+
+// String renders AckAction for log attrs.
+func (a AckAction) String() string {
+	switch a {
+	case AckActAck:
+		return "ack"
+	case AckActNak:
+		return "nak"
+	case AckActTerm:
+		return "term"
+	default:
+		return "unknown"
+	}
+}
+
+// WithErrorClassifier lets the caller route handler errors to Ack /
+// Nak / Term explicitly. Default behaviour (`nil` → Ack, `ErrPoison` →
+// Term, anything else → Nak with backoff) lives in [defaultClassifier]
+// and stays in effect when this option is not set.
+//
+// Typical use: route validation errors (your own sentinel, or *errs.Error
+// of KindValidation) to Term so a bad message doesn't redeliver
+// forever; route transient errors (network, db, locked rows) to Nak.
+//
+//	subOpts := []natsclient.SubscribeOption{
+//	    natsclient.WithErrorClassifier(func(err error) natsclient.AckAction {
+//	        var e *errs.Error
+//	        if errors.As(err, &e) && e.Kind == errs.KindValidation {
+//	            return natsclient.AckActTerm
+//	        }
+//	        return natsclient.AckActNak
+//	    }),
+//	}
+func WithErrorClassifier(fn func(error) AckAction) SubscribeOption {
+	return func(o *subOptions) { o.classifier = fn }
+}
+
+// WithAckProgress enables the auto-heartbeat loop: the dispatcher
+// fires `InProgress()` against the message every `d` while the
+// handler runs, resetting NATS's AckWait timer. Use for long-running
+// handlers whose total work exceeds the consumer's AckWait — without
+// this, NATS redelivers the message mid-processing and your handler
+// may run twice in parallel.
+//
+// Pick `d` significantly smaller than AckWait (rule of thumb:
+// AckWait/2). `d <= 0` disables — same as not setting the option.
+//
+// The heartbeat stops as soon as the handler returns (success or
+// error) and a single Ack/Nak/Term is issued.
+func WithAckProgress(d time.Duration) SubscribeOption {
+	return func(o *subOptions) { o.ackProgress = d }
+}
+
+// WithPanicHandler installs an optional callback invoked when a
+// handler panics. The kit already recovers the panic and Naks the
+// message; the callback exists for app-side reporting (Sentry capture,
+// counter increment, etc). Default — Warn-log only.
+func WithPanicHandler(fn func(any)) SubscribeOption {
+	return func(o *subOptions) { o.panicHandler = fn }
 }
 
 // SubscribeOption configures Subscribe. Task 16 adds the rest.
@@ -205,6 +285,7 @@ func SubscribeRaw(
 		ackWait:     30 * time.Second,
 		maxDeliver:  5,
 		backoff:     defaultBackoff,
+		classifier:  defaultClassifier,
 	}
 	for _, fn := range opts {
 		fn(&o)
@@ -240,7 +321,7 @@ func SubscribeRaw(
 		slots <- struct{}{}
 		go func() {
 			defer func() { <-slots }()
-			dispatchRaw(ctx, logger, metrics, handler, rawMsg, o.backoff)
+			dispatchRaw(ctx, logger, metrics, handler, rawMsg, o.backoff, o.classifier, o.ackProgress, o.panicHandler)
 		}()
 	}
 
@@ -297,8 +378,27 @@ func Subscribe[T any](
 	return SubscribeRaw(ctx, c, subject, shim, opts...)
 }
 
+// defaultClassifier preserves the legacy contract:
+//
+//	nil            → Ack
+//	ErrPoison      → Term
+//	anything else  → Nak (with backoff)
+func defaultClassifier(err error) AckAction {
+	switch {
+	case err == nil:
+		return AckActAck
+	case errors.Is(err, ErrPoison):
+		return AckActTerm
+	default:
+		return AckActNak
+	}
+}
+
 // dispatchRaw handles a single delivery: build RawMsg → call handler →
-// ack/nak/term based on returned error.
+// classify error → ack / nak / term. Panics inside the handler are
+// recovered, logged, optionally forwarded to a user callback, and
+// converted to a Nak so the slot is released and the message stays
+// alive for redelivery (or eventual Term via MaxDeliver).
 func dispatchRaw(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -306,7 +406,13 @@ func dispatchRaw(
 	handler RawHandler,
 	rawMsg *nats.Msg,
 	backoff func(redeliveries int) time.Duration,
+	classifier func(error) AckAction,
+	ackProgress time.Duration,
+	panicHandler func(any),
 ) {
+	if classifier == nil {
+		classifier = defaultClassifier
+	}
 	if metrics != nil {
 		metrics.IncInFlight(rawMsg.Subject)
 		defer metrics.DecInFlight(rawMsg.Subject)
@@ -323,31 +429,75 @@ func dispatchRaw(
 		msg.Redeliveries = int(md.NumDelivered) - 1
 		msg.Timestamp = md.Timestamp
 	}
-	// Extract W3C TraceContext (traceparent / tracestate) from the msg
-	// headers so the handler's ctx already knows about the upstream
-	// span. Without this, every consumer span becomes a fresh root and
-	// the trace looks broken at the publish→subscribe seam.
 	dispatchCtx := ExtractTraceContext(ctx, msg.Headers)
+
+	// AckProgress: spawn a tick goroutine that fires InProgress()
+	// against the message until the handler returns. The done channel
+	// is closed in the defer regardless of error/panic path.
+	done := make(chan struct{})
+	if ackProgress > 0 {
+		go func() {
+			t := time.NewTicker(ackProgress)
+			defer t.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-t.C:
+					_ = rawMsg.InProgress()
+				}
+			}
+		}()
+	}
+
 	start := time.Now()
-	err := handler(dispatchCtx, msg)
-	if err == nil {
-		if metrics != nil {
-			metrics.IncHandlerSuccess(rawMsg.Subject)
-			metrics.ObserveHandler(rawMsg.Subject, time.Since(start).Seconds())
-		}
-		_ = rawMsg.Ack()
-		return
-	}
-	if errors.Is(err, ErrPoison) {
-		_ = rawMsg.Term()
-		return
-	}
+	var handlerErr error
+	func() {
+		defer func() {
+			if p := recover(); p != nil {
+				handlerErr = fmt.Errorf("natsclient: handler panic: %v", p)
+				if logger != nil {
+					logger.Warn("nats handler panic recovered",
+						"subject", rawMsg.Subject,
+						"panic", fmt.Sprint(p))
+				}
+				if panicHandler != nil {
+					panicHandler(p)
+				}
+			}
+		}()
+		handlerErr = handler(dispatchCtx, msg)
+	}()
+	close(done)
+
+	action := classifier(handlerErr)
 	if metrics != nil {
-		metrics.IncHandlerError(rawMsg.Subject)
 		metrics.ObserveHandler(rawMsg.Subject, time.Since(start).Seconds())
+		switch action {
+		case AckActAck:
+			metrics.IncHandlerSuccess(rawMsg.Subject)
+		default:
+			metrics.IncHandlerError(rawMsg.Subject)
+		}
 	}
-	_ = rawMsg.NakWithDelay(backoff(msg.Redeliveries + 1))
+	switch action {
+	case AckActAck:
+		_ = rawMsg.Ack()
+	case AckActTerm:
+		_ = rawMsg.Term()
+	default:
+		_ = rawMsg.NakWithDelay(backoff(msg.Redeliveries + 1))
+	}
 }
+
+// InProgress signals to NATS that the handler is still working on the
+// message — resets the AckWait timer. Use when [WithAckProgress] is
+// not enabled and the handler reaches a phase that may exceed AckWait
+// on its own. Safe to call before the handler returns.
+func (m *RawMsg) InProgress() error { return m.raw.InProgress() }
+
+// InProgress on the typed Msg[T] mirrors RawMsg.InProgress.
+func (m Msg[T]) InProgress() error { return m.raw.InProgress() }
 
 // detectConsumerDrift logs a Warn if an existing durable consumer for stream/durable
 // has different ackWait/maxDeliver/filterSubject from what Subscribe would create.

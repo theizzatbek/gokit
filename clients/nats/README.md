@@ -186,6 +186,109 @@ defer sub.Drain()  // graceful: stop pulling, finish in-flight, ack remaining
 | `WithStartFrom(StartPolicy)` | StartNew | Где consumer стартует: `StartNew` / `StartAll` / `StartFromTime(t)` / `StartFromSequence(seq)` |
 | `WithFilterSubject(s)` | subject из вызова | Override фильтра subject'а для consumer'а |
 | `WithQueueGroup(g)` | none | Distributed work-queue семантика (round-robin между queue-членами) |
+| `WithErrorClassifier(fn)` | `nil→Ack / ErrPoison→Term / иначе→Nak` | Декларативное routing handler-ошибок в Ack/Nak/Term |
+| `WithAckProgress(d)` | off | Auto-heartbeat `InProgress()` каждые `d` пока handler работает (для long-running) |
+| `WithPanicHandler(fn)` | nil | Callback на recovered panic'е (Sentry capture etc); kit и так делает Warn-log + Nak |
+
+### Handler resilience — classifier / panic / ack-progress
+
+```go
+sub, _ := natsclient.Subscribe[OrderCreated](ctx, c, "orders.created", handler,
+    natsclient.WithDurable("invoice-sender"),
+    natsclient.WithAckWait(30*time.Second),
+
+    // Long handler > AckWait? Авто-heartbeat сохраняет lease.
+    natsclient.WithAckProgress(10*time.Second),
+
+    // Validation-ошибки = Term (не redeliver'им), transient = Nak.
+    natsclient.WithErrorClassifier(func(err error) natsclient.AckAction {
+        var e *errs.Error
+        if errors.As(err, &e) && e.Kind == errs.KindValidation {
+            return natsclient.AckActTerm
+        }
+        return natsclient.AckActNak
+    }),
+
+    // Panic в handler'е recover'ится → Nak; этот callback для Sentry/audit.
+    natsclient.WithPanicHandler(func(p any) { sentry.CurrentHub().Recover(p) }),
+)
+```
+
+Также есть `m.InProgress()` (на `Msg[T]` и `RawMsg`) — ручной heartbeat, когда `WithAckProgress` слишком грубый.
+
+### Pull-mode consumer
+
+Push (по умолчанию) = NATS пушит handler'у когда удобно. **Pull** = caller fetch'ит batches когда удобно. Лучше для cron/batch-job'ов и backpressure-sensitive workers.
+
+```go
+ps, _ := natsclient.NewPullSubscription[OrderCreated](c, "orders.created",
+    natsclient.WithDurable("nightly-reporter"),   // обязательно для pull
+    natsclient.WithMaxDeliver(3),
+)
+defer ps.Drain()
+
+// Вариант 1: explicit Fetch + Ack
+batch, _ := ps.Fetch(ctx, 100, 5*time.Second)
+for _, m := range batch {
+    if err := process(m.Data); err != nil { _ = m.Nak(); continue }
+    _ = m.Ack()
+}
+
+// Вариант 2: Run blocking loop
+_ = ps.Run(ctx, func(ctx context.Context, m natsclient.Msg[OrderCreated]) error {
+    return process(m.Data)
+}, 100, 5*time.Second)
+```
+
+Decode-failures в `Fetch` авто-Term'ются (poison-pill suppression) и логируются на ERROR; остальные decoded успешно проходят в slice. Pull требует `WithDurable`.
+
+### Request/Reply (typed RPC)
+
+```go
+// Server-side: subscribe + auto-respond
+sub, _ := natsclient.Reply[GetUser, User](ctx, c, "users.get", "users-svc",
+    func(ctx context.Context, req GetUser) (User, error) {
+        return usersRepo.ByID(ctx, req.ID)
+    })
+defer sub.Drain()
+
+// Client-side: typed request with timeout
+user, err := natsclient.Request[GetUser, User](ctx, c, "users.get",
+    GetUser{ID: "42"}, 2*time.Second)
+// *errs.Error{Code: "request_timeout"} при отсутствии reply
+```
+
+`queueGroup` (empty = без LB) распределяет один request на одного из N members группы.
+
+### KV bucket (типизированный)
+
+```go
+_, err := c.EnsureKVBucket(ctx, natsclient.KVConfig{
+    Bucket:  "feature-flags",
+    History: 5,
+    TTL:     24 * time.Hour,
+})
+
+kv, _ := natsclient.NewKV[FeatureFlag](c, "feature-flags")
+rev, _ := kv.Put(ctx, "checkout.new-flow", FeatureFlag{Enabled: true})
+flag, gotRev, _ := kv.Get(ctx, "checkout.new-flow")           // *errs.Error{KindNotFound} на miss
+_, err = kv.Update(ctx, "checkout.new-flow", newVal, gotRev)   // CAS — Conflict на stale rev
+_ = kv.Delete(ctx, "checkout.new-flow")
+kv.Raw() // *nats.KeyValue для Watch / History / ListKeys
+```
+
+### TLS
+
+```go
+c, _ := natsclient.Connect(ctx, cfg,
+    natsclient.WithRootCAs(pool),                            // self-signed / private CA
+    natsclient.WithClientCert("client.pem", "client.key"),   // mTLS
+)
+// или один полный *tls.Config:
+c, _ := natsclient.Connect(ctx, cfg, natsclient.WithTLSConfig(myTLS))
+```
+
+`WithTLSConfig` и `WithRootCAs`/`WithClientCert` взаимоисключающие — используйте либо verbatim, либо piecewise.
 
 ### Кастомный codec (например, protobuf)
 
