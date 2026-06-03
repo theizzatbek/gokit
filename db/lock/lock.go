@@ -36,6 +36,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -68,9 +70,11 @@ const (
 // called from multiple goroutines, each gets its own conn from the
 // pool.
 type Lock struct {
-	db   *db.DB
-	name string
-	key  int64
+	db      *db.DB
+	name    string
+	key     int64
+	logger  *slog.Logger
+	metrics *metricsCollector
 }
 
 // New constructs a Lock. Panics on nil d or empty name — both are
@@ -78,14 +82,20 @@ type Lock struct {
 // sha256(name)[:8] interpreted as big-endian int64, so two
 // different services using the same name will fight over the same
 // lock. Namespace per-service via prefix: "orders.daily-rollup".
-func New(d *db.DB, name string) *Lock {
+//
+// Optional Options ([WithLogger], [WithMetrics]) wire observability.
+func New(d *db.DB, name string, opts ...Option) *Lock {
 	if d == nil {
 		panic(errs.Validation(CodeNilDB, "lock: nil *db.DB"))
 	}
 	if name == "" {
 		panic(errs.Validation(CodeEmptyName, "lock: empty name"))
 	}
-	return &Lock{db: d, name: name, key: keyOf(name)}
+	lk := &Lock{db: d, name: name, key: keyOf(name)}
+	for _, opt := range opts {
+		opt(lk)
+	}
+	return lk
 }
 
 // Name returns the human-readable lock name.
@@ -117,20 +127,28 @@ func (l *Lock) TryAcquire(ctx context.Context) (bool, ReleaseFunc, error) {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return false, nil, err
 		}
+		l.metrics.recordOutcome(outcomeError)
+		l.logAcquireErr(err)
 		return false, nil, errs.Wrap(err, errs.KindUnavailable, CodeAcquireFailed,
 			"lock: acquire conn")
 	}
 	var ok bool
 	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", l.key).Scan(&ok); err != nil {
 		conn.Release()
+		l.metrics.recordOutcome(outcomeError)
+		l.logAcquireErr(err)
 		return false, nil, errs.Wrap(err, errs.KindUnavailable, CodeAcquireFailed,
 			"lock: pg_try_advisory_lock")
 	}
 	if !ok {
 		conn.Release()
+		l.metrics.recordOutcome(outcomeContended)
+		l.logContended()
 		return false, nil, nil
 	}
-	return true, makeRelease(conn, l.key), nil
+	l.metrics.recordOutcome(outcomeAcquired)
+	l.logAcquired()
+	return true, l.makeRelease(conn), nil
 }
 
 // Acquire blocks until pg_advisory_lock succeeds OR ctx is
@@ -145,6 +163,8 @@ func (l *Lock) Acquire(ctx context.Context) (ReleaseFunc, error) {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
+		l.metrics.recordOutcome(outcomeError)
+		l.logAcquireErr(err)
 		return nil, errs.Wrap(err, errs.KindUnavailable, CodeAcquireFailed,
 			"lock: acquire conn")
 	}
@@ -153,10 +173,14 @@ func (l *Lock) Acquire(ctx context.Context) (ReleaseFunc, error) {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
+		l.metrics.recordOutcome(outcomeError)
+		l.logAcquireErr(err)
 		return nil, errs.Wrap(err, errs.KindUnavailable, CodeAcquireFailed,
 			"lock: pg_advisory_lock")
 	}
-	return makeRelease(conn, l.key), nil
+	l.metrics.recordOutcome(outcomeAcquired)
+	l.logAcquired()
+	return l.makeRelease(conn), nil
 }
 
 // RunOnce is the convenience wrapper around TryAcquire: if the
@@ -167,8 +191,11 @@ func (l *Lock) Acquire(ctx context.Context) (ReleaseFunc, error) {
 //	if err := lock.RunOnce(ctx, svc.DB, "daily-rollup", func(ctx context.Context) error {
 //	    return rollup.Run(ctx)
 //	}); err != nil { return err }
-func RunOnce(ctx context.Context, d *db.DB, name string, fn func(context.Context) error) error {
-	lk := New(d, name)
+//
+// Variadic Options ([WithLogger], [WithMetrics]) tune the
+// internally-constructed Lock when observability is needed.
+func RunOnce(ctx context.Context, d *db.DB, name string, fn func(context.Context) error, opts ...Option) error {
+	lk := New(d, name, opts...)
 	ok, release, err := lk.TryAcquire(ctx)
 	if err != nil {
 		return err
@@ -183,8 +210,8 @@ func RunOnce(ctx context.Context, d *db.DB, name string, fn func(context.Context
 // RunBlocking is RunOnce's blocking sibling: waits for the lock
 // (via Acquire), runs fn, releases. Ctx cancellation aborts the
 // wait.
-func RunBlocking(ctx context.Context, d *db.DB, name string, fn func(context.Context) error) error {
-	lk := New(d, name)
+func RunBlocking(ctx context.Context, d *db.DB, name string, fn func(context.Context) error, opts ...Option) error {
+	lk := New(d, name, opts...)
 	release, err := lk.Acquire(ctx)
 	if err != nil {
 		return err
@@ -202,9 +229,12 @@ func keyOf(name string) int64 {
 }
 
 // makeRelease builds a ReleaseFunc that runs once: unlocks +
-// releases the conn. Subsequent calls are no-ops.
-func makeRelease(conn *pgxpool.Conn, key int64) ReleaseFunc {
+// releases the conn. Subsequent calls are no-ops. The Lock receiver
+// is captured so the release closure can record hold-duration into
+// the configured metrics / logger.
+func (l *Lock) makeRelease(conn *pgxpool.Conn) ReleaseFunc {
 	released := false
+	heldSince := time.Now()
 	return func() {
 		if released {
 			return
@@ -216,7 +246,41 @@ func makeRelease(conn *pgxpool.Conn, key int64) ReleaseFunc {
 		// Background ctx because the caller's ctx may already be
 		// cancelled at defer time.
 		_, _ = conn.Exec(context.Background(),
-			"SELECT pg_advisory_unlock($1)", key)
+			"SELECT pg_advisory_unlock($1)", l.key)
 		conn.Release()
+		dur := time.Since(heldSince)
+		l.metrics.observeHold(dur.Seconds())
+		l.logReleased(dur)
 	}
+}
+
+// log* are nil-safe shims so the hot path stays uncluttered.
+
+func (l *Lock) logAcquired() {
+	if l == nil || l.logger == nil {
+		return
+	}
+	l.logger.Debug("lock: acquired", "name", l.name)
+}
+
+func (l *Lock) logContended() {
+	if l == nil || l.logger == nil {
+		return
+	}
+	l.logger.Debug("lock: contended", "name", l.name)
+}
+
+func (l *Lock) logAcquireErr(err error) {
+	if l == nil || l.logger == nil {
+		return
+	}
+	l.logger.Warn("lock: acquire failed", "name", l.name, "err", err.Error())
+}
+
+func (l *Lock) logReleased(d time.Duration) {
+	if l == nil || l.logger == nil {
+		return
+	}
+	l.logger.Debug("lock: released",
+		"name", l.name, "held_ms", d.Milliseconds())
 }
