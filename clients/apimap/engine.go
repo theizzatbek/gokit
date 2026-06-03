@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/theizzatbek/gokit/breaker"
 	"github.com/theizzatbek/gokit/bulkhead"
@@ -24,6 +25,14 @@ type Engine struct {
 	authFns   map[string]func(*http.Request) error // signer id → request-mutating function
 
 	envMap map[string]string // nil = no overrides; LoadBytes builds composite lookup
+
+	// Per-client overrides. Both buffer entries by clientName so the
+	// engine can validate-and-apply them at Build time. Build fails
+	// loudly if the name does not exist in YAML, so a renamed client
+	// surfaces immediately rather than as silently-ignored config.
+	clientHTTPCOptions map[string][]httpc.Option
+	clientTransports   map[string]http.RoundTripper
+	clientDefaultCalls map[string]Call
 
 	built bool
 }
@@ -43,14 +52,70 @@ func WithEnv(m map[string]string) EngineOption {
 // WithEnv) to configure.
 func New(opts ...EngineOption) *Engine {
 	e := &Engine{
-		reqTypes:  map[string]reflect.Type{},
-		respTypes: map[string]reflect.Type{},
-		authFns:   map[string]func(*http.Request) error{},
+		reqTypes:           map[string]reflect.Type{},
+		respTypes:          map[string]reflect.Type{},
+		authFns:            map[string]func(*http.Request) error{},
+		clientHTTPCOptions: map[string][]httpc.Option{},
+		clientTransports:   map[string]http.RoundTripper{},
+		clientDefaultCalls: map[string]Call{},
 	}
 	for _, fn := range opts {
 		fn(e)
 	}
 	return e
+}
+
+// RegisterClientOptions records per-client [httpc.Option] values that
+// apply ONLY to the *http.Client built for the named client (and to
+// its endpoint-override clients — same upstream, same options).
+// Merged AFTER any engine-wide [WithHTTPCOptions] so client-specific
+// options refine rather than replace the global baseline.
+//
+// Panics with *errs.Error on post-Build registration; Build fails
+// with apimap_unknown_client when the name does not exist in YAML.
+func (e *Engine) RegisterClientOptions(clientName string, opts ...httpc.Option) {
+	if e.built {
+		panic(xerrs.Validationf(CodeAlreadyBuilt,
+			"apimap: cannot RegisterClientOptions %q after Build", clientName))
+	}
+	e.clientHTTPCOptions[clientName] = append(e.clientHTTPCOptions[clientName], opts...)
+}
+
+// RegisterTransport replaces the per-client http.RoundTripper at
+// Build with the supplied transport. Use for unit-test mocks
+// (httptest.NewServer, gock, custom recorder) — production code
+// should not call this. Build fails with apimap_unknown_client when
+// the name does not exist in YAML.
+//
+// When set, the breaker / bulkhead / retry chain still wraps the
+// supplied RoundTripper exactly as it would wrap http.DefaultTransport
+// — your mock still goes through retry + observability. Pass
+// http.DefaultTransport to no-op the override.
+func (e *Engine) RegisterTransport(clientName string, rt http.RoundTripper) {
+	if e.built {
+		panic(xerrs.Validationf(CodeAlreadyBuilt,
+			"apimap: cannot RegisterTransport %q after Build", clientName))
+	}
+	if rt == nil {
+		delete(e.clientTransports, clientName)
+		return
+	}
+	e.clientTransports[clientName] = rt
+}
+
+// SetClientDefaultCall records a per-client default Call merged into
+// every Do/Decode/Exchange that routes to that client BEFORE the
+// caller's Call (caller wins on conflict). Layered ABOVE engine-wide
+// [WithDefaultCall] so client-specific defaults can refine the
+// global baseline.
+//
+// Panics on post-Build registration.
+func (e *Engine) SetClientDefaultCall(clientName string, c Call) {
+	if e.built {
+		panic(xerrs.Validationf(CodeAlreadyBuilt,
+			"apimap: cannot SetClientDefaultCall %q after Build", clientName))
+	}
+	e.clientDefaultCalls[clientName] = c
 }
 
 // LoadFile reads a YAML file and appends its clients to the engine.
@@ -187,6 +252,36 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 		fn(o)
 	}
 
+	// Cross-check engine-level registrations against the YAML client
+	// set so a renamed/missing client surfaces loud rather than as
+	// silently-ignored options.
+	knownClients := map[string]struct{}{}
+	for i := range cfg.Clients {
+		knownClients[cfg.Clients[i].Name] = struct{}{}
+	}
+	var preBuildErrs []error
+	for name := range e.clientHTTPCOptions {
+		if _, ok := knownClients[name]; !ok {
+			preBuildErrs = append(preBuildErrs, xerrs.Validationf(CodeUnknownClient,
+				"apimap: RegisterClientOptions references unknown client %q", name))
+		}
+	}
+	for name := range e.clientTransports {
+		if _, ok := knownClients[name]; !ok {
+			preBuildErrs = append(preBuildErrs, xerrs.Validationf(CodeUnknownClient,
+				"apimap: RegisterTransport references unknown client %q", name))
+		}
+	}
+	for name := range e.clientDefaultCalls {
+		if _, ok := knownClients[name]; !ok {
+			preBuildErrs = append(preBuildErrs, xerrs.Validationf(CodeUnknownClient,
+				"apimap: SetClientDefaultCall references unknown client %q", name))
+		}
+	}
+	if err := errors.Join(preBuildErrs...); err != nil {
+		return nil, err
+	}
+
 	endpoints := map[string]resolvedEndpoint{}
 	var buildErrs []error
 
@@ -216,7 +311,9 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 			buildErrs = append(buildErrs, bhErr)
 			continue
 		}
-		clientHTTP, err := buildHTTPClient(cl, nil, o, signFn, br, bh)
+		perClientHTTPCOpts := e.clientHTTPCOptions[cl.Name]
+		clientTransport := e.clientTransports[cl.Name]
+		clientHTTP, err := buildHTTPClient(cl, nil, o, signFn, br, bh, perClientHTTPCOpts, clientTransport)
 		if err != nil {
 			buildErrs = append(buildErrs, err)
 			continue
@@ -232,7 +329,7 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 			}
 			epHTTP := clientHTTP
 			if ep.hasHTTPCOverride() {
-				epHTTP, err = buildHTTPClient(cl, ep, o, signFn, br, bh)
+				epHTTP, err = buildHTTPClient(cl, ep, o, signFn, br, bh, perClientHTTPCOpts, clientTransport)
 				if err != nil {
 					buildErrs = append(buildErrs, err)
 					continue
@@ -265,7 +362,13 @@ func (e *Engine) Build(opts ...Option) (*Client, error) {
 		m = newApimapMetrics(o.metrics)
 	}
 	e.built = true
-	return &Client{endpoints: endpoints, metrics: m}, nil
+	return &Client{
+		endpoints:          endpoints,
+		metrics:            m,
+		engineDefaultCall:  o.defaultCall,
+		hasEngineDefault:   o.hasDefault,
+		clientDefaultCalls: e.clientDefaultCalls,
+	}, nil
 }
 
 // resolveAuthHeader returns the header name+value to apply for the given
@@ -327,7 +430,7 @@ func (s *signingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 // overrides. The observability options are passed through unchanged.
 // When signFn is non-nil, it is inserted as a transport-level signer
 // below httpc's retry layer so every attempt re-invokes the signer.
-func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*http.Request) error, br *breaker.Breaker, bh *bulkhead.Bulkhead) (*http.Client, error) {
+func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*http.Request) error, br *breaker.Breaker, bh *bulkhead.Bulkhead, perClientOpts []httpc.Option, perClientTransport http.RoundTripper) (*http.Client, error) {
 	cfg := httpc.Config{
 		Timeout:     cl.Timeout,
 		BackoffBase: cl.BackoffBase,
@@ -362,9 +465,14 @@ func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*ht
 	// distinct registry can still pass o.metrics → httpc themselves by
 	// constructing the *http.Client outside apimap.
 	// Layering when signFn is set:
-	//   httpc retry → signingRoundTripper → (o.baseTransport | http.DefaultTransport)
+	//   httpc retry → signingRoundTripper → (RegisterTransport | o.baseTransport | http.DefaultTransport)
 	// httpc's WithBaseTransport receives the signing wrapper as its base.
+	// RegisterTransport (mock) wins over WithBaseTransport when both set —
+	// the mock is the most-specific override.
 	baseRT := o.baseTransport
+	if perClientTransport != nil {
+		baseRT = perClientTransport
+	}
 	if signFn != nil {
 		under := baseRT
 		if under == nil {
@@ -381,8 +489,50 @@ func buildHTTPClient(cl *rawClient, ep *rawEndpoint, o *options, signFn func(*ht
 	if bh != nil {
 		httpcOpts = append(httpcOpts, httpc.WithBulkhead(bh))
 	}
+
+	// apimap-level hooks — implemented as an httpc middleware so they
+	// see the (client, endpoint) pair without needing apimap to wrap
+	// every transport manually. The endpoint name is propagated via
+	// the request context (see endpointNameFromContext) because a
+	// single *http.Client is shared across all endpoints of the same
+	// client (only endpoints with httpc overrides get a dedicated
+	// instance), so the name cannot be baked into the closure.
+	if o.beforeRequest != nil || o.afterResponse != nil {
+		clientName := cl.Name
+		before := o.beforeRequest
+		after := o.afterResponse
+		hookMW := func(next http.RoundTripper) http.RoundTripper {
+			return roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				endpointName := endpointNameFromContext(req.Context())
+				if before != nil {
+					before(clientName, endpointName, req)
+				}
+				start := time.Now()
+				resp, err := next.RoundTrip(req)
+				if after != nil {
+					after(clientName, endpointName, req, resp, err, time.Since(start))
+				}
+				return resp, err
+			})
+		}
+		httpcOpts = append(httpcOpts, httpc.WithMiddleware(hookMW))
+	}
+
+	// Engine-wide httpc opts FIRST, then per-client opts so client
+	// overrides win. httpc's own middleware/hooks are last-wins, which
+	// matches the documented semantics.
+	httpcOpts = append(httpcOpts, o.httpcOpts...)
+	httpcOpts = append(httpcOpts, perClientOpts...)
+
 	return httpc.New(cfg, httpcOpts...)
 }
+
+// roundTripperFunc is the local adaptor for inline middleware
+// construction inside buildHTTPClient. Mirrors the stdlib
+// http.HandlerFunc pattern.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // buildBulkheadFromYAML materialises the per-client *bulkhead.Bulkhead
 // from the optional YAML `bulkhead:` block. Returns (nil, nil) when

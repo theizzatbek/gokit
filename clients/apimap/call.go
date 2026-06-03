@@ -109,6 +109,50 @@ func encodeBody(mode string, body any) (io.Reader, string, error) {
 		"apimap: unsupported encode mode %q", mode)
 }
 
+// mergeCalls layers multiple Call values left-to-right with last-wins
+// precedence. Containers (Path / Query / Headers) are merged by key;
+// scalars (URL / Body) take the rightmost non-zero value. Used by
+// Client.mergedCall to fold engine-wide and per-client default Calls
+// into the caller's Call before request construction.
+//
+// Returns a fresh Call; inputs are never mutated.
+func mergeCalls(layers ...Call) Call {
+	out := Call{
+		Path:    map[string]string{},
+		Query:   url.Values{},
+		Headers: http.Header{},
+	}
+	for _, layer := range layers {
+		if layer.URL != "" {
+			out.URL = layer.URL
+		}
+		for k, v := range layer.Path {
+			out.Path[k] = v
+		}
+		for k, vs := range layer.Query {
+			out.Query[k] = append([]string(nil), vs...)
+		}
+		for k, vs := range layer.Headers {
+			out.Headers[http.CanonicalHeaderKey(k)] = append([]string(nil), vs...)
+		}
+		if layer.Body != nil {
+			out.Body = layer.Body
+		}
+	}
+	// Trim empty containers back to nil so downstream zero-value checks
+	// behave the same as a fresh, never-merged Call.
+	if len(out.Path) == 0 {
+		out.Path = nil
+	}
+	if len(out.Query) == 0 {
+		out.Query = nil
+	}
+	if len(out.Headers) == 0 {
+		out.Headers = nil
+	}
+	return out
+}
+
 // mergeHeaders applies precedence: defaults < endpoint < call. Returns a
 // fresh http.Header (the inputs are never mutated).
 func mergeHeaders(defaults, endpoint map[string]string, call http.Header) http.Header {

@@ -139,6 +139,15 @@ func (e *Engine) Build(opts ...Option) (*Client, error)
 func WithLogger(*slog.Logger) Option        // → httpc.WithLogger
 func WithMetrics(prometheus.Registerer) Option  // → коллекторы apimap_* (НЕ форвардятся в httpc)
 func WithBaseTransport(http.RoundTripper) Option // → httpc.WithBaseTransport
+func WithHTTPCOptions(...httpc.Option) Option   // прокидка любых httpc-опций (retry policy, middleware, hooks, TLS)
+func WithBeforeRequest(func(client, endpoint string, *http.Request)) Option
+func WithAfterResponse(func(client, endpoint string, *http.Request, *http.Response, error, time.Duration)) Option
+func WithDefaultCall(Call) Option           // engine-wide Call merged before каждый Do/Decode/Exchange
+
+// Engine-level per-client overrides
+func (e *Engine) RegisterClientOptions(clientName string, opts ...httpc.Option)
+func (e *Engine) RegisterTransport(clientName string, rt http.RoundTripper)   // mock mode
+func (e *Engine) SetClientDefaultCall(clientName string, c Call)
 
 // Runtime calls
 type Call struct {
@@ -170,6 +179,57 @@ func Exchange[Req, Resp any](ctx context.Context, c *Client, endpoint string, bo
 4. `Call.Headers` (per-call)
 
 Endpoint может override'нуть auth (редко; полезно для debug'а). `Call.Headers` всегда побеждает, так что тесты + per-call override'ы остаются возможны.
+
+### Прокидка httpc-опций (`WithHTTPCOptions` / `RegisterClientOptions`)
+
+`apimap` пропускает только `WithLogger`/`WithMetrics`/`WithBaseTransport` напрямую; всё остальное из `clients/httpc` (retry-policy, middleware chain, hooks, TLS, proxy) подключается через `WithHTTPCOptions`. Engine-wide применяется ко всем clients, per-client overrides приоритетнее.
+
+```go
+// Engine-wide: custom retry policy + middleware на всех clients
+c, _ := e.Build(
+    apimap.WithHTTPCOptions(
+        httpc.WithRetryStatusCodes(503, 504),   // 429 не считаем retryable (caller сам handle'ит)
+        httpc.WithIdempotencyKeyHeader("Idempotency-Key"),
+    ),
+)
+
+// Per-client: только Stripe видит свой custom audit middleware
+e.RegisterClientOptions("stripe", httpc.WithMiddleware(stripeAuditMW))
+```
+
+Build падает с `apimap_unknown_client` если зарегистрировали opts под именем не из YAML — поможет ловить typo'ы.
+
+### Lifecycle hooks (`WithBeforeRequest` / `WithAfterResponse`)
+
+```go
+c, _ := e.Build(
+    apimap.WithBeforeRequest(func(client, endpoint string, r *http.Request) {
+        r.Header.Set("X-Tenant-ID", tenantFromCtx(r.Context()))
+    }),
+    apimap.WithAfterResponse(func(client, endpoint string, _ *http.Request, resp *http.Response, err error, d time.Duration) {
+        auditLog.Record(client, endpoint, statusOf(resp, err), d)
+    }),
+)
+```
+
+Hooks видят kit-стабильный `(client, endpoint)` pair регardless из того, через какой http-client прошёл запрос (per-client base или per-endpoint override). Endpoint имя прокидывается через ctx-key, не через closure. Multiple hooks calls — last wins.
+
+### Default Call (общие headers / queries)
+
+```go
+// Engine-wide default
+c, _ := e.Build(apimap.WithDefaultCall(apimap.Call{
+    Query:   url.Values{"api_version": {"2024-11"}},
+    Headers: http.Header{"X-Tenant-ID": {tenantID}},
+}))
+
+// Per-client default (после engine, до caller)
+e.SetClientDefaultCall("stripe", apimap.Call{
+    Headers: http.Header{"Stripe-Version": {"2024-11-20"}},
+})
+
+// Layering: engine default → client default → caller's Call (last wins)
+```
 
 ### Per-endpoint timeout/retry override
 
@@ -487,7 +547,26 @@ Registry НЕ форвардится в лежащий снизу `clients/httpc
 
 ## Тестирование
 
-Override'ните `${MICROLINK_BASE_URL}` (или ваш env var), чтобы указать на `httptest.NewServer`:
+`Engine.RegisterTransport(clientName, http.RoundTripper)` — kit-стандартный mock-hook:
+
+```go
+e := apimap.New()
+_ = e.LoadBytes(yaml)
+e.RegisterTransport("stripe", roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+    return &http.Response{
+        StatusCode: 200,
+        Body:       io.NopCloser(strings.NewReader(`{"id":"ch_mocked"}`)),
+        Header:     make(http.Header),
+        Request:    req,
+    }, nil
+}))
+client, _ := e.Build()
+// Все запросы к `stripe.*` идут через ваш mock; retry/breaker/bulkhead chain всё ещё активен.
+```
+
+Build фейлится с `apimap_unknown_client` если зарегистрировали transport под именем не из YAML — typo'ы ловятся сразу.
+
+Альтернатива: override `${MICROLINK_BASE_URL}` (или ваш env var), чтобы указать на `httptest.NewServer`:
 
 ```go
 srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

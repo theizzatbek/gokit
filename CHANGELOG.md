@@ -9,6 +9,32 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `clients/apimap/` — four additions that open up the new httpc
+  features to apimap users + add mock-mode and default-Call layering.
+  - `WithHTTPCOptions(...httpc.Option)` engine-wide passthrough +
+    `Engine.RegisterClientOptions(clientName, ...httpc.Option)`
+    per-client. Per-client opts are appended AFTER the global slice
+    at Build so client-specific options refine rather than replace
+    the global baseline. Unknown client names fail Build with
+    `apimap_unknown_client`.
+  - `WithBeforeRequest(func(client, endpoint, *http.Request))` /
+    `WithAfterResponse(func(client, endpoint, req, resp, err,
+    elapsed))` — apimap-level lifecycle hooks. Implemented as an
+    httpc middleware that reads the endpoint name from a private
+    context key, so the callbacks see the kit-stable (client,
+    endpoint) pair even when a single *http.Client is shared across
+    endpoints.
+  - `WithDefaultCall(Call)` engine-wide +
+    `Engine.SetClientDefaultCall(clientName, Call)` per-client.
+    Defaults are merged before the caller's Call (engine → client →
+    caller, last wins on per-key conflict). Containers (Path / Query
+    / Headers) merge by key; URL/Body take the last non-zero value.
+    `mergeCalls` helper exposed inside the package.
+  - `Engine.RegisterTransport(clientName, http.RoundTripper)` — mock
+    mode. Replaces the per-client base transport at Build with the
+    supplied RoundTripper; the breaker / bulkhead / retry chain still
+    wraps it so the mock path goes through observability. Unknown
+    names fail Build with `apimap_unknown_client`.
 - `clients/httpc/` — retry-policy customization, middleware chain,
   transport shortcuts, lifecycle hooks.
   - `WithRetryClassifier(func(*http.Request, *http.Response, error) bool)`

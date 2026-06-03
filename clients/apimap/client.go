@@ -18,8 +18,28 @@ import (
 
 // Client is the immutable post-Build dispatcher. Goroutine-safe.
 type Client struct {
-	endpoints map[string]resolvedEndpoint // key = "<client>.<endpoint>"
-	metrics   *apimapMetrics              // nil when WithMetrics was not passed
+	endpoints          map[string]resolvedEndpoint // key = "<client>.<endpoint>"
+	metrics            *apimapMetrics              // nil when WithMetrics was not passed
+	engineDefaultCall  Call                        // engine-wide default merged before client/caller
+	hasEngineDefault   bool
+	clientDefaultCalls map[string]Call // per-client defaults; nil entry treated as empty
+}
+
+// mergedCall builds the effective Call by layering: engine default →
+// client default → caller. Caller fields win on conflict; deeper
+// containers (Path / Query / Headers) are merged by key. URL and Body
+// take the caller's value when set; the defaults' URL/Body are
+// otherwise propagated (rare — defaults usually don't set them).
+func (c *Client) mergedCall(clientName string, caller Call) Call {
+	layers := make([]Call, 0, 3)
+	if c.hasEngineDefault {
+		layers = append(layers, c.engineDefaultCall)
+	}
+	if cd, ok := c.clientDefaultCalls[clientName]; ok {
+		layers = append(layers, cd)
+	}
+	layers = append(layers, caller)
+	return mergeCalls(layers...)
 }
 
 // resolvedEndpoint is the runtime data for one endpoint after Build:
@@ -97,6 +117,7 @@ func (c *Client) buildRequest(ctx context.Context, endpoint string, call Call, b
 		return nil, xerrs.NotFoundf(CodeUnknownEndpoint,
 			"apimap: unknown endpoint %q", endpoint)
 	}
+	call = c.mergedCall(ep.clientName, call)
 
 	rawURL, err := resolveURL(ep, endpoint, call)
 	if err != nil {
@@ -124,7 +145,8 @@ func (c *Client) buildRequest(ctx context.Context, endpoint string, call Call, b
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, ep.method, full.String(), bodyReader)
+	reqCtx := contextWithEndpointName(ctx, ep.endpointName)
+	req, err := http.NewRequestWithContext(reqCtx, ep.method, full.String(), bodyReader)
 	if err != nil {
 		return nil, xerrs.Wrapf(err, xerrs.KindInternal, CodeUnknownEndpoint,
 			"apimap: build http.Request for endpoint %q", endpoint)
