@@ -52,11 +52,15 @@ resp, err := c.Get("https://api.example.com/users/42")
 | `WithBreakerFailureClassifier(fn)` | 408/429/5xx + non-Canceled err | Override "что считается failure'ом" для breaker'а. No-op без `WithBreaker`. |
 | `WithBulkhead(*bulkhead.Bulkhead)` | nil (выключен) | Concurrency-cap между retry и breaker. См. секцию ниже. |
 
-## Retry-семантика (hard-coded — no overrides)
+## Retry-семантика (с override-options)
 
-- **Только идемпотентные методы:** GET, HEAD, PUT, DELETE, OPTIONS ретраятся. POST и PATCH возвращают после attempt 0 — никогда молча не double-write'ят.
-- **Retryable статусы:** 408, 429, 500, 502, 503, 504. Всё остальное (включая 4xx) возвращает немедленно.
-- **Network ошибки:** любая ошибка из inner `RoundTrip` (DNS failure, connect refused, EOF mid-stream) ретраится.
+- **Только идемпотентные методы:** GET, HEAD, PUT, DELETE, OPTIONS ретраятся по умолчанию. POST и PATCH возвращают после attempt 0 — никогда молча не double-write'ят. Опт-ин на retry POST'а:
+  - `WithIdempotencyKeyHeader("Idempotency-Key")` — retry разрешается ТОЛЬКО когда запрос несёт указанный header (Stripe-style — caller обещает идемпотентность через ключ);
+  - `WithRetryOnNonIdempotent(true)` — безусловно retry POST/PATCH; используйте только если каждый POST идемпотентен на стороне upstream'а.
+- **Retryable статусы:** по умолчанию 408, 429, 500, 502, 503, 504.
+  - `WithRetryStatusCodes(503, 504)` заменяет set целиком (например, чтобы 429 не считалось retryable если у caller'а свой rate-limit handler).
+- **Custom classifier:** `WithRetryClassifier(func(req, resp, err) bool)` — полная замена default-правила (status + method + network err). Возвращает `true` чтобы retry. Симметрично с `WithBreakerFailureClassifier`.
+- **Network ошибки:** любая ошибка из inner `RoundTrip` (DNS failure, connect refused, EOF mid-stream) ретраится по умолчанию. Кастомный classifier может veto это.
 - **Backoff:** `delay = rand.Float64() * min(BackoffBase * 2^attempt, BackoffMax)`. Full jitter — минимизирует thundering herd.
 - **`Retry-After`:** парсится (integer seconds или HTTP-date). Если присутствует, используется вместо jittered backoff'а, capped at `4 * BackoffMax`.
 - **Body replay:** только когда `req.GetBody != nil`. `http.NewRequest` с `bytes.Reader`/`bytes.Buffer`/`strings.Reader` устанавливает его автоматически. Streaming-body (manually-constructed `Request{Body: …}`) пропускают retry после attempt 0.
@@ -100,6 +104,72 @@ httpc.New(httpc.Config{Timeout: 5*time.Second, MaxRetries: -1})
 ```
 
 `-1` — sentinel для "no retries — single attempt only". Zero value (`0`) дефолтится в 3, потому что самая частая ошибка — забыть его установить; opt out явно через `-1`.
+
+### Кастомная retry-policy
+
+```go
+// Сценарий 1: добавить 423 Locked (pessimistic-lock workflow)
+c, _ := httpc.New(cfg, httpc.WithRetryClassifier(
+    func(req *http.Request, resp *http.Response, err error) bool {
+        if err != nil { return true }
+        return resp != nil && (resp.StatusCode == 423 || httpc.IsDefaultRetryableStatus(resp.StatusCode))
+    },
+))
+
+// Сценарий 2: только timeout-ish (без 429)
+c, _ := httpc.New(cfg, httpc.WithRetryStatusCodes(408, 500, 502, 503, 504))
+
+// Сценарий 3: Stripe-style идемпотентный POST
+c, _ := httpc.New(cfg, httpc.WithIdempotencyKeyHeader("Idempotency-Key"))
+req, _ := http.NewRequest("POST", url, body)
+req.Header.Set("Idempotency-Key", uuid.NewString())
+// → POST retry'нется на 503/etc только потому, что header установлен
+```
+
+### Middleware chain (auth refresh, audit, custom tracing)
+
+`WithMiddleware` чейнит RoundTripper-decorator'ы ВЫШЕ retry+metrics, НИЖЕ авто-X-Request-ID. Каждая retry-попытка видит middleware как отдельный RoundTrip (потому что retry живёт ниже) — учитывайте при auth-refresh логике.
+
+```go
+auth := func(next http.RoundTripper) http.RoundTripper {
+    return roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+        r.Header.Set("Authorization", "Bearer "+currentToken())
+        return next.RoundTrip(r)
+    })
+}
+audit := func(next http.RoundTripper) http.RoundTripper { ... }
+
+c, _ := httpc.New(cfg, httpc.WithMiddleware(auth, audit))
+// Chain: requestID → auth → audit → retry → metrics → bulkhead → breaker → base
+```
+
+### Lifecycle hooks (короткий API)
+
+```go
+c, _ := httpc.New(cfg,
+    httpc.WithBeforeRequest(func(r *http.Request) {
+        r.Header.Set("X-App-Version", appVersion)
+    }),
+    httpc.WithAfterResponse(func(req *http.Request, resp *http.Response, err error, d time.Duration) {
+        auditLog.Record(req.URL.Path, statusOf(resp, err), d)
+    }),
+)
+```
+
+Хуки — сахар над `WithMiddleware` для случаев, когда не нужен полный decorator (header stamping, audit log). Multiple calls — последний выигрывает.
+
+### Transport shortcuts (Proxy / Dialer / TLS)
+
+```go
+proxyURL, _ := url.Parse("http://proxy.corp:3128")
+c, _ := httpc.New(cfg,
+    httpc.WithProxy(proxyURL),
+    httpc.WithTLSConfig(&tls.Config{RootCAs: privateCAPool}),
+    httpc.WithDialer((&net.Dialer{Timeout: 3 * time.Second}).DialContext),
+)
+```
+
+Все три композируются в один shared `*http.Transport`. Explicit `WithBaseTransport` с не-`*http.Transport` (например otel-обёртка) wins — шорткаты молча no-op'ятся в этом случае.
 
 ### Drop-in для SDK'ов
 
