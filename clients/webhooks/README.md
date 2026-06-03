@@ -102,14 +102,88 @@ svc.OnShutdown(func() error { return r.Stop(context.Background()) })
 
 Default backoff: `Initial=1s, Max=1h, Multiplier=2.0`. С MaxAttempts=8 — ~4 минуты живого retry.
 
-## Что НЕ входит в v1
+### Custom classifier
 
-- per-target circuit breaker (отдельный спек),
-- admin REST endpoints для CRUD subscriptions,
-- Stripe / Telegram / Slack verifiers,
-- redis-реализация SubscriptionStore,
-- per-subscription retry policy,
-- ротация encryption-ключа на write.
+`WorkerConfig.RetryClassifier` override'ит default-правило. `webhooks.DefaultClassifier` экспортирован как building block:
+
+```go
+cfg.RetryClassifier = func(resp *http.Response, err error) webhooks.Outcome {
+    if resp != nil && resp.StatusCode == 422 {
+        return webhooks.OutcomeRetryable // upstream rate-limits через 422
+    }
+    return webhooks.DefaultClassifier(resp, err)
+}
+```
+
+## Per-subscription circuit breaker
+
+```go
+cfg.BreakerFactory = func(subID uuid.UUID) *breaker.Breaker {
+    b, _ := breaker.New(breaker.Config{
+        Name:             "wh:" + subID.String(),
+        FailureThreshold: 10,
+        MinimumRequests:  20,
+    })
+    return b
+}
+```
+
+Open-state на конкретный subscription ID → attempt short-circuit'ится как retryable; delivery reschedule'ится по backoff curve, не сжигая in-flight slot на known-down endpoint. Один битый subscriber не валит worker.
+
+## Lifecycle hooks
+
+```go
+cfg.OnAttempt = func(d webhooks.Delivery, resp *http.Response, err error, outcome webhooks.Outcome, elapsed time.Duration) {
+    auditLog.Record(d.SubscriptionID, d.EventType, outcome.String(), elapsed)
+}
+cfg.OnDLQ = func(d webhooks.Delivery, status int, msg string) {
+    slack.Notify("delivery dropped to DLQ", d.ID, status, msg)
+}
+```
+
+`OnAttempt` фа́ерит на каждой попытке (success / failure); `OnDLQ` — когда delivery попадает в DLQ. Hooks recover'ятся от panic'ов (best-effort).
+
+## Custom signature scheme
+
+`WorkerConfig.SignerFunc` swap'ит Stripe-style на app-specific:
+
+```go
+cfg.SignerFunc = func(body []byte, secret string, now time.Time) (string, error) {
+    return "X-MyApp-Sig-v2: " + customHMAC(body, secret), nil
+}
+```
+
+Дефолт — Stripe-style `t=<unix>,v1=<hmac>` через `webhooks.Signer.Sign`.
+
+## TraceContext propagation
+
+```go
+cfg.Propagator = otel.GetTextMapPropagator()
+```
+
+Injects W3C `traceparent` / `tracestate` headers на outbound webhook'и. Receiving сторона continues span chain (same shape as clients/nats publish).
+
+## Прочие knobs
+
+| Поле | По умолчанию | Заметки |
+|---|---|---|
+| `AttemptTimeout` | 30s | Per-attempt HTTP timeout. |
+| `DefaultContentType` | `application/json` | Override для protobuf / raw payload (`Delivery.Headers["Content-Type"]` всё ещё win'ит). |
+
+## Healthcheck
+
+```go
+chk := webhooks.NewChecker(delivStore, "webhooks")
+// Pass to fibermap.Readiness alongside db / nats / redis checkers.
+```
+
+`Check(ctx)` пингует `DeliveryStore.Claim(ctx, 0)` — zero-batch claim не модифицирует state, но доказывает что store reachable. Nil-receiver safe → `webhooks_not_ready` вместо panic.
+
+## Resilience defaults
+
+- Panic recovery в attempt goroutine — recovered + scheduled retry. Slot не утекает.
+- Per-subscription breaker (когда сконфигурирован) — known-down sub не блокирует другие.
+- Hook panic'и recover'ятся — broken audit не валит delivery.
 
 ## Тестирование
 
