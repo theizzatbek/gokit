@@ -65,10 +65,17 @@ batched-доставку без того, чтобы пользователи п
 
 | Поле | По умолчанию | Заметки |
 |---|---|---|
-| `HandlerFn func(ctx, []T) error` | — | **Обязательно.** Получает буферный срез одним вызовом. |
+| `HandlerFn func(ctx, []T) error` | — | **Обязательно.** Получает буферный срез одним вызовом. Panics recover'ятся → error → retry / acks. |
 | `BatchSize int` | — | **Обязательно, > 0.** Кап размера; достижение его триггерит ранний flush. |
 | `Interval time.Duration` | `1s` | Кап возраста буфера. Любой триггер flush'ит. |
-| `Logger *slog.Logger` | nil (silent) | Warn-записи на HandlerFn ошибках. |
+| `MaxPending int` | `0` (unbounded) | Cap in-memory буфера. > 0 → Submit drop + ack(ErrPendingFull); TrySubmit returns ErrPendingFull. |
+| `MaxInFlightHandlers int` | `1` (sequential) | > 1 → Flush spawns dispatch goroutine; pool capped по этому числу. |
+| `MaxRetries int` | `0` (no retry) | Per-batch retry на HandlerFn err / panic. Ack — после final attempt. |
+| `RetryBackoffBase/Max time.Duration` | — | Exponential delay между retry attempts. |
+| `ContextFn func() context.Context` | nil | Per-dispatch ctx provider (tracing). Caller Flush(ctx) wins когда != Background. |
+| `OnBatchStart func(ctx, size int)` | nil | Panic-safe hook перед HandlerFn (БЕЗ retries). |
+| `OnBatchComplete func(ctx, size, err, elapsed)` | nil | Panic-safe hook после final attempt. |
+| `Logger *slog.Logger` | nil (silent) | Warn-записи на HandlerFn ошибках и panic'ах. |
 | `Metrics prometheus.Registerer` | nil (off) | Четыре `batch_*` коллектора. |
 
 ## API
@@ -77,14 +84,55 @@ batched-доставку без того, чтобы пользователи п
 func New[T any](cfg Config[T]) (*Batcher[T], error)
 
 func (b *Batcher[T]) Submit(item T, ack func(err error))
+func (b *Batcher[T]) TrySubmit(item T, ack func(err error)) error  // back-pressure-aware
 func (b *Batcher[T]) Flush(ctx context.Context) error
+func (b *Batcher[T]) Stats() Stats                                  // {Pending, InFlightHandlers, DispatchedTotal, FailedHandlers, RetriedAttempts}
 func (b *Batcher[T]) Close() error
+
+var ErrPendingFull = errors.New("batch: pending buffer full")
 ```
 
-- `Submit` goroutine-safe — производительные горутины вызывают её конкурентно. `nil` ack поддерживается для fire-and-forget элементов.
-- `Flush` — ручной дренаж (тесты, интерактивные shutdown-пути).
-- `Close` делает один финальный flush, останавливает горутину, идемпотентен.
-- `(*Batcher[T])(nil)` безопасен на каждом методе — Submit — no-op, Flush/Close возвращают nil. Позволяет caller'ам пробрасывать опциональный batcher через свой код.
+- `Submit` goroutine-safe — производительные горутины вызывают её конкурентно. `nil` ack поддерживается для fire-and-forget элементов. При `MaxPending > 0` и переполнении буфера Submit drops + calls ack с `ErrPendingFull`.
+- `TrySubmit` — error-returning вариант: при переполнении return `ErrPendingFull` immediately (синхронная сигнализация о backpressure).
+- `Flush` — ручной дренаж. С `MaxInFlightHandlers == 1` (по умолчанию) — sync, returns HandlerFn err. С `MaxInFlightHandlers > 1` — async (returns nil; err через acks/Stats/logs).
+- `Stats()` — cheap snapshot для /admin: `{Pending, InFlightHandlers, DispatchedTotal, FailedHandlers, RetriedAttempts}`.
+- `Close` делает один финальный flush, ждёт running dispatch goroutines, идемпотентен.
+- `(*Batcher[T])(nil)` безопасен на каждом методе.
+
+## Resilience (panic / retry / backpressure)
+
+```go
+b, _ := batch.New[Event](batch.Config[Event]{
+    HandlerFn:           persistAll,
+    BatchSize:           500,
+    MaxPending:          5000, // hard cap буфера → Submit ack-fails при overflow
+    MaxInFlightHandlers: 4,    // 4 параллельных handler'а
+    MaxRetries:          3,
+    RetryBackoffBase:    100 * time.Millisecond,
+    RetryBackoffMax:     2 * time.Second,
+    Logger:              logger,
+})
+```
+
+- Panic в HandlerFn recover'ится → wrapped err → подпадает под retry loop. flushLoop никогда не умирает.
+- 3 retries с exp backoff. Ack fires только после final attempt.
+- MaxPending защищает от unbounded memory growth когда HandlerFn slow и Submit fast.
+- MaxInFlightHandlers > 1 распараллеливает dispatch'и (Flush async).
+
+## Lifecycle hooks
+
+```go
+batch.Config[Event]{
+    OnBatchStart: func(ctx context.Context, size int) {
+        span := trace.SpanFromContext(ctx); span.SetAttributes(attribute.Int("batch.size", size))
+    },
+    OnBatchComplete: func(ctx context.Context, size int, err error, elapsed time.Duration) {
+        auditLog.Record("batch", size, statusOf(err), elapsed)
+    },
+}
+```
+
+Hooks panic-safe. Multiple hooks calls — last wins.
 
 ## Trigger-модель
 
@@ -103,6 +151,8 @@ func (b *Batcher[T]) Close() error
 |---|---|
 | `batch_missing_handler_fn` | `Config.HandlerFn` nil |
 | `batch_invalid_batch_size` | `Config.BatchSize` <= 0 |
+| `batch_invalid_config` | Generic Config validation (`MaxPending` negative, `MaxRetries` negative, etc). |
+| `batch_pending_full` | Submit / TrySubmit при overflow (см. `ErrPendingFull`). |
 
 ## Метрики
 
