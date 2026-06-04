@@ -9,6 +9,54 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `db/jobs/` — four additive features. Existing Worker / Schedule /
+  RegisterHandler signatures are preserved.
+  - `WithDedupKey(key)` on Schedule makes the call idempotent
+    against an already-queued row of the same type. Backed by a
+    partial UNIQUE INDEX on (type, dedup_key) WHERE state='queued'.
+    A second Schedule returns the existing row's ID instead of
+    inserting. Cancelled/done/failed rows leave the partial index,
+    so re-scheduling after completion always inserts cleanly.
+  - `WithPriority(n)` on Schedule + new `priority integer` column.
+    Claim SQL becomes `ORDER BY priority DESC, run_at`. The
+    pending-rows partial index is rekeyed to
+    `(queue, priority DESC, run_at)` to keep the hot path
+    index-only. Defaults to 0 — back-compat for existing rows.
+  - `Cancel(ctx, q, id)` operator helper: marks a queued row as
+    `cancelled` (new state). Worker's claim SQL still filters on
+    `state='queued'`, so cancelled rows are skipped. Returns
+    `*errs.Error{KindNotFound, Code: jobs_not_found}` when the
+    row is missing OR already in a non-queued state.
+  - `GatherStats(ctx, q) Stats` returns
+    `{Queued, Eligible, Running, Failed, Cancelled, Done,
+    OldestQueued}` for /admin observability. One aggregate
+    SELECT, partial-index covered.
+  - `Worker.Shutdown(ctx) error` — deadline-aware sibling of
+    `Stop()`. Signals shutdown the same way but returns
+    `ctx.Err()` when in-flight handlers outlive the supplied
+    deadline. Idempotent with subsequent Stop.
+  - Schema: ADD COLUMN priority + dedup_key (both idempotent),
+    DROP+CREATE pending partial index keyed on priority,
+    CREATE UNIQUE INDEX idx_jobs_dedup_queued.
+  - New stable codes: `jobs_not_found`, `jobs_op_failed`,
+    `jobs_stats_failed`.
+- `db/notify/` — two additions. Existing NewNotifier signature
+  preserved; WithMetrics is purely additive.
+  - `Publish[T](ctx, q, channel, payload)` JSON-marshals payload
+    and emits one pg_notify. Symmetric to Notifier on the
+    publisher side. `PublishRaw(ctx, q, channel, payload)` is the
+    string-payload companion (wake-up signals where the
+    subscriber re-queries source-of-truth — outbox uses this).
+    Channel name validation reuses the existing safeIdent
+    (matches Notifier's LISTEN check). Errors:
+    `notify_invalid_channel`, `notify_encode_failed`,
+    `notify_publish_failed`.
+  - `WithMetrics(reg)` registers `notify_notifications_total
+    {channel, outcome=ok|handler_error}` counter,
+    `notify_reconnects_total` counter, and
+    `notify_handler_duration_seconds{channel}` histogram. A
+    steady reconnect-counter stream signals network instability
+    to Postgres; isolated bumps are routine.
 - `db/outbox/` — operator-helpers + observability + per-event-type
   policy. All additions are pure-add, no changes to existing
   Worker / Enqueue / Checker semantics.

@@ -199,6 +199,10 @@ func (w *Worker) Start(ctx context.Context) error {
 // DB pool and be sure no handler is mid-flight).
 //
 // Safe to call multiple times — only the first call signals.
+//
+// Stop blocks unconditionally. For graceful drain with a deadline,
+// prefer [Shutdown(ctx)] — service.OnShutdown wires the kit-managed
+// runtime ctx through automatically.
 func (w *Worker) Stop() error {
 	if !w.started.Load() {
 		return nil
@@ -212,6 +216,41 @@ func (w *Worker) Stop() error {
 	return nil
 }
 
+// Shutdown is the deadline-aware sibling of [Stop]. It signals the
+// polling loop to exit (same as Stop) but returns
+// ctx.Err() instead of blocking forever when in-flight handlers
+// outlive the supplied ctx deadline.
+//
+// Typical wiring:
+//
+//	ctx, cancel := context.WithTimeout(context.Background(), 30 * time.Second)
+//	defer cancel()
+//	_ = worker.Shutdown(ctx)
+//
+// or via service.OnShutdown — the kit-managed ctx already carries
+// the deployment-specific grace period.
+//
+// Returns nil on clean drain (loop + all in-flight handlers
+// finished); ctx.Err() (Canceled / DeadlineExceeded) when the ctx
+// fired first. The signal-to-stop step is idempotent — a second
+// Shutdown / Stop call is a no-op.
+func (w *Worker) Shutdown(ctx context.Context) error {
+	if !w.started.Load() {
+		return nil
+	}
+	select {
+	case <-w.stopCh: // already closed
+	default:
+		close(w.stopCh)
+	}
+	select {
+	case <-w.doneCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 const claimSQL = `
 UPDATE jobs SET
     state = 'running',
@@ -223,7 +262,7 @@ WHERE id IN (
     WHERE state = 'queued'
       AND run_at <= NOW()
       AND ($3::text[] IS NULL OR queue = ANY($3::text[]))
-    ORDER BY run_at
+    ORDER BY priority DESC, run_at
     LIMIT $2
     FOR UPDATE SKIP LOCKED
 )
