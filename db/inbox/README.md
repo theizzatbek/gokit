@@ -85,11 +85,59 @@ func Process(ctx, *db.DB, Key, fn func(*db.Tx) error) (Outcome, error)
 func New(Config) *Inbox
 func (*Inbox) Process(ctx, *db.DB, Key, fn func(*db.Tx) error) (Outcome, error)
 
+// Bulk-API: один tx на весь батч.
+func ProcessBatch(ctx, *db.DB, []Key, fn func(*db.Tx, newIdx []int) error) ([]Outcome, error)
+func (*Inbox) ProcessBatch(...) ([]Outcome, error)
+
+// Auxiliary: проверка / mark без fn.
+func Exists(ctx, Querier, Key) (bool, error)
+func MarkProcessed(ctx, Querier, Key) (Outcome, error)
+
 // RetentionWorker для периодической чистки.
 func NewRetentionWorker(*db.DB, RetentionConfig) (*RetentionWorker, error)
 func (*RetentionWorker) Start(ctx context.Context)
 func (*RetentionWorker) Stop()
 func (*RetentionWorker) Tick(ctx context.Context) (rowsDeleted int64, err error)
+```
+
+## Bulk: `ProcessBatch`
+
+Single round-trip dedupe для NATS pull-subscription'ов и батчей с десятками-сотнями messages. Один INSERT с UNNEST + ON CONFLICT DO NOTHING + RETURNING; `fn` получает индексы новых keys в исходном слайсе:
+
+```go
+msgs := sub.Fetch(50, maxWait)
+keys := make([]inbox.Key, len(msgs))
+for i, m := range msgs {
+    keys[i] = inbox.Key{Consumer: "orders:link.created", EventID: m.Header.Get("Nats-Msg-Id")}
+}
+
+outcomes, err := inbox.ProcessBatch(ctx, svc.DB, keys, func(tx *db.Tx, newIdx []int) error {
+    var newPayloads []LinkCreated
+    for _, i := range newIdx {
+        newPayloads = append(newPayloads, decoded[i])
+    }
+    return persistAll(ctx, tx, newPayloads)
+})
+
+// Ack KAŽDOЕ msg — duplicates безопасны для ack'а, как и для single-Process.
+for i, m := range msgs {
+    _ = m.Ack()
+    _ = outcomes[i] // OutcomeProcessed | OutcomeDuplicate
+}
+```
+
+`fn err → rollback`: ни insert'ы, ни side-effects не персистятся; redelivery пытается заново. `keys` пустой → `*errs.Error{Code: inbox_batch_empty}`. Каждый key валидируется до открытия tx (loud-fail на первом плохом). Repeated keys внутри одного батча: первая позиция Processed, остальные Duplicate.
+
+## Auxiliary: `Exists` + `MarkProcessed`
+
+```go
+// Pure check, без INSERT.
+exists, _ := inbox.Exists(ctx, svc.DB, key)
+
+// Record receipt без вызова handler'а — для случаев, когда side-effect
+// уже произошёл externally (например, third-party API подтвердил доставку).
+outcome, _ := inbox.MarkProcessed(ctx, svc.DB, key)
+// → OutcomeProcessed (новый) или OutcomeDuplicate (already recorded)
 ```
 
 ## Algorithm
@@ -165,6 +213,7 @@ v1 не делает leader-elect автоматически — это open que
 | `inbox_missing_consumer` | `Key.Consumer == ""` |
 | `inbox_missing_event_id` | `Key.EventID == ""` |
 | `inbox_tx_failed` | INSERT или fn упали — Tx роллбэкается, Cause обёрнут |
+| `inbox_batch_empty` | `ProcessBatch` вызван с пустым slice — loud-fail вместо silent no-op в tx |
 | `inbox_invalid_retention_ttl` | `RetentionConfig.TTL ≤ 0` |
 | `inbox_invalid_retention_interval` | `RetentionConfig.Interval ≤ 0` |
 | `inbox_retention_tick_failed` | DELETE упал во время `Tick` |

@@ -9,6 +9,49 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `db/outbox/` — operator-helpers + observability + per-event-type
+  policy. All additions are pure-add, no changes to existing
+  Worker / Enqueue / Checker semantics.
+  - `RetryNow(ctx, q, id)` forces an unpublished event to become
+    eligible NOW (clears next_retry_at backoff). Loud-fails with
+    `outbox_op_not_found` when the row is missing or already
+    published — runbook scripts shouldn't silently no-op.
+  - `Replay(ctx, q, ids...)` re-dispatches already-published rows
+    by clearing published_at + attempts + last_error + stamping
+    next_retry_at = NOW(). Returns the row count actually re-armed;
+    missing IDs silently skipped (bulk operator action).
+    Downstream consumers MUST be idempotent.
+  - `ResetAttempts(ctx, q, id)` un-dead-letters a row that crossed
+    WithMaxAttempts so the Worker fetches it again. Same
+    not-found semantics as RetryNow.
+  - `GatherStats(ctx, q) Stats` returns
+    `{Pending, Eligible, Failed, OldestPending, Published1m}` —
+    one aggregate SELECT for /admin observability.
+  - `ListPending(ctx, q, limit)` / `ListDead(ctx, q, limit, maxAttempts)`
+    surface top-N events by drain order / by attempts threshold,
+    payload included, for queue-inspection endpoints.
+  - `WithEventTypeMaxAttempts(map[string]int)` +
+    `WithEventTypeBackoff(map[string]BackoffSpec)` — per-type
+    overrides of the global retry cap / backoff window. When set,
+    the drain SELECT drops the global attempts filter and per-type
+    dead-letter decisions move into the Go dispatch loop. Rows
+    already at their cap silently skip publishFn.
+  - New stable error codes: `outbox_op_not_found`, `outbox_op_failed`,
+    `outbox_stats_failed`, `outbox_list_failed`.
+- `db/inbox/` — bulk dedupe + auxiliary helpers.
+  - `ProcessBatch(ctx, db, keys, fn)` is the single-round-trip
+    variant of Process: one INSERT ... UNNEST + ON CONFLICT DO
+    NOTHING + RETURNING bulk-dedupes the slice, fn receives the
+    indices of newly-inserted positions, the returned []Outcome
+    aligns 1-to-1 with keys for atomic ack. Empty keys →
+    `inbox_batch_empty`. Used for NATS pull-subscription handlers
+    that pull 10–50 messages per fetch.
+  - `Exists(ctx, q, key)` — pure check (no INSERT) for handlers
+    that need to know "was this seen?" without recording.
+  - `MarkProcessed(ctx, q, key)` — bare INSERT ON CONFLICT DO
+    NOTHING that returns the Outcome. Use when the consumer
+    side-effect already happened externally (third-party API
+    confirmed delivery) and only the receipt needs recording.
 - `db/sqb/` — three composable helpers for typed list endpoints:
   - `ParseSort` / `ApplySort` / `Sort` validate a comma-separated
     sort string (`"name,-created_at"`) against a caller-supplied

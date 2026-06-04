@@ -143,6 +143,62 @@ func WithBackoff(base, max time.Duration) WorkerOption {
 	}
 }
 
+// BackoffSpec is the per-event-type backoff override carried by
+// [WithEventTypeBackoff]. Same semantics as [WithBackoff] — Base
+// is the initial wait, Max is the cap.
+type BackoffSpec struct {
+	Base time.Duration
+	Max  time.Duration
+}
+
+// WithEventTypeMaxAttempts overrides [WithMaxAttempts] for specific
+// event types. The Worker still uses the global maxAttempts as the
+// default; only listed types get the override.
+//
+//	outbox.WithEventTypeMaxAttempts(map[string]int{
+//	    "billing.charge": 10,   // more headroom for flaky upstream
+//	    "audit.log":      1,    // best-effort, don't pile up
+//	})
+//
+// When this option is set, the drain SELECT drops the global
+// attempts filter — per-type filtering happens in the Go-side
+// dispatch loop. Rows already at their per-type cap are silently
+// skipped without invoking PublishFn (no failure counter ticks).
+//
+// Empty map is a no-op — same as not passing the option.
+func WithEventTypeMaxAttempts(m map[string]int) WorkerOption {
+	return func(w *Worker) {
+		if len(m) == 0 {
+			return
+		}
+		w.eventTypeMaxAttempts = make(map[string]int, len(m))
+		for k, v := range m {
+			w.eventTypeMaxAttempts[k] = v
+		}
+	}
+}
+
+// WithEventTypeBackoff overrides [WithBackoff] (Base, Max pair) for
+// specific event types. Same shape as [WithEventTypeMaxAttempts].
+//
+//	outbox.WithEventTypeBackoff(map[string]outbox.BackoffSpec{
+//	    "billing.charge": {Base: 5 * time.Second, Max: 10 * time.Minute},
+//	    "notif.email":    {Base: 30 * time.Second, Max: time.Hour},
+//	})
+//
+// Empty map is a no-op.
+func WithEventTypeBackoff(m map[string]BackoffSpec) WorkerOption {
+	return func(w *Worker) {
+		if len(m) == 0 {
+			return
+		}
+		w.eventTypeBackoff = make(map[string]BackoffSpec, len(m))
+		for k, v := range m {
+			w.eventTypeBackoff[k] = v
+		}
+	}
+}
+
 // WithLogger wires a slog.Logger for Worker lifecycle + per-event
 // success / failure logs. Without it the Worker runs silently. Levels:
 //   - Debug: every successful batch (count + duration).
@@ -183,12 +239,39 @@ type Worker struct {
 	logger      *slog.Logger
 	metrics     *metricsCollector
 
+	// Per-event-type policy overrides. Read-only post-NewWorker; nil
+	// when no overrides are configured (back-compat hot path).
+	eventTypeMaxAttempts map[string]int
+	eventTypeBackoff     map[string]BackoffSpec
+
 	startOnce  sync.Once
 	stopOnce   sync.Once
 	cancel     context.CancelFunc
 	done       chan struct{}
 	listenExit chan struct{}
 	gcExit     chan struct{}
+}
+
+// maxAttemptsFor returns the effective maxAttempts for the event
+// type — per-type override when set, else the global default.
+func (w *Worker) maxAttemptsFor(eventType string) int {
+	if w.eventTypeMaxAttempts != nil {
+		if v, ok := w.eventTypeMaxAttempts[eventType]; ok {
+			return v
+		}
+	}
+	return w.maxAttempts
+}
+
+// backoffSpecFor returns the effective (base, max) backoff for the
+// event type — per-type override when set, else the global default.
+func (w *Worker) backoffSpecFor(eventType string) (time.Duration, time.Duration) {
+	if w.eventTypeBackoff != nil {
+		if v, ok := w.eventTypeBackoff[eventType]; ok {
+			return v.Base, v.Max
+		}
+	}
+	return w.backoffBase, w.backoffMax
 }
 
 const (
@@ -334,16 +417,34 @@ func (w *Worker) tick(ctx context.Context) {
 // per-batch transaction holds locks until the Worker has updated
 // every row's published_at OR attempts/last_error — at which point
 // the locks release. Returns the count of newly-published events.
+//
+// When per-event-type maxAttempts overrides are configured, the SQL
+// filter on attempts is dropped — the per-type cap is enforced in
+// the Go dispatch loop below. Otherwise, the global maxAttempts is
+// passed to selectBatch so dead-letter rows never leave the DB.
 func (w *Worker) drainBatch(ctx context.Context) (int, error) {
+	// Drop the SQL-side attempts filter when per-type overrides exist;
+	// the Go dispatch loop applies the per-type cap below.
+	sqlMaxAttempts := w.maxAttempts
+	if w.eventTypeMaxAttempts != nil {
+		sqlMaxAttempts = 0
+	}
 	var published int
 	err := w.db.Tx(ctx, func(tx *db.Tx) error {
-		events, err := selectBatch(ctx, tx, w.batchSize, w.maxAttempts)
+		events, err := selectBatch(ctx, tx, w.batchSize, sqlMaxAttempts)
 		if err != nil {
 			return err
 		}
 		for _, e := range events {
 			if err := ctx.Err(); err != nil {
 				return err
+			}
+			// Per-type dead-letter check — silently skip rows already at
+			// their cap so a noisy event type doesn't starve the rest
+			// of the batch.
+			effMax := w.maxAttemptsFor(e.EventType)
+			if effMax > 0 && e.Attempts >= effMax {
+				continue
 			}
 			publishStart := time.Now()
 			perr := w.publishFn(ctx, e)
@@ -354,11 +455,12 @@ func (w *Worker) drainBatch(ctx context.Context) (int, error) {
 						"event_id", e.ID, "event_type", e.EventType,
 						"attempts", e.Attempts+1, "err", perr.Error())
 				}
-				retryAfter := backoffFor(e.Attempts+1, w.backoffBase, w.backoffMax)
+				base, max := w.backoffSpecFor(e.EventType)
+				retryAfter := backoffFor(e.Attempts+1, base, max)
 				if uerr := markFailed(ctx, tx, e.ID, perr.Error(), retryAfter); uerr != nil {
 					return uerr
 				}
-				if w.maxAttempts > 0 && e.Attempts+1 >= w.maxAttempts {
+				if effMax > 0 && e.Attempts+1 >= effMax {
 					w.metrics.recordOutcome(outcomeDeadLetter)
 				} else {
 					w.metrics.recordOutcome(outcomeFailure)
