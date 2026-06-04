@@ -47,11 +47,35 @@ CREATE INDEX IF NOT EXISTS auth_refresh_tokens_expires_at_idx ON auth_refresh_to
 
 `examples/urlshort/migrations/0001_init.sql` включает этот DDL дословно рядом с собственными таблицами сервиса.
 
+## Admin / operator API
+
+`*Store` несёт ряд методов вне `auth.RefreshStore`-интерфейса — для admin-эндпоинтов, инцидент-респонса и cron-cleanup'а. Доступны на типе `*refreshpg.Store` напрямую.
+
+| Метод | Возвращает | Заметки |
+|---|---|---|
+| `ListBySubject(ctx, subject) ([]SessionInfo, error)` | history sessions | Все строки subject ordered `issued_at DESC`; включает active / consumed / revoked / expired (UI фильтрует по `State`). |
+| `Stats(ctx) (StoreStats, error)` | `{Active, Consumed, Revoked, Expired, Total}` | Disjoint buckets, один round trip. |
+| `RevokeByIP(ctx, ip) (int64, error)` | число revoked tokens | Bulk-revoke по IP-адресу для incident response. Empty ip → 0; unknown ip → 0 (idempotent). |
+| `GarbageCollectBatch(ctx, now, limit, maxIterations)` | число удалённых | Chunked variant of `GarbageCollect` для очень больших таблиц; loop `DELETE … LIMIT N` пока не вернёт 0. `limit ≤ 0` → 1000, `maxIterations ≤ 0` → 1024. На ctx cancel возвращает частичный прогресс. |
+
+`SessionInfo` ничего не несёт из `token_hash` — секрет никогда не покидает store. Поле `State` — `"active" | "consumed" | "revoked" | "expired"` (disjoint).
+
+## Observability + хуки
+
+`refreshpg.New(d, opts...)` принимает функциональные опции (обратно совместимо с `refreshpg.New(d)`):
+
+- `WithMetrics(reg prometheus.Registerer)` регистрирует:
+  - `refreshpg_ops_total{op,outcome}` — Issue / Consume / RevokeFamily / RevokeSubject / RevokeByIP / GC / Stats / List; outcome — `ok | error` (consume также: `missing | expired | reused`).
+  - `refreshpg_op_duration_seconds{op}` — histogram wall-clock latency.
+- `WithLogger(*slog.Logger)` — silent по умолчанию; используется только для panic-recovery в hooks и диагностических warning'ов.
+- `WithOnConsumeReused(fn)` — fires ВНУТРИ `Consume` после reuse-detection (`RevokeFamily` уже отработал). Подключите к SIEM / Sentry — это **OAuth 2.1 stolen-token alert**.
+- `WithOnFamilyRevoke(fn)` / `WithOnSubjectRevoke(fn)` / `WithOnIPRevoke(fn)` — post-revoke audit hooks. Все panic-safe (recovered + WARN-logged через `WithLogger`).
+
 ## Заметки
 
 - **Хеши токенов, а не сами токены.** Сырой refresh token никогда не попадает в БД — только `sha256(token)`. Утечка БД не компрометирует активные refresh-токены.
 - **Family revoke при reuse.** Когда `Consume` видит токен, у которого `consumed_at IS NOT NULL`, он делает `RevokeFamily(family_id)` перед возвратом ошибки. Это каноническая реакция на "stolen-token detected": invalidate каждого потомка скомпрометированного root-токена.
-- **Никакой фоновой чистки expired.** Истёкшие строки остаются в таблице. Запускайте periodic `DELETE FROM auth_refresh_tokens WHERE expires_at < now() - interval '7 days'`, если хотите освобождать место.
+- **Никакой фоновой чистки expired.** Истёкшие строки остаются в таблице. Запускайте `GarbageCollect(ctx, now)` (одним DELETE) или `GarbageCollectBatch(ctx, now, 1000, 0)` (chunked) из nightly cron'а, если хотите освобождать место.
 - **Атомарно через `UPDATE … RETURNING`.** Никакого race window SELECT-then-UPDATE. Диагностический `SELECT` на miss-пути классифицирует, существовал ли токен вообще или уже был consumed.
 - **`SecurityLogger`** на `*auth.Auth` (через `auth.WithSecurityLogger`) эмитит структурированные WARN-события для reuse-triggered revocations — подключите к вашему SIEM/alerting.
 
