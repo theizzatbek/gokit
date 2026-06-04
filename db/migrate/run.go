@@ -27,27 +27,37 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 // On the first failure Up stops and returns the wrapped error.
 // Already-applied migrations from the same call stay committed —
 // the runner does NOT roll back the whole batch.
-func Up(ctx context.Context, d *db.DB, fsys fs.FS) error {
-	if err := bootstrap(ctx, d); err != nil {
-		return err
+//
+// Pass [WithLock] to serialise concurrent boot races between
+// replicas — only one holds the advisory lock at a time, the rest
+// block on it and then drain a (now-empty) pending set as a no-op.
+func Up(ctx context.Context, d *db.DB, fsys fs.FS, opts ...Option) error {
+	var cfg applyConfig
+	for _, opt := range opts {
+		opt(&cfg)
 	}
-	ups, _, err := Parse(fsys)
-	if err != nil {
-		return err
-	}
-	applied, err := appliedVersions(ctx, d)
-	if err != nil {
-		return err
-	}
-	for _, m := range ups {
-		if applied[m.Version] {
-			continue
-		}
-		if err := applyOne(ctx, d, m); err != nil {
+	return applyWithOptionalLock(ctx, d, cfg, func(ctx context.Context) error {
+		if err := bootstrap(ctx, d); err != nil {
 			return err
 		}
-	}
-	return nil
+		ups, _, err := Parse(fsys)
+		if err != nil {
+			return err
+		}
+		applied, err := appliedVersions(ctx, d)
+		if err != nil {
+			return err
+		}
+		for _, m := range ups {
+			if applied[m.Version] {
+				continue
+			}
+			if err := applyOne(ctx, d, m); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // Down rolls back the n most recently applied migrations in reverse

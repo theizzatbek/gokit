@@ -47,34 +47,42 @@ func Plan(ctx context.Context, d *db.DB, fsys fs.FS) ([]Migration, error) {
 //
 // Returns CodeUnknownTarget when target isn't in the parsed Ups.
 // Already-applied versions are skipped (idempotent like Up).
-func UpTo(ctx context.Context, d *db.DB, fsys fs.FS, target string) error {
-	if err := bootstrap(ctx, d); err != nil {
-		return err
+//
+// Pass [WithLock] for the same concurrent-boot serialisation as [Up].
+func UpTo(ctx context.Context, d *db.DB, fsys fs.FS, target string, opts ...Option) error {
+	var cfg applyConfig
+	for _, opt := range opts {
+		opt(&cfg)
 	}
-	ups, _, err := Parse(fsys)
-	if err != nil {
-		return err
-	}
-	if !containsVersion(ups, target) {
-		return errs.NotFoundf(CodeUnknownTarget,
-			"migrate: target %q not found in parsed Ups", target)
-	}
-	applied, err := appliedVersions(ctx, d)
-	if err != nil {
-		return err
-	}
-	for _, m := range ups {
-		if m.Version > target {
-			break
-		}
-		if applied[m.Version] {
-			continue
-		}
-		if err := applyOne(ctx, d, m); err != nil {
+	return applyWithOptionalLock(ctx, d, cfg, func(ctx context.Context) error {
+		if err := bootstrap(ctx, d); err != nil {
 			return err
 		}
-	}
-	return nil
+		ups, _, err := Parse(fsys)
+		if err != nil {
+			return err
+		}
+		if !containsVersion(ups, target) {
+			return errs.NotFoundf(CodeUnknownTarget,
+				"migrate: target %q not found in parsed Ups", target)
+		}
+		applied, err := appliedVersions(ctx, d)
+		if err != nil {
+			return err
+		}
+		for _, m := range ups {
+			if m.Version > target {
+				break
+			}
+			if applied[m.Version] {
+				continue
+			}
+			if err := applyOne(ctx, d, m); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // DownTo rolls back applied migrations until target is the highest
