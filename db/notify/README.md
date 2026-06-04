@@ -46,7 +46,29 @@ _, _ = svc.DB.Exec(ctx, `SELECT pg_notify('cache_invalidate', $1)`, key)
 | `(*Notifier).Start(ctx)` | Спавнит listen-горутину. Идемпотентен. |
 | `(*Notifier).Stop()` | Отменяет ctx + ждёт горутину. Идемпотентен + nil-safe. |
 | `notify.WithLogger(l)` | Подключает slog.Logger для lifecycle + per-notification диагностики. |
+| `notify.WithMetrics(reg)` | Регистрирует `notify_notifications_total{channel,outcome}`, `notify_reconnects_total`, `notify_handler_duration_seconds{channel}`. |
 | `notify.Notification` | `{Channel, Payload string}` — то, что ваш handler получает на каждом `pg_notify` вызове. |
+| `notify.Publish[T](ctx, q, channel, payload)` | Типизированный publisher: JSON-marshal payload → pg_notify. |
+| `notify.PublishRaw(ctx, q, channel, payload)` | Low-level publisher: string payload без JSON-обёртки. |
+
+## Publish
+
+`Publish[T]` симметричен Notifier'у на publisher-side. JSON-marshal'ит typed-payload и вызывает `SELECT pg_notify(channel, payload)`:
+
+```go
+type CacheBust struct {
+    Tenant string `json:"tenant"`
+    Key    string `json:"key"`
+}
+
+err := notify.Publish(ctx, svc.DB, "cache_bust",
+    CacheBust{Tenant: "acme", Key: "config:flags"})
+
+// PublishRaw — для случаев "wake-up sign without payload":
+err = notify.PublishRaw(ctx, svc.DB, "outbox_new", "")
+```
+
+Channel-name validation — та же что в Notifier (`[A-Za-z_][A-Za-z0-9_]*`). Empty/unsafe channel → `*errs.Error{Code: notify_invalid_channel}`. Errors map'ятся в `notify_encode_failed` (JSON marshal failure) / `notify_publish_failed` (pg_notify SQL error). Publish принимает любой `db.Querier`, так что может работать внутри tx — pg_notify буфферится до COMMIT, subscriber видит только после durable persist.
 
 ## Семантика
 

@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/theizzatbek/gokit/db"
 )
@@ -68,6 +69,7 @@ type Notifier struct {
 	channels []string
 	handler  Handler
 	logger   *slog.Logger
+	metrics  *metricsCollector
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -82,6 +84,29 @@ type Option func(*Notifier)
 // diagnostics. Without it the notifier runs silently.
 func WithLogger(l *slog.Logger) Option {
 	return func(n *Notifier) { n.logger = l }
+}
+
+// WithMetrics registers the Notifier's Prometheus collectors on reg:
+//
+//   - notify_notifications_total{channel, outcome=ok|handler_error}
+//     (counter)
+//   - notify_reconnects_total (counter)
+//   - notify_handler_duration_seconds{channel} (histogram)
+//
+// Without this option no collectors are created (zero Prometheus
+// footprint). Reconnects fire on every conn-drop recovery — a steady
+// stream of reconnect ticks signals network instability to the
+// Postgres side; one isolated bump usually means a routine
+// connection reaper closed an idle conn.
+//
+// nil reg no-ops.
+func WithMetrics(reg prometheus.Registerer) Option {
+	return func(n *Notifier) {
+		if reg == nil {
+			return
+		}
+		n.metrics = newMetricsCollector(reg)
+	}
 }
 
 // NewNotifier constructs a Notifier. channels and handler are
@@ -139,11 +164,13 @@ func (n *Notifier) Stop() error {
 
 // listenLoop is the outer reconnect loop. Holds a dedicated conn
 // for the inner wait loop; on disconnect, releases + reacquires
-// with bounded backoff.
+// with bounded backoff. Each successful re-acquire (after the
+// initial one) ticks notify_reconnects_total.
 func (n *Notifier) listenLoop(ctx context.Context) {
 	defer close(n.done)
 	backoff := 100 * time.Millisecond
 	const maxBackoff = 5 * time.Second
+	first := true
 	for {
 		if err := ctx.Err(); err != nil {
 			return
@@ -174,6 +201,10 @@ func (n *Notifier) listenLoop(ctx context.Context) {
 			backoff = nextBackoff(backoff, maxBackoff)
 			continue
 		}
+		if !first {
+			n.metrics.recordReconnect()
+		}
+		first = false
 		backoff = 100 * time.Millisecond
 		n.consume(ctx, conn)
 		conn.Release()
@@ -204,6 +235,10 @@ func (n *Notifier) registerChannels(ctx context.Context, conn *pgxpool.Conn) err
 // consume blocks on the dedicated conn, dispatching each received
 // notification to the handler. Returns on first non-ctx error so
 // the outer loop can reacquire + reregister.
+//
+// Each Handler invocation is measured and recorded via the configured
+// metrics; nil-receiver short-circuits the record path so no-metrics
+// notifiers stay zero-cost.
 func (n *Notifier) consume(ctx context.Context, conn *pgxpool.Conn) {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -220,12 +255,18 @@ func (n *Notifier) consume(ctx context.Context, conn *pgxpool.Conn) {
 			return
 		}
 		nn := Notification{Channel: notif.Channel, Payload: notif.Payload}
-		if err := n.handler(ctx, nn); err != nil {
+		start := time.Now()
+		herr := n.handler(ctx, nn)
+		elapsed := time.Since(start)
+		outcome := outcomeOK
+		if herr != nil {
+			outcome = outcomeHandler
 			if n.logger != nil {
 				n.logger.Warn("notify: handler error",
-					"channel", nn.Channel, "err", err.Error())
+					"channel", nn.Channel, "err", herr.Error())
 			}
 		}
+		n.metrics.recordNotification(nn.Channel, outcome, elapsed)
 	}
 }
 

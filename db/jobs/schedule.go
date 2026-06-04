@@ -41,6 +41,9 @@ type ScheduleOption func(*scheduleOptions)
 type scheduleOptions struct {
 	queue       string
 	maxAttempts int
+	priority    int
+	dedupKey    string
+	hasDedup    bool
 }
 
 // WithQueue assigns the job to a named queue. Default "default".
@@ -57,10 +60,73 @@ func WithMaxAttempts(n int) ScheduleOption {
 	return func(o *scheduleOptions) { o.maxAttempts = n }
 }
 
+// WithPriority stamps a numeric priority on the job. The Worker
+// ORDER-BYs priority DESC before run_at, so higher numbers run
+// first within the same eligibility window. Default 0 — equal
+// priority falls through to run_at ordering.
+//
+// Use modest spreads (0 / 10 / 100) rather than tightly-clustered
+// distinct values per job — the partial index keyed on
+// (queue, priority DESC, run_at) only stays efficient when
+// priorities form a small set.
+func WithPriority(n int) ScheduleOption {
+	return func(o *scheduleOptions) { o.priority = n }
+}
+
+// WithDedupKey makes the Schedule call idempotent against an
+// already-queued job of the same type. The unique partial index
+// `idx_jobs_dedup_queued` covers (type, dedup_key) WHERE state =
+// 'queued' so a second Schedule with the same key while the first
+// is still queued returns the EXISTING job's ID instead of inserting.
+//
+// Cancelled / done / failed jobs leave the partial index, so
+// re-scheduling the same dedup_key after a previous run completed
+// always inserts a fresh row — the dedupe is "don't pile up
+// duplicates in the queue", not "ever process this key only once".
+// Use [db/inbox] for the latter (effectively-once consumer dedup).
+//
+//	id, _ := jobs.Schedule(ctx, svc.DB,
+//	    time.Now().Add(time.Hour),
+//	    "billing.send-invoice",
+//	    Invoice{UserID: "u-42", Month: "2026-06"},
+//	    jobs.WithDedupKey("u-42:2026-06"),
+//	)
+//
+// Empty key is treated as "no dedupe" — same as omitting the option.
+func WithDedupKey(key string) ScheduleOption {
+	return func(o *scheduleOptions) {
+		if key == "" {
+			return
+		}
+		o.dedupKey = key
+		o.hasDedup = true
+	}
+}
+
+// Plain INSERT path — used when no dedup_key is supplied.
 const insertSQL = `
-INSERT INTO jobs (type, queue, payload, run_at, max_attempts)
-VALUES ($1, $2, $3::jsonb, $4, $5)
+INSERT INTO jobs (type, queue, payload, run_at, max_attempts, priority)
+VALUES ($1, $2, $3::jsonb, $4, $5, $6)
 RETURNING id
+`
+
+// Dedup-aware insert path. INSERT ... ON CONFLICT DO NOTHING on the
+// partial unique index; the CTE-UNION pattern returns the inserted
+// id when the row was new OR the existing id when the unique
+// constraint suppressed the insert.
+const insertDedupSQL = `
+WITH ins AS (
+    INSERT INTO jobs (type, queue, payload, run_at, max_attempts, priority, dedup_key)
+    VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
+    ON CONFLICT (type, dedup_key) WHERE state = 'queued' AND dedup_key IS NOT NULL
+    DO NOTHING
+    RETURNING id
+)
+SELECT id FROM ins
+UNION ALL
+SELECT id FROM jobs
+ WHERE type = $1 AND dedup_key = $7 AND state = 'queued'
+ LIMIT 1
 `
 
 // Schedule inserts one job. Use runAt = time.Now() (or zero time) for
@@ -74,6 +140,10 @@ RETURNING id
 //	    "user.welcome",
 //	    Welcome{UserID: "u-42"},
 //	    jobs.WithMaxAttempts(5))
+//
+// Pass [WithDedupKey] to make the call idempotent when a job of the
+// same type is already queued — the returned ID is the existing
+// row's, not a fresh insert.
 func Schedule[T any](ctx context.Context, q db.Querier, runAt time.Time, jobType string, payload T, opts ...ScheduleOption) (int64, error) {
 	if q == nil {
 		return 0, xerrs.Validation(CodeNilDB, "jobs: nil Querier")
@@ -94,7 +164,17 @@ func Schedule[T any](ctx context.Context, q db.Querier, runAt time.Time, jobType
 		runAt = time.Now()
 	}
 	var id int64
-	row := q.QueryRow(ctx, insertSQL, jobType, o.queue, raw, runAt, o.maxAttempts)
+	if o.hasDedup {
+		row := q.QueryRow(ctx, insertDedupSQL,
+			jobType, o.queue, raw, runAt, o.maxAttempts, o.priority, o.dedupKey)
+		if err := row.Scan(&id); err != nil {
+			return 0, xerrs.Wrap(err, xerrs.KindInternal, CodeInsertFailed,
+				"jobs: insert failed")
+		}
+		return id, nil
+	}
+	row := q.QueryRow(ctx, insertSQL,
+		jobType, o.queue, raw, runAt, o.maxAttempts, o.priority)
 	if err := row.Scan(&id); err != nil {
 		return 0, xerrs.Wrap(err, xerrs.KindInternal, CodeInsertFailed,
 			"jobs: insert failed")

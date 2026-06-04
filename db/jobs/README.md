@@ -82,7 +82,53 @@ Exponential с ±10% jitter, capped at 1h:
 | `RegisterHandler[T](w, type, fn)` | Typed handler. Panic'ит на duplicate. |
 | `Start(ctx)` | Blocks. Returns ctx.Err() on cancel. |
 | `Stop()` | Signals shutdown + waits for current tick to finish. Idempotent. |
+| `Shutdown(ctx)` | Deadline-aware sibling: возвращает ctx.Err() если in-flight handlers переживают ctx-deadline. Idempotent с Stop. |
+| `Cancel(ctx, q, id)` | Operator helper: queued → cancelled. Worker skip'ает cancelled. `jobs_not_found` если row не queued. |
+| `GatherStats(ctx, q) Stats` | Snapshot {Queued, Eligible, Running, Failed, Cancelled, Done, OldestQueued} для /admin. |
 | `Schema()` / `ApplySchema(ctx, d)` | DDL helpers. |
+
+## Operator helpers
+
+```go
+// Cancel scheduled job — only works while state='queued'.
+err := jobs.Cancel(ctx, svc.DB, id)
+// → *errs.Error{Code: jobs_not_found} если row не queued.
+
+// Snapshot для /admin dashboard'а.
+s, _ := jobs.GatherStats(ctx, svc.DB)
+// Stats{Queued, Eligible, Running, Failed, Cancelled, Done, OldestQueued}
+
+// Graceful shutdown с deadline (вместо безлимитного Stop()).
+ctx, cancel := context.WithTimeout(context.Background(), 30 * time.Second)
+defer cancel()
+_ = worker.Shutdown(ctx)  // ctx.Err() если handlers stuck дольше deadline'а
+```
+
+## Dedupe + priority
+
+`WithDedupKey` делает Schedule idempotent для текущего queued window'а:
+
+```go
+// "Send billing invoice for u-42 for 2026-06" — мы планируем job из
+// нескольких code paths (UI + cron + retry); только ОДНА row должна
+// попасть в queue.
+id, _ := jobs.Schedule(ctx, svc.DB, time.Now().Add(time.Hour),
+    "billing.send-invoice", Invoice{UserID: "u-42", Month: "2026-06"},
+    jobs.WithDedupKey("u-42:2026-06"),
+)
+// Второй вызов с тем же ключом → returns existing id, не вставляет
+// новый row. После того как row стал done/failed/cancelled — partial
+// index не видит его, и re-schedule инсертится cleanly.
+```
+
+`WithPriority` бамп'ит row вверх claim-очереди:
+
+```go
+jobs.Schedule(ctx, svc.DB, time.Now(), "alert.page", payload,
+    jobs.WithPriority(100))  // urgent alerts ahead of routine tasks
+```
+
+Claim SQL: `ORDER BY priority DESC, run_at` — equal-priority falls through to run_at FIFO. Используйте modest spreads (0/10/100), не плотные distinct values per row — partial index стабильнее когда priority forms a small set.
 
 ## Опции
 
@@ -99,6 +145,8 @@ Exponential с ±10% jitter, capped at 1h:
 |---|---|---|
 | `WithQueue(name)` | `default` | Бакет для очередей. |
 | `WithMaxAttempts(n)` | 25 | Cap retries. |
+| `WithPriority(n)` | 0 | Higher → claim'ится раньше внутри одного eligibility-окна. ORDER BY priority DESC, run_at. |
+| `WithDedupKey(key)` | none | Idempotent re-schedule. Partial UNIQUE INDEX по (type, dedup_key) WHERE state='queued' — второй Schedule возвращает existing ID. |
 
 ## Когда что выбирать
 
