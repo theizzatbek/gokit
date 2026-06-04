@@ -9,6 +9,37 @@ This is the bootstrap entry; prior history lives in `git log`.
 ## [Unreleased]
 
 ### Added
+- `db/migrate/` — four additive helpers around the existing runner.
+  Existing Up / UpTo signatures gain variadic `Option`s but stay
+  back-compat (old call sites compile unchanged).
+  - `WithLock(name)` Option on Up / UpTo wraps the apply loop in an
+    advisory lock so concurrent boot races (k8s rollout, HPA
+    scale-up) don't trip duplicate-key inserts on
+    `schema_migrations`. One replica acquires; the rest block, then
+    drain a now-applied set as a no-op. Lock key derives from
+    sha256(name); empty name → no lock (back-compat). Session-level
+    lock auto-releases when the conn returns to the pool — a crash
+    mid-apply doesn't strand the lock. Powered by `db/lock`.
+  - `DryRun(ctx, d, fsys, w)` writes a human-readable plan of the
+    pending Up migrations to w without executing any SQL. Output
+    shape: header + per-migration filename + body. Use as a CI
+    pre-flight gate or as the body of a `kit migrate plan`
+    subcommand. `Pending(ctx, d, fsys)` is a thin alias for
+    `Plan` — read-friendly name for the same set.
+  - `History(ctx, d) []AppliedRecord` returns every applied
+    migration newest-first as `{Version, Name, AppliedAt}`. Drives
+    `/admin/migrations` endpoints — operators see the audit trail
+    without reaching into psql.
+  - `Generate(dir, name, opts...)` scaffolds a new migration file
+    in dir. Default version stamping is "next NNNN" (scans dir,
+    highest + 1, zero-padded to 4); `WithTimestamp()` flips to
+    `YYYYMMDDHHMMSS` for shops where multiple devs land
+    migrations independently; `WithDown()` also creates a matching
+    `.down.sql` stub. Refuses to clobber existing files
+    (`O_EXCL`-write). Name validation reuses the runner's
+    filename alphabet.
+  - New stable codes: `migrate_lock_failed`,
+    `migrate_generate_invalid_name`, `migrate_generate_failed`.
 - `db/jobs/` — four additive features. Existing Worker / Schedule /
   RegisterHandler signatures are preserved.
   - `WithDedupKey(key)` on Schedule makes the call idempotent
