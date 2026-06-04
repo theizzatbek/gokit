@@ -57,18 +57,13 @@ func initPostgresContainer() {
 		Database:       "test",
 		SSLMode:        "disable",
 		ConnectTimeout: 5 * time.Second,
-		// Two slots: one for the LISTEN goroutine the worker holds
-		// for its lifetime, one for the drain SELECT/UPDATE path.
-		MaxConns: 2,
-		MinConns: 2,
+		MaxConns:       2,
+		MinConns:       2,
 	}
 }
 
 // freshDB opens a *db.DB and TRUNCATEs the outbox table so each
-// test starts from an empty queue. Switched from per-test schemas
-// to truncate-on-start because the v2 worker holds a dedicated
-// LISTEN connection — search_path SET only applies to that conn
-// and other queries land on a stale public.outbox.
+// test starts from an empty queue.
 func freshDB(t *testing.T) *db.DB {
 	t.Helper()
 	if testing.Short() {

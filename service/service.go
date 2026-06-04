@@ -56,8 +56,8 @@ type Service[T any, C any] struct {
 
 	// WebhooksFanout is the event→deliveries fanout built by
 	// [WithWebhooks] with StartFanout=true. nil otherwise. Register
-	// `WebhooksFanout.HandleEvent` from your natsmap or db/notify
-	// handler to drive the deliveries pipeline.
+	// `WebhooksFanout.HandleEvent` from your natsmap handler to drive
+	// the deliveries pipeline.
 	WebhooksFanout *webhooks.Fanout
 
 	cfg     Config

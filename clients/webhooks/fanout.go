@@ -11,8 +11,8 @@ import (
 )
 
 // FanoutConfig wires Fanout dependencies. DB is optional — if set,
-// HandleEvent runs Enqueue inside DB.Tx so the pg_notify in
-// DeliveryStore.Enqueue fires at commit. If nil, Enqueue runs
+// HandleEvent runs Enqueue inside DB.Tx so the delivery INSERTs
+// commit atomically with the surrounding work. If nil, Enqueue runs
 // directly on a Querier supplied by the caller (rare).
 type FanoutConfig struct {
 	SubStore      SubscriptionStore

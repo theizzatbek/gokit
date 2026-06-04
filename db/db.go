@@ -186,9 +186,9 @@ func (d *DB) Close() {
 	d.pool = nil
 }
 
-// Pool returns the underlying *pgxpool.Pool for advanced use (LISTEN/NOTIFY,
-// COPY, custom isolation). Errors via this path are NOT funneled through
-// mapPgxErr — the caller owns mapping.
+// Pool returns the underlying *pgxpool.Pool for advanced use (COPY,
+// custom isolation, direct pgx APIs). Errors via this path are NOT
+// funneled through mapPgxErr — the caller owns mapping.
 func (d *DB) Pool() *pgxpool.Pool { return d.pool }
 
 // Query executes sql and returns the rows. The error is funneled through mapPgxErr.
@@ -230,8 +230,8 @@ func (d *DB) ReadQueryRow(ctx context.Context, sql string, args ...any) pgx.Row 
 }
 
 // ReadPool returns the underlying standby *pgxpool.Pool when HasReadReplica
-// was true at Connect time; nil otherwise. Use only for LISTEN/NOTIFY, COPY,
-// or custom isolation — most code wants ReadQuery / ReadQueryRow.
+// was true at Connect time; nil otherwise. Use only for COPY or custom
+// isolation — most code wants ReadQuery / ReadQueryRow.
 func (d *DB) ReadPool() *pgxpool.Pool { return d.readPool }
 
 var _ Querier = (*DB)(nil)

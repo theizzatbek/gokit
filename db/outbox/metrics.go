@@ -21,11 +21,10 @@ const (
 // passed; nil-safe — every record method short-circuits on nil
 // receiver so the hot path stays zero-cost when metrics are off.
 type metricsCollector struct {
-	eventsTotal      *prometheus.CounterVec
-	publishDuration  prometheus.Histogram
-	pendingCount     prometheus.Gauge
-	gcDeletedTotal   prometheus.Counter
-	listenWakesTotal prometheus.Counter
+	eventsTotal     *prometheus.CounterVec
+	publishDuration prometheus.Histogram
+	pendingCount    prometheus.Gauge
+	gcDeletedTotal  prometheus.Counter
 }
 
 // newMetricsCollector registers the kit-named collectors on reg.
@@ -62,19 +61,12 @@ func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
 				Help: "Cumulative rows removed by the retention GC.",
 			},
 		),
-		listenWakesTotal: prometheus.NewCounter(
-			prometheus.CounterOpts{
-				Name: "outbox_listen_wakes_total",
-				Help: "Wake-ups received via the LISTEN/NOTIFY fast path.",
-			},
-		),
 	}
 	reg.MustRegister(
 		m.eventsTotal,
 		m.publishDuration,
 		m.pendingCount,
 		m.gcDeletedTotal,
-		m.listenWakesTotal,
 	)
 	return m
 }
@@ -110,14 +102,6 @@ func (m *metricsCollector) recordGC(n int64) {
 		return
 	}
 	m.gcDeletedTotal.Add(float64(n))
-}
-
-// recordWake increments the listen-wake counter.
-func (m *metricsCollector) recordWake() {
-	if m == nil {
-		return
-	}
-	m.listenWakesTotal.Inc()
 }
 
 // refreshPending issues `SELECT count(*) FROM outbox WHERE ...` to

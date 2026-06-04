@@ -9,9 +9,8 @@
 //     this binary just opts in via service.WithNATSMapGateway.
 //   - Drains the outbox table (shared with urlshort-api through the
 //     same Postgres database) and publishes each row through the
-//     same natsmap engine. The kit's outbox worker handles
-//     LISTEN/NOTIFY so backlog latency is sub-second after a fresh
-//     api commit.
+//     same natsmap engine. The kit's outbox worker polls at sub-second
+//     cadence so backlog latency stays low after a fresh api commit.
 //
 // NOT in scope:
 //
