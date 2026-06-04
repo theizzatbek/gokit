@@ -40,6 +40,7 @@ Usage:
   kit add-endpoint METHOD PATH HANDLER [flags]
   kit gen migration <name> [flags]
   kit gen k8s --name svc --image IMG [flags]
+  kit gen db-cluster [--replicas N] [flags]
 
 Pass --help on any subcommand for its flags.
 `

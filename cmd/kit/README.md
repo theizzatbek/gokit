@@ -151,6 +151,62 @@ kit add-endpoint POST /tasks tasks.create --group /api/v1
 
 Handler-base name извлекается из части до первого `.` в handler-name'е.
 
+### `kit gen`
+
+Self-contained генераторы text-assets'ов (SQL templates, YAML манифесты, docker-compose файлы), которые оператор review'ит и коммитит. Никакого AST-rewrite'а, никакого go.mod parsing'а.
+
+#### `kit gen migration <name> [--dir migrations]`
+
+Скаффолдит таймстемпированную пару SQL-файлов:
+
+```sh
+kit gen migration add_user_index
+  → migrations/20260601120000_add_user_index.up.sql
+  → migrations/20260601120000_add_user_index.down.sql
+```
+
+Имя должно матчить `[a-z0-9_]+`. Refuses to clobber existing files.
+
+#### `kit gen k8s --name svc --image IMG [flags]`
+
+Эмитит K8s-манифесты для kit-based сервиса: Deployment, Service, ConfigMap (env vars выгребаются из `service.Config` struct tags через reflection), optional Ingress (когда передан `--host`). Probe paths указывают на `/healthz` / `/readyz` / `/preflight`.
+
+```sh
+kit gen k8s --name myservice --image myreg/myservice:v1.0 \
+  --namespace prod --replicas 3 --host myservice.example.com \
+  --out k8s/myservice.yaml
+```
+
+#### `kit gen db-cluster [--replicas N] [flags]`
+
+Эмитит `docker-compose.yml` для Postgres primary + N standby со streaming replication из коробки (через bitnami/postgresql env vars). Используйте для локального dev'а кода, который консьюмит kit's multi-replica routing.
+
+```sh
+kit gen db-cluster --replicas 2 --out docker-compose.db.yml
+docker compose -f docker-compose.db.yml up -d
+
+# В сервисе:
+DB_URL=postgres://app:changeme@localhost:5432/appdb \
+DB_READ_URLS=postgres://app:changeme@localhost:5433/appdb,postgres://app:changeme@localhost:5434/appdb \
+./my-service
+```
+
+| Флаг | По умолчанию | Заметки |
+|---|---|---|
+| `--replicas N` | 1 | Число standby (min 1). |
+| `--image IMG` | `bitnami/postgresql:16` | Должен поддерживать `POSTGRESQL_REPLICATION_MODE`. |
+| `--db NAME` | `appdb` | Имя application БД. |
+| `--user USER` | `app` | Application user. |
+| `--password PW` | `changeme` | Application password. **Замените для любого persistent setup'а.** |
+| `--repl-user USER` | `repl` | Replication-account user. |
+| `--repl-password PW` | `changeme` | Replication-account password. |
+| `--primary-port PORT` | 5432 | Host port для primary. |
+| `--port-base PORT` | 5433 | Host port для первого standby; +N для последующих. |
+| `--volume-prefix STR` | `pgdata` | Префикс named volumes (final: `pgdata-primary`, `pgdata-standby-N`). |
+| `--out FILE` | stdout | Output-файл. |
+
+Дефолты — dev-friendly, не production-grade. Для prod'а монтируйте секреты через docker secret / external secret store; никогда не бейкайте пароли в committed compose-файлы. Для интеграционного тестирования в Go-коде используйте [`db/testdb.SpinCluster`](../../db/testdb/README.md) который делает то же самое программно через testcontainers.
+
 ## DSN-формат
 
 Все DB-связанные команды принимают `--dsn postgres://user:pw@host:port/db?sslmode=disable`
