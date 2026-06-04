@@ -139,6 +139,120 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// ListBySubject implements [sessions.Lister]. Backed by the subject
+// SET + pipelined HGetAll; members of the set whose backing HASH has
+// already been EXPIREATd are silently skipped.
+//
+// Empty subject returns an empty slice without touching Redis.
+func (s *Store) ListBySubject(ctx context.Context, subject string) ([]sessions.Session, error) {
+	if subject == "" {
+		return []sessions.Session{}, nil
+	}
+	ids, err := s.c.SMembers(ctx, s.subjKey(subject)).Result()
+	if err != nil {
+		return nil, xerrs.Wrap(err, xerrs.KindUnavailable, CodeRedisFailed,
+			"sessionsredis: list smembers failed")
+	}
+	if len(ids) == 0 {
+		return []sessions.Session{}, nil
+	}
+	pipe := s.c.Pipeline()
+	cmds := make([]*redis.MapStringStringCmd, len(ids))
+	for i, id := range ids {
+		cmds[i] = pipe.HGetAll(ctx, s.sessKey(id))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, xerrs.Wrap(err, xerrs.KindUnavailable, CodeRedisFailed,
+			"sessionsredis: list hgetall failed")
+	}
+	out := make([]sessions.Session, 0, len(ids))
+	for i, cmd := range cmds {
+		res := cmd.Val()
+		if len(res) == 0 {
+			continue // hash EXPIREATd, stale set member
+		}
+		out = append(out, sessions.Session{
+			ID:         ids[i],
+			Subject:    res["subject"],
+			Claims:     []byte(res["claims"]),
+			Scopes:     decodeStrSlice(res["scopes"]),
+			Roles:      decodeStrSlice(res["roles"]),
+			CreatedAt:  parseUnix(res["created_at"]),
+			LastSeenAt: parseUnix(res["last_seen_at"]),
+			ExpiresAt:  parseUnix(res["expires_at"]),
+		})
+	}
+	// Newest first.
+	for i := 1; i < len(out); i++ {
+		j := i
+		for j > 0 && out[j].CreatedAt.After(out[j-1].CreatedAt) {
+			out[j], out[j-1] = out[j-1], out[j]
+			j--
+		}
+	}
+	return out, nil
+}
+
+// Stats implements [sessions.Lister]. Walks `<prefix>session:*` keys
+// via SCAN excluding the `*session:subject:*` auxiliary sets — O(N).
+// EXPIREATd sessions are invisible to Redis and therefore counted as
+// "doesn't exist" (Expired = 0 always for this backend).
+func (s *Store) Stats(ctx context.Context) (sessions.StoreStats, error) {
+	pattern := s.prefix + "session:*"
+	iter := s.c.Scan(ctx, 0, pattern, 200).Iterator()
+	now := time.Now().Unix()
+	var out sessions.StoreStats
+	keys := make([]string, 0, 256)
+	flush := func() error {
+		if len(keys) == 0 {
+			return nil
+		}
+		pipe := s.c.Pipeline()
+		cmds := make([]*redis.StringCmd, len(keys))
+		for i, k := range keys {
+			cmds[i] = pipe.HGet(ctx, k, "expires_at")
+		}
+		_, _ = pipe.Exec(ctx) // partial-success tolerated: per-cmd Err checked below
+		for _, cmd := range cmds {
+			v, err := cmd.Result()
+			if err != nil {
+				continue // key vanished mid-scan (EXPIREAT race) — skip
+			}
+			out.Total++
+			exp := parseUnix(v).Unix()
+			if exp <= now {
+				out.Expired++
+			} else {
+				out.Active++
+			}
+		}
+		keys = keys[:0]
+		return nil
+	}
+	subjectPrefix := s.prefix + "session:subject:"
+	for iter.Next(ctx) {
+		k := iter.Val()
+		// Subject SETs share the `session:` prefix — skip them.
+		if len(k) >= len(subjectPrefix) && k[:len(subjectPrefix)] == subjectPrefix {
+			continue
+		}
+		keys = append(keys, k)
+		if len(keys) >= 200 {
+			if err := flush(); err != nil {
+				return sessions.StoreStats{}, err
+			}
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return sessions.StoreStats{}, xerrs.Wrap(err, xerrs.KindUnavailable, CodeRedisFailed,
+			"sessionsredis: stats scan failed")
+	}
+	if err := flush(); err != nil {
+		return sessions.StoreStats{}, err
+	}
+	return out, nil
+}
+
 // DeleteForSubject deletes every session in the subject's SET, then
 // the SET itself.
 func (s *Store) DeleteForSubject(ctx context.Context, subject string) error {
@@ -161,6 +275,12 @@ func (s *Store) DeleteForSubject(ctx context.Context, subject string) error {
 	}
 	return nil
 }
+
+// Compile-time interface assertions.
+var (
+	_ sessions.SessionStore = (*Store)(nil)
+	_ sessions.Lister       = (*Store)(nil)
+)
 
 // encodeStrSlice JSON-encodes for HASH storage. Empty slice → empty
 // string (HASH-friendly), differentiates from null.

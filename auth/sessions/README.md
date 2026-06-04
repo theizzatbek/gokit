@@ -116,11 +116,40 @@ Session-side claims хранятся как JSON в `Session.Claims` (`json.RawM
 
 | Метод | Заметки |
 |---|---|
-| `Auth.Sessions(cfg)` | Construct Manager bound к *Auth[C]. |
-| `(sm) Issue(c, subject, claims, scopes, roles)` | Create session + set cookie. |
-| `(sm) Logout(c)` | Delete session + clear cookie. |
-| `(sm) LogoutEverywhere(ctx, subject)` | Bulk delete все sessions subject'а. |
-| `(sm) Middleware(mode)` | Fiber middleware с Optional/Required. |
+| `Auth.Sessions(cfg, opts...)` | Construct Manager bound к *Auth[C]. Options — observability + lifecycle hooks. |
+| `(sm) Issue(c, subject, claims, scopes, roles)` | Create session + set cookie. Fires `OnIssue`. |
+| `(sm) Logout(c)` | Delete session + clear cookie. Fires `OnLogout`. |
+| `(sm) LogoutEverywhere(ctx, subject)` | Bulk delete все sessions subject'а. Fires `OnLogoutEverywhere` with revoked count (когда Store реализует Lister, иначе −1). |
+| `(sm) RevokeByID(ctx, id)` | Admin "force-logout this specific session" — без оглядки на cookie. Идемпотентен; пустой id short-circuit. Fires `OnLogout`. |
+| `(sm) Middleware(mode)` | Fiber middleware с Optional/Required. Fires `OnExpire` при in-flight удалении истёкшей сессии. |
+
+## Observability + lifecycle хуки
+
+`a.Sessions(cfg, opts...)` принимает trailing-options (back-compat с `a.Sessions(cfg)`):
+
+- `WithMetrics(reg prometheus.Registerer)` регистрирует:
+  - `sessions_ops_total{op,outcome}` — op: `issue|logout|logout_all|revoke|middleware`; outcome `ok|error`; middleware также `missing|invalid|expired|claims_decode`.
+  - `sessions_op_duration_seconds{op}` — histogram wall-clock latency.
+- `WithLogger(*slog.Logger)` — silent по умолчанию; нужен только для panic-recovery в hooks.
+- `WithOnIssue(fn)` — после успешного `Issue` (cookie + Store committed). Подключите для Sentry user-scope binding / welcome-email.
+- `WithOnLogout(fn)` — после успешного `Logout` (cookie-driven) и `RevokeByID` (admin-driven). `subject` пустой когда cookie не был передан.
+- `WithOnLogoutEverywhere(fn)` — после успешного bulk-revoke'а; `count` — число revoked sessions (-1 если Store не реализует Lister).
+- `WithOnExpire(fn)` — fires внутри `Middleware` когда найдена и удалена истёкшая сессия. Отличается от `OnLogout` чтобы SIEM мог разделить "user logout" vs "session timeout".
+
+Все хуки panic-safe — panic recovered + WARN-logged через `WithLogger`.
+
+## Admin-поверхность через Lister
+
+`SessionStore`-implementations МОГУТ реализовывать `Lister` (optional interface). Менеджер lazily type-asserts на него:
+
+```go
+type Lister interface {
+    ListBySubject(ctx, subject) ([]Session, error)
+    Stats(ctx) (StoreStats, error)
+}
+```
+
+`MemoryStore` и `sessionsredis.Store` оба реализуют Lister. `StoreStats{Active, Expired, Total}` — disjoint buckets. Используйте из admin-эндпоинтов для рендеринга "active sessions for user X" / "force-revoke this specific session" интерфейсов.
 
 ## Ограничения
 

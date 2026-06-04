@@ -79,6 +79,51 @@ func (s *MemoryStore) DeleteForSubject(_ context.Context, subject string) error 
 	return nil
 }
 
+// ListBySubject implements [Lister]. Returns sessions ordered by
+// CreatedAt descending. Empty subject → empty slice.
+func (s *MemoryStore) ListBySubject(_ context.Context, subject string) ([]Session, error) {
+	if subject == "" {
+		return []Session{}, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ids := s.bySubject[subject]
+	out := make([]Session, 0, len(ids))
+	for id := range ids {
+		if sess, ok := s.byID[id]; ok {
+			out = append(out, *cloneSession(sess))
+		}
+	}
+	// Newest first. len(out) is bounded by the subject set size —
+	// insertion sort keeps it allocation-free.
+	for i := 1; i < len(out); i++ {
+		j := i
+		for j > 0 && out[j].CreatedAt.After(out[j-1].CreatedAt) {
+			out[j], out[j-1] = out[j-1], out[j]
+			j--
+		}
+	}
+	return out, nil
+}
+
+// Stats implements [Lister]. Walks every row under the lock — O(N).
+// For a dev store with thousands of sessions max, that's fine.
+func (s *MemoryStore) Stats(_ context.Context) (StoreStats, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	now := time.Now()
+	var out StoreStats
+	for _, sess := range s.byID {
+		out.Total++
+		if !sess.ExpiresAt.IsZero() && now.After(sess.ExpiresAt) {
+			out.Expired++
+		} else {
+			out.Active++
+		}
+	}
+	return out, nil
+}
+
 // Snapshot returns a copy of every active session keyed by ID. Test
 // convenience — production should query the store directly.
 func (s *MemoryStore) Snapshot() map[string]*Session {
@@ -90,6 +135,9 @@ func (s *MemoryStore) Snapshot() map[string]*Session {
 	}
 	return out
 }
+
+// Compile-time interface assertion — MemoryStore implements Lister.
+var _ Lister = (*MemoryStore)(nil)
 
 func cloneSession(in *Session) *Session {
 	if in == nil {
