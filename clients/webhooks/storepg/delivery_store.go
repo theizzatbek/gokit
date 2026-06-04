@@ -32,12 +32,8 @@ func NewDeliveryStore(q db.Querier, secretKey []byte) (*DeliveryStore, error) {
 	return &DeliveryStore{q: q, cr: cr}, nil
 }
 
-// NotifyChannel is the LISTEN channel pg_notify'd by Enqueue.
-const NotifyChannel = "webhook_deliveries_new"
-
-// Enqueue inserts deliveries inside the caller's Querier and fires
-// pg_notify on commit. ON CONFLICT DO NOTHING covers the JetStream-
-// redeliver idempotency case.
+// Enqueue inserts deliveries inside the caller's Querier. ON CONFLICT
+// DO NOTHING covers the JetStream-redeliver idempotency case.
 //
 // When Delivery.NextAttemptAt is zero or within 1 second of the
 // current wall clock, the column is left to its SQL DEFAULT (now())
@@ -92,14 +88,10 @@ func (ds *DeliveryStore) Enqueue(ctx context.Context, q db.Querier, deliveries [
 		}
 	}
 	sql := `
-		WITH ins AS (
-			INSERT INTO webhook_deliveries
-				(subscription_id, event_id, event_type, payload, headers, next_attempt_at)
-			VALUES ` + values + `
-			ON CONFLICT (subscription_id, event_id) DO NOTHING
-			RETURNING 1
-		)
-		SELECT pg_notify('` + NotifyChannel + `', '') FROM ins
+		INSERT INTO webhook_deliveries
+			(subscription_id, event_id, event_type, payload, headers, next_attempt_at)
+		VALUES ` + values + `
+		ON CONFLICT (subscription_id, event_id) DO NOTHING
 	`
 	_, err := q.Exec(ctx, sql, args...)
 	return err

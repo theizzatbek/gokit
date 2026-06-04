@@ -22,8 +22,7 @@ import (
 // The kit does NOT auto-register Fanout as a NATS subscriber — the
 // fan-out wiring depends on which event types the application
 // publishes. Use `s.WebhooksFanout.HandleEvent` from your own
-// natsmap handler (registered via [WithNATSMapRegistration]) or
-// from a [db/notify] listener.
+// natsmap handler (registered via [WithNATSMapRegistration]).
 type WebhooksConfig struct {
 	SubStore      webhooks.SubscriptionStore
 	DeliveryStore webhooks.DeliveryStore

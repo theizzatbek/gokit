@@ -30,7 +30,6 @@ audit, schedulers, file uploads, webhook'и.
 | [`db/sqb/`](db/sqb/README.md) | Опциональная squirrel-обёртка, преднастроенная на `$N` placeholders. |
 | [`db/migrate/`](db/migrate/README.md) | Zero-dependency migration runner на `embed.FS`. |
 | [`db/lock/`](db/lock/README.md) | `pg_advisory_lock` примитив для leader-election и mutual exclusion. |
-| [`db/notify/`](db/notify/README.md) | Goroutine-safe Postgres LISTEN/NOTIFY helper. |
 | [`db/jobs/`](db/jobs/README.md) | Postgres-backed delayed job queue (gap между cron'ом и outbox'ом). |
 | [`db/outbox/`](db/outbox/README.md) | Transactional outbox pattern (publish-side). |
 | [`db/outbox/outboxnats/`](db/outbox/outboxnats/README.md) | Adapter — `outbox.PublishFn` → natsmap. |
@@ -124,7 +123,7 @@ audit, schedulers, file uploads, webhook'и.
 | SQL builder | `db/sqb` |
 | Прокатить миграции из embed.FS | `db/migrate` |
 | Leader-election в multi-replica | `db/lock` |
-| Один pod слушает, остальные нет | `db/lock` или `db/notify` |
+| Один pod слушает, остальные нет | `db/lock` |
 | Periodic cron jobs (declarative YAML) | `cronmap` (+ `service.WithCronMap` если используешь bundle) |
 | Cron job с leader-elect (один pod из N) | `cronmap` + `singleton: true` (нужен DB) |
 | One-shot delayed job ("через 5 мин сделай X") | `db/jobs` |
@@ -156,7 +155,7 @@ audit, schedulers, file uploads, webhook'и.
 ```
 errs                                        → только stdlib
 reqctx                                      → только stdlib
-db, db/sqb, db/migrate, db/lock, db/notify  → errs + pgx
+db, db/sqb, db/migrate, db/lock             → errs + pgx
 db/jobs, db/outbox, db/inbox                → db + errs
 db/outbox/outboxnats, db/inbox/inboxnats    → db/outbox|inbox + clients/natsmap
 breaker, bulkhead, batch                    → stdlib + prometheus

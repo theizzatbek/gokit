@@ -61,51 +61,6 @@ func TestBackoff_StampsNextRetryAt(t *testing.T) {
 	waitFor(t, time.Second, func() bool { return atomic.LoadInt32(&attempts) >= 2 })
 }
 
-// TestListenNotify_WakesWorker proves the LISTEN/NOTIFY fast path:
-// with a very long polling interval, the event still publishes within
-// hundreds of ms because Enqueue's pg_notify wakes the worker.
-func TestListenNotify_WakesWorker(t *testing.T) {
-	d := freshDB(t)
-	ctx := context.Background()
-
-	var published int32
-	w, err := outbox.NewWorker(d, func(_ context.Context, _ outbox.Event) error {
-		atomic.AddInt32(&published, 1)
-		return nil
-	},
-		// 30-second polling — if NOTIFY didn't fire, the test would
-		// time out far before the next poll.
-		outbox.WithInterval(30*time.Second),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	loopCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	if err := w.Start(loopCtx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = w.Stop() })
-
-	// Brief delay so the LISTEN goroutine has time to register on its
-	// dedicated conn before Enqueue NOTIFIES (otherwise NOTIFY lands
-	// without a listener and the test falls back to the immediate
-	// drain on Start's first tick — the test still passes but doesn't
-	// actually exercise LISTEN/NOTIFY).
-	time.Sleep(150 * time.Millisecond)
-
-	if err := d.Tx(ctx, func(tx *db.Tx) error {
-		return outbox.Enqueue(ctx, tx, outbox.Event{
-			EventType: "test.notify",
-			Payload:   []byte(`{}`),
-		})
-	}); err != nil {
-		t.Fatalf("Enqueue: %v", err)
-	}
-
-	waitFor(t, time.Second, func() bool { return atomic.LoadInt32(&published) >= 1 })
-}
-
 // TestMetrics_PublishOutcomes verifies the kit's Prometheus
 // collectors fire success / failure counters and the duration
 // histogram on the expected paths.

@@ -45,7 +45,7 @@ type Delivery struct {
 
 // DeliveryStore is the persistence contract for delivery rows.
 // Enqueue accepts a db.Querier so Fanout can write in the same
-// transaction as the pg_notify call.
+// transaction as the surrounding business work (atomic publish).
 type DeliveryStore interface {
 	Enqueue(ctx context.Context, q db.Querier, deliveries []Delivery) error
 	Claim(ctx context.Context, batchSize int) ([]Delivery, error)

@@ -184,7 +184,7 @@ func NewWorker(cfg WorkerConfig) (*Worker, error) {
 		cfg.BatchSize = 32
 	}
 	if cfg.Interval == 0 {
-		cfg.Interval = time.Second
+		cfg.Interval = 500 * time.Millisecond
 	}
 	if cfg.MaxInFlight == 0 {
 		cfg.MaxInFlight = 16

@@ -45,10 +45,10 @@ const (
 // WorkerOption tunes [NewWorker].
 type WorkerOption func(*Worker)
 
-// WithInterval sets the polling cadence. Default 5s — balances
-// publish latency against DB load. The Worker tries to fetch
-// immediately on Start so the first event lands in < BatchSize
-// seconds even with a long interval.
+// WithInterval sets the polling cadence. Default 500ms — drains
+// new events within sub-second latency at negligible DB load
+// (one indexed SELECT per tick). Raise for very-large deployments
+// where DB pressure matters more than publish latency.
 func WithInterval(d time.Duration) WorkerOption {
 	return func(w *Worker) { w.interval = d }
 }
@@ -80,21 +80,6 @@ func WithMaxAttempts(n int) WorkerOption {
 			w.maxAttempts = n
 		}
 	}
-}
-
-// WithoutListen disables the LISTEN/NOTIFY low-latency wake-up
-// path. The worker falls back to pure polling at WithInterval
-// cadence — useful when:
-//   - The pool MaxConns is so tight (1) that reserving a slot for
-//     listen would starve foreground queries.
-//   - The deployment uses a connection pooler that doesn't forward
-//     NOTIFY (PgBouncer transaction mode, etc.).
-//   - Operators want to keep startup constraints minimal.
-//
-// Default-on: WithListenEnabled by default because pg_notify cost
-// is negligible and the latency win (~5s → ~50ms) is substantial.
-func WithoutListen() WorkerOption {
-	return func(w *Worker) { w.skipListen = true }
 }
 
 // WithRetention enables periodic GC of published rows older than
@@ -213,7 +198,6 @@ func WithLogger(l *slog.Logger) WorkerOption {
 //   - outbox_publish_duration_seconds                                     (histogram)
 //   - outbox_pending_count                                                (gauge)
 //   - outbox_gc_deleted_total                                             (counter)
-//   - outbox_listen_wakes_total                                           (counter)
 //
 // Without this option no collectors are created (zero Prometheus
 // footprint). Wire the unified service registry via
@@ -233,7 +217,6 @@ type Worker struct {
 	maxAttempts int
 	backoffBase time.Duration
 	backoffMax  time.Duration
-	skipListen  bool
 	retention   time.Duration
 	gcInterval  time.Duration
 	logger      *slog.Logger
@@ -244,12 +227,11 @@ type Worker struct {
 	eventTypeMaxAttempts map[string]int
 	eventTypeBackoff     map[string]BackoffSpec
 
-	startOnce  sync.Once
-	stopOnce   sync.Once
-	cancel     context.CancelFunc
-	done       chan struct{}
-	listenExit chan struct{}
-	gcExit     chan struct{}
+	startOnce sync.Once
+	stopOnce  sync.Once
+	cancel    context.CancelFunc
+	done      chan struct{}
+	gcExit    chan struct{}
 }
 
 // maxAttemptsFor returns the effective maxAttempts for the event
@@ -275,7 +257,7 @@ func (w *Worker) backoffSpecFor(eventType string) (time.Duration, time.Duration)
 }
 
 const (
-	defaultInterval    = 5 * time.Second
+	defaultInterval    = 500 * time.Millisecond
 	defaultBatchSize   = 100
 	defaultBackoffBase = time.Second
 	defaultBackoffMax  = time.Hour
@@ -312,10 +294,11 @@ func NewWorker(d *db.DB, fn PublishFn, opts ...WorkerOption) (*Worker, error) {
 	return w, nil
 }
 
-// Start kicks off the polling + listen goroutines. Idempotent —
-// second call returns *errs.Error{Code: CodeWorkerStarted} without
-// spawning new goroutines. The supplied ctx anchors the goroutine
-// lifetimes — they exit when ctx is cancelled OR Stop is called.
+// Start kicks off the polling goroutine (plus the retention sweeper
+// when [WithRetention] is set). Idempotent — second call returns
+// *errs.Error{Code: CodeWorkerStarted} without spawning new
+// goroutines. The supplied ctx anchors the goroutine lifetimes —
+// they exit when ctx is cancelled OR Stop is called.
 //
 // Start fires the first fetch immediately so events Enqueued just
 // before Start land without waiting for the first tick.
@@ -328,16 +311,11 @@ func (w *Worker) Start(ctx context.Context) error {
 		started = true
 		loopCtx, cancel := context.WithCancel(ctx)
 		w.cancel = cancel
-		wake := make(chan struct{}, 1)
-		if !w.skipListen {
-			w.listenExit = make(chan struct{})
-			go w.listenLoop(loopCtx, wake)
-		}
 		if w.retention > 0 {
 			w.gcExit = make(chan struct{})
 			go w.gcLoop(loopCtx)
 		}
-		go w.loop(loopCtx, wake)
+		go w.loop(loopCtx)
 	})
 	if !started {
 		return errs.Validation(CodeWorkerStarted, "outbox: worker already started")
@@ -345,10 +323,10 @@ func (w *Worker) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop cancels the polling + listen goroutines and waits for both
-// to exit. Idempotent + nil-safe. Returns nil — the Worker's loop
-// swallows errors per-tick (logged when WithLogger is set); a
-// clean shutdown has no error to surface.
+// Stop cancels the polling goroutine and waits for it to exit.
+// Idempotent + nil-safe. Returns nil — the Worker's loop swallows
+// errors per-tick (logged when WithLogger is set); a clean shutdown
+// has no error to surface.
 func (w *Worker) Stop() error {
 	if w == nil {
 		return nil
@@ -358,9 +336,6 @@ func (w *Worker) Stop() error {
 			w.cancel()
 		}
 		<-w.done
-		if w.listenExit != nil {
-			<-w.listenExit
-		}
 		if w.gcExit != nil {
 			<-w.gcExit
 		}
@@ -369,14 +344,9 @@ func (w *Worker) Stop() error {
 }
 
 // loop is the drain loop. Wakes up on:
-//   - ticker (polling fallback / dead-letter recheck cadence).
-//   - wake channel signal (LISTEN/NOTIFY fast path).
+//   - ticker at WithInterval cadence.
 //   - ctx done (Stop).
-//
-// Multiple wake signals coalesce into one drain pass because the
-// wake channel is size-1 and non-blocking on sender side — the
-// listen goroutine drops sends when one is already pending.
-func (w *Worker) loop(ctx context.Context, wake <-chan struct{}) {
+func (w *Worker) loop(ctx context.Context) {
 	defer close(w.done)
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
@@ -386,8 +356,6 @@ func (w *Worker) loop(ctx context.Context, wake <-chan struct{}) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			w.tick(ctx)
-		case <-wake:
 			w.tick(ctx)
 		}
 	}

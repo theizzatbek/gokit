@@ -71,23 +71,6 @@ This is the bootstrap entry; prior history lives in `git log`.
     CREATE UNIQUE INDEX idx_jobs_dedup_queued.
   - New stable codes: `jobs_not_found`, `jobs_op_failed`,
     `jobs_stats_failed`.
-- `db/notify/` — two additions. Existing NewNotifier signature
-  preserved; WithMetrics is purely additive.
-  - `Publish[T](ctx, q, channel, payload)` JSON-marshals payload
-    and emits one pg_notify. Symmetric to Notifier on the
-    publisher side. `PublishRaw(ctx, q, channel, payload)` is the
-    string-payload companion (wake-up signals where the
-    subscriber re-queries source-of-truth — outbox uses this).
-    Channel name validation reuses the existing safeIdent
-    (matches Notifier's LISTEN check). Errors:
-    `notify_invalid_channel`, `notify_encode_failed`,
-    `notify_publish_failed`.
-  - `WithMetrics(reg)` registers `notify_notifications_total
-    {channel, outcome=ok|handler_error}` counter,
-    `notify_reconnects_total` counter, and
-    `notify_handler_duration_seconds{channel}` histogram. A
-    steady reconnect-counter stream signals network instability
-    to Postgres; isolated bumps are routine.
 - `db/outbox/` — operator-helpers + observability + per-event-type
   policy. All additions are pure-add, no changes to existing
   Worker / Enqueue / Checker semantics.
