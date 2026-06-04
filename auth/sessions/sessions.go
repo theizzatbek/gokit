@@ -58,6 +58,45 @@ type SessionStore interface {
 	DeleteForSubject(ctx context.Context, subject string) error
 }
 
+// StoreStats is the rollup returned by [Lister.Stats]. Buckets are
+// disjoint:
+//
+//	Active  = ExpiresAt > now
+//	Expired = ExpiresAt <= now
+//	Total   = Active + Expired
+//
+// Implementations whose backend auto-expires entries (e.g. Redis
+// EXPIREAT) report Expired = 0 always — the expired records are
+// invisible to the store.
+type StoreStats struct {
+	Active  int
+	Expired int
+	Total   int
+}
+
+// Lister is the optional admin-side surface a SessionStore MAY
+// implement. The Manager type-asserts on it lazily, so a store that
+// can't enumerate (e.g. cookie-only signed sessions) keeps working
+// transparently — only [Manager.LogoutEverywhere] downgrades from
+// reporting an exact count to -1.
+//
+// Both the kit's MemoryStore and the sessionsredis.Store implement
+// Lister. Use it from admin endpoints to render "active sessions for
+// user X" panes / "force-revoke this specific session" buttons.
+type Lister interface {
+	// ListBySubject returns every session bound to the subject. Both
+	// active and expired rows surface; the caller filters via the
+	// returned Session.ExpiresAt against time.Now() (the kit favours
+	// returning the full picture over hiding state).
+	//
+	// Empty subject returns an empty slice without backend access.
+	ListBySubject(ctx context.Context, subject string) ([]Session, error)
+
+	// Stats returns the disjoint Active/Expired counts. Use for
+	// /admin or /metrics-pull endpoints.
+	Stats(ctx context.Context) (StoreStats, error)
+}
+
 // Config tunes a [Manager].
 type Config struct {
 	// Store is the persistence backend. Required.

@@ -17,9 +17,14 @@ import (
 // cfg.Store is required (typically auth/sessionsredis.NewStore).
 // Pass cfg.InsecureCookie=true ONLY for local dev over HTTP.
 //
+// Trailing options forward to sessions.NewManager — wire
+// [sessions.WithMetrics] / [sessions.WithLogger] / OnIssue / OnLogout
+// / OnLogoutEverywhere / OnExpire hooks here. The zero-option call
+// site `a.Sessions(cfg)` stays back-compat.
+//
 // Errors come from sessions.NewManager: *errs.Error{Code:
 // CodeInvalidConfig} for missing Store / TTL.
-func (a *Auth[C]) Sessions(cfg sessions.Config) (*sessions.Manager[C], error) {
+func (a *Auth[C]) Sessions(cfg sessions.Config, opts ...sessions.ManagerOption) (*sessions.Manager[C], error) {
 	return sessions.NewManager[C](cfg,
 		func(c *fiber.Ctx, subject string, scopes, roles []string, claims C, expires time.Time) {
 			p := &Principal[C]{
@@ -30,5 +35,5 @@ func (a *Auth[C]) Sessions(cfg sessions.Config) (*sessions.Manager[C], error) {
 				Expires: expires,
 			}
 			c.Locals(principalKey{}, p)
-		})
+		}, opts...)
 }
