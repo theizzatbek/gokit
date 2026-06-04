@@ -25,13 +25,14 @@ type poolStat struct {
 // during Connect; no locking because there are no concurrent attaches and
 // the map is sealed before the first scrape.
 type metricsCollector struct {
-	pools     map[string]*pgxpool.Pool
-	poolSize  *prometheus.GaugeVec
-	duration  *prometheus.HistogramVec
-	txTotal   *prometheus.CounterVec   // kind=tx|savepoint, outcome=commit|rollback|panic
-	txLatency *prometheus.HistogramVec // kind, outcome
-	slowQuery prometheus.Counter
-	txRetries prometheus.Counter
+	pools      map[string]*pgxpool.Pool
+	poolSize   *prometheus.GaugeVec
+	duration   *prometheus.HistogramVec
+	txTotal    *prometheus.CounterVec   // kind=tx|savepoint, outcome=commit|rollback|panic
+	txLatency  *prometheus.HistogramVec // kind, outcome
+	slowQuery  prometheus.Counter
+	txRetries  prometheus.Counter
+	replicaLag *prometheus.GaugeVec // pool="standby[-N]"
 }
 
 func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
@@ -63,6 +64,10 @@ func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
 			Name: "db_tx_retries_total",
 			Help: "Number of TxRetry retry attempts (the first attempt is not counted). Terminal outcomes still flow through db_tx_total{kind=tx,outcome=…}; this counter measures contention pressure.",
 		}),
+		replicaLag: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "db_replica_lag_seconds",
+			Help: "Per-replica replication lag in seconds (from `now() - pg_last_xact_replay_timestamp()`); -1 when the most recent probe failed.",
+		}, []string{"pool"}),
 	}
 	reg.MustRegister(mc)
 	return mc
@@ -76,6 +81,7 @@ func (m *metricsCollector) Describe(ch chan<- *prometheus.Desc) {
 	m.txLatency.Describe(ch)
 	m.slowQuery.Describe(ch)
 	m.txRetries.Describe(ch)
+	m.replicaLag.Describe(ch)
 }
 
 // Collect implements prometheus.Collector. Refreshes pool gauges from the
@@ -88,6 +94,18 @@ func (m *metricsCollector) Collect(ch chan<- prometheus.Metric) {
 	m.txLatency.Collect(ch)
 	m.slowQuery.Collect(ch)
 	m.txRetries.Collect(ch)
+	m.replicaLag.Collect(ch)
+}
+
+// setReplicaLag updates the per-pool replica-lag gauge. No-op on nil
+// receiver so the polling goroutine doesn't have to branch on "metrics
+// enabled?" — it always calls through and the gauge fires only when
+// the collector was actually built.
+func (m *metricsCollector) setReplicaLag(name string, seconds float64) {
+	if m == nil {
+		return
+	}
+	m.replicaLag.WithLabelValues(name).Set(seconds)
 }
 
 func (m *metricsCollector) attach(name string, p *pgxpool.Pool) {

@@ -35,7 +35,31 @@ type Config struct {
 	// route to it; everything else uses the primary pool. Requires
 	// PostgreSQL 14+. Default false; ReadQuery falls back to the primary
 	// pool in that case.
+	//
+	// Ignored when ReadURLs is non-empty — ReadURLs is the more explicit
+	// multi-replica path and takes precedence.
 	HasReadReplica bool `env:"HAS_READ_REPLICA"`
+
+	// ReadURLs is the list of dedicated read-replica connection strings.
+	// When set, the kit opens one pgxpool per URL; ReadQuery / ReadQueryRow
+	// round-robin (or pick at random, see ReadStrategy) across the
+	// healthy entries.
+	//
+	// Each URL may carry its own credentials, host, or sslmode — useful
+	// for geo-distributed replicas, dedicated reporting replicas, or
+	// per-replica role separation. URLs with NO target_session_attrs
+	// query parameter get "standby" appended automatically; pass the
+	// parameter explicitly to override (e.g. analytics replicas using
+	// target_session_attrs=any).
+	//
+	// Env: DB_READ_URLS=postgres://a,postgres://b,postgres://c (comma-
+	// separated; empty entries are dropped).
+	ReadURLs []string `env:"READ_URLS" envSeparator:","`
+
+	// ReadStrategy picks the routing policy across configured ReadURLs.
+	// "round_robin" (default) cycles atomically; "random" picks uniformly.
+	// Ignored when at most one read pool is configured.
+	ReadStrategy string `env:"READ_STRATEGY" envDefault:"round_robin"`
 
 	Host     string `env:"HOST"          envDefault:"localhost"`
 	Port     int    `env:"PORT"          envDefault:"5432"`

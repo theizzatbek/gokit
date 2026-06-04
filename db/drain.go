@@ -32,11 +32,13 @@ func (d *DB) Drain(ctx context.Context) error {
 	if d == nil || d.pool == nil {
 		return nil
 	}
-	// Read-replica pool drains alongside the primary so a long-
+	// Read-replica pools drain alongside the primary so a long-
 	// running replica query doesn't survive the primary teardown.
 	pools := []*pgxpool.Pool{d.pool}
-	if d.readPool != nil {
-		pools = append(pools, d.readPool)
+	for _, e := range d.readPools {
+		if e.pool != nil {
+			pools = append(pools, e.pool)
+		}
 	}
 
 	ticker := time.NewTicker(100 * time.Millisecond)

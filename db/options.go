@@ -26,6 +26,13 @@ type options struct {
 	extraTracers     []pgx.QueryTracer
 	statementTimeout time.Duration
 	connInit         []ConnInitFn
+	lagPoll          lagPollConfig
+}
+
+// lagPollConfig captures the WithReplicaLagPolling settings.
+type lagPollConfig struct {
+	interval  time.Duration
+	threshold time.Duration
 }
 
 // WithLogger wires a slog.Logger into the pgx QueryTracer. Without this
@@ -105,6 +112,33 @@ func WithConnInit(fn ConnInitFn) Option {
 		if fn != nil {
 			o.connInit = append(o.connInit, fn)
 		}
+	}
+}
+
+// WithReplicaLagPolling spawns a background goroutine that polls every
+// configured read-replica's replication lag at `interval` and updates
+// the `db_replica_lag_seconds{pool}` gauge (requires [WithMetrics] for
+// the gauge to be registered — without it the polling still runs and
+// emits WARN logs, just no Prometheus surface).
+//
+// When `threshold > 0`, a per-replica lag above threshold emits a
+// structured WARN via [WithLogger] (silent without a logger). Set
+// threshold = 0 to disable the warning entirely while still feeding the
+// gauge.
+//
+// `interval ≤ 0` disables the goroutine (the kit also disables it when
+// no read-replica is configured — option is a no-op in that case). The
+// goroutine exits on [DB.Close].
+//
+// Lag is read via `SELECT EXTRACT(EPOCH FROM (now() -
+// pg_last_xact_replay_timestamp()))::float8` per replica. Primary
+// nodes (e.g. when an operator points DB_READ_URLS at a writable
+// instance) return NULL → kit reports lag=0 + Healthy=true so the
+// gauge doesn't appear as "infinite lag".
+func WithReplicaLagPolling(interval, threshold time.Duration) Option {
+	return func(o *options) {
+		o.lagPoll.interval = interval
+		o.lagPoll.threshold = threshold
 	}
 }
 

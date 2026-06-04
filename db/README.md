@@ -55,6 +55,8 @@ func main() {
 | `SSLMode` | `DB_SSLMODE` | `disable` | `require`/`verify-full`/и т.д.; игнорируется если `URL` установлен |
 | `AppName` | `DB_APP_NAME` | "" | показывается в `pg_stat_activity`; авто-устанавливается из `Service.NodeName` под `service.New`. См. [Application name в `pg_stat_activity`](#application-name-в-pg_stat_activity). |
 | `HasReadReplica` | `DB_HAS_READ_REPLICA` | `false` | открывает второй пул против standby. См. [Read replicas](#read-replicas). |
+| `ReadURLs` | `DB_READ_URLS` (comma-separated) | пусто | список отдельных read-replica URL'ов. Перекрывает `HasReadReplica`. См. [Multi-replica routing](#multi-replica-routing). |
+| `ReadStrategy` | `DB_READ_STRATEGY` | `round_robin` | `round_robin` или `random` — стратегия выбора replica при нескольких ReadURLs. |
 | `MaxConns` | `DB_MAX_CONNS` | 10 | |
 | `MinConns` | `DB_MIN_CONNS` | 0 | |
 | `MaxConnLifetime` | `DB_MAX_LIFETIME` | 1h | |
@@ -112,6 +114,7 @@ Note: `AppName` и `ConnectTimeout` всё равно мерджатся в URL 
 | `WithSlowQueryThreshold(d)` | 0 (off) | Запросы, превышающие `d`, логируются на WARN с полным SQL + duration |
 | `WithMetrics(prometheus.Registerer)` | нет метрик | Регистрирует `db_query_duration_seconds{outcome}` (histogram), `db_pool_size_total{pool,state}` (gauge), `db_tx_total{kind,outcome}` (counter), `db_tx_duration_seconds{kind,outcome}` (histogram), `db_slow_query_total` (counter; populated только когда `WithSlowQueryThreshold > 0`). `pool=primary\|standby` различает read-replica gauge'ы; `kind=tx\|savepoint` и `outcome=commit\|rollback\|panic` покрывают top-level vs nested. |
 | `WithTracer(pgx.QueryTracer)` | none | Подключает external pgx-tracer рядом с внутренним logger/metrics tracer'ом кита. Кит композирует несколько tracer'ов через внутренний multi-tracer, так что логгер и внешний (например, `otelkit.NewPgxTracer()`) сосуществуют. `service.WithOtel` авто-подключает OTel pgx-tracer, когда DB также сконфигурирована; обращайтесь к `WithTracer` напрямую, только когда подключаете не-OTel tracing backend. |
+| `WithReplicaLagPolling(interval, threshold)` | off | Spawn'ит фоновую goroutine, которая polls `pg_last_xact_replay_timestamp()` каждого read-replica каждые `interval`. Обновляет gauge `db_replica_lag_seconds{pool}` (когда `WithMetrics` тоже включён); при `threshold > 0` логирует WARN через `WithLogger`, когда lag превышает порог. Останавливается на `Close()`. |
 
 ## Common patterns
 
@@ -283,6 +286,87 @@ rows, err := db.ReadQuery(ctx, `SELECT * FROM links WHERE user_id = $1`, userID)
 **Поведение при master-failover'е:** pgx переподключает primary-пул к тому хосту в вашем multi-host URL, который теперь репортит себя как read-write. Restart сервиса или env-изменение не нужны. Read-пул продолжает таргетить standby'и.
 
 **Поведение, когда standby-пул не может подключиться на boot'е:** кит фейлится loud — `db.Connect` возвращает `*errs.Error{Kind:KindUnavailable, Code:"db_unavailable"}` и закрывает primary-пул перед возвратом. Установите `HasReadReplica=false`, чтобы отказаться.
+
+## Multi-replica routing
+
+Для развёртываний с несколькими отдельными standby-endpoint'ами (геораспределённые replica, dedicated reporting replica, per-replica role separation) установите `Config.ReadURLs` — массив отдельных connection-строк, каждая со своими credentials/host/sslmode:
+
+```bash
+DB_READ_URLS=postgres://app:p@rep1.az-a:5432/appdb,postgres://app:p@rep2.az-b:5432/appdb,postgres://reports:p@rep-reports:5432/appdb?target_session_attrs=any
+```
+
+Кит откроет по pgxpool на каждый URL. URL без `target_session_attrs` авто-получит `standby` (PG 14+); передайте параметр явно (`target_session_attrs=any`), чтобы override'нуть для analytics-replica, которая может быть promoted в primary.
+
+`ReadURLs` перекрывает `HasReadReplica` — если оба заданы, `HasReadReplica` игнорируется.
+
+### Стратегия выбора
+
+```bash
+DB_READ_STRATEGY=round_robin   # default — atomic counter, без блокировок
+DB_READ_STRATEGY=random        # uniform, math/rand/v2
+```
+
+`ReadQuery` / `ReadQueryRow` диспатчит запросы по этой стратегии. Кит **не** делает health-aware skipping mid-flight — для observability используйте `WithReplicaLagPolling` + Prometheus alert; для удаления больного replica перевыкатите с обновлённым `DB_READ_URLS`.
+
+### Read-your-writes (force primary)
+
+После write-транзакции subsequent read может race'ить с replica-лагом. Заверните ctx в `db.ReadFromPrimary` чтобы насильно отрутить запрос на primary:
+
+```go
+err := svc.DB.Tx(ctx, func(tx *db.Tx) error {
+    _, err := tx.Exec(ctx, `INSERT INTO orders ... RETURNING id`, ...)
+    return err
+})
+if err != nil { return err }
+
+// На no-replica deployment'е ReadFromPrimary — deterministic no-op
+// (ReadQuery всё равно fall back'ится на primary).
+row := svc.DB.ReadQueryRow(db.ReadFromPrimary(ctx),
+    `SELECT total FROM orders_summary WHERE order_id = $1`, id)
+```
+
+### API-поверхность
+
+| Метод | Заметки |
+|---|---|
+| `(d) ReadPool() *pgxpool.Pool` | Первый read-pool для back-compat. `nil` когда replica нет. |
+| `(d) ReadPools() []ReadPoolInfo` | Все read-pool'ы с их именами (`standby` или `standby-N`). |
+| `(d) HasReadReplica() bool` | True если хотя бы один replica настроен. |
+
+## Replication observability
+
+`(d) ReplicationLag(ctx) []ReplicaLagInfo` — snapshot текущего replication-лага каждого replica:
+
+```go
+infos := svc.DB.ReplicationLag(ctx)
+for _, info := range infos {
+    if !info.Healthy {
+        logger.Warn("replica down", "pool", info.PoolName, "err", info.Err)
+        continue
+    }
+    fmt.Printf("%s: %.2fs behind\n", info.PoolName, info.LagSeconds)
+}
+```
+
+- Запрашивает `EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))` на каждом read-pool'е.
+- Primary node (когда оператор по ошибке указал DB_READ_URLS на writable instance) возвращает NULL → кит репортит `LagSeconds=0, Healthy=true`.
+- Empty slice (не error) когда replica не настроен.
+
+### Continuous monitoring
+
+```go
+d, _ := db.Connect(ctx, cfg,
+    db.WithLogger(logger),
+    db.WithMetrics(promReg),
+    db.WithReplicaLagPolling(10*time.Second, 30*time.Second),
+)
+```
+
+- Фоновая goroutine polls каждый replica каждые `interval` (первый sample immediately).
+- Метрика `db_replica_lag_seconds{pool}` обновляется per-tick (`-1` когда probe failed).
+- При `threshold > 0` — WARN-log через `WithLogger`, когда lag превышает порог.
+- Goroutine завершается на `Close()` (включая `Drain` через `service.OnShutdown`).
+- No-op когда не настроен replica либо `interval ≤ 0`.
 
 ## Error-модель
 
