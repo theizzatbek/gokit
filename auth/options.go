@@ -52,6 +52,8 @@ func WithSecurityLogger(l *slog.Logger) Option { return func(o *options) { o.sec
 //   - auth_logout_total{scope}                  single | all
 //   - auth_ratelimit_denied_total
 //   - auth_idempotency_total{outcome}           hit | miss | skip
+//   - auth_apikey_authentications_total{outcome} success | missing | invalid | expired | revoked | error
+//   - auth_apikey_lookup_duration_seconds       histogram, KeyStore.Lookup wall-clock
 //
 // Pass the same Registerer you give to db/httpc/nats so a single
 // /metrics scrape covers the whole kit. Without this option auth runs

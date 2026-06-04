@@ -37,6 +37,22 @@ id, _ := store.Insert(ctx, apikeypg.InsertParams{
 | `Insert(ctx, InsertParams) (id, error)` | id новой строки | Возвращает `*errs.Error{KindAlreadyExists}` на коллизии key-hash. |
 | `RevokeByID(ctx, id) error` | nil при успехе | Ставит `revoked_at = NOW()`. Идемпотентен против повторного revoke (возвращает `NotFound`). |
 
+### Admin / operator API
+
+| Метод | Возвращает | Заметки |
+|---|---|---|
+| `Get(ctx, id) (*KeyInfo, error)` | full record projection | `NotFound` на miss. Без `key_hash` — секрет никогда не покидает store. |
+| `ListBySubject(ctx, subject) ([]KeyInfo, error)` | все ключи subject | Сортировка `created_at DESC`; включает active / expired / revoked (фильтрация — на caller'е). Пустой subject → `[]`. |
+| `RevokeBySubject(ctx, subject) (int, error)` | число revoked строк | Bulk-revoke для инцидент-респонса / offboarding'а. Идемпотентен — повторный вызов вернёт 0. |
+| `Stats(ctx) (StoreStats, error)` | `{Active, Expired, Revoked, Total}` | Disjoint buckets (revoke wins над expiry). Один round trip. |
+| `DeleteExpired(ctx, before time.Time) (int, error)` | число удалённых | GC: `revoked_at < before` OR `(revoked_at IS NULL AND expires_at < before)`. Active рядам ничего не угрожает. Типичный план: nightly cron с `before = NOW() - 90 days`. |
+| `Rotate(ctx, id, newHash, newPrefix) error` | nil при успехе | Атомарный swap `key_hash + key_prefix` на активной строке; id / subject / scopes / role / created_at сохраняются. `NotFound` если ключ revoked / не существует. `KindValidation` на пустой hash. |
+| `UpdateScopes(ctx, id, scopes) error` | nil при успехе | Замена scopes без ротации хеша — caller'ов plain key продолжает работать. `nil` → `'{}'`. `NotFound` на revoked / отсутствующих ключах. |
+
+### Prefix (display-only)
+
+`InsertParams.Prefix` хранит короткий «head» plain key (например, `"ak_abcd"`), который admin UI рендерит вместо полного ключа. **Никогда** не сохраняйте достаточно символов для брутфорса остатка — кит рекомендует 6–12 chars. Колонка `key_prefix text NOT NULL DEFAULT ''` обратно совместима со старыми строками (`ALTER TABLE ... IF NOT EXISTS` идёт сразу за `CREATE TABLE`).
+
 ## Схема
 
 Колонки `auth_api_keys`:
@@ -63,10 +79,15 @@ id, _ := store.Insert(ctx, apikeypg.InsertParams{
 
 | Code | Где | Смысл |
 |---|---|---|
-| `api_key_invalid` | `Lookup`, `RevokeByID` | Нет совпадающей строки (NotFound). Auth-middleware маппит в 401. |
+| `api_key_invalid` | `Lookup`, `RevokeByID`, `Get`, `Rotate`, `UpdateScopes` | Нет совпадающей строки (NotFound). Auth-middleware маппит в 401. |
 | `apikeypg_insert_failed` | `Insert` | Non-conflict INSERT failure. |
-| `apikeypg_lookup_failed` | `Lookup` | Non-NotFound SELECT failure (network / server down). |
-| `apikeypg_revoke_failed` | `RevokeByID` | UPDATE failed по причине, отличной от NotFound. |
+| `apikeypg_lookup_failed` | `Lookup`, `Get` | Non-NotFound SELECT failure (network / server down). |
+| `apikeypg_revoke_failed` | `RevokeByID`, `RevokeBySubject` | UPDATE failed по причине, отличной от NotFound. |
+| `apikeypg_list_failed` | `ListBySubject` | SELECT failure при iteration / row scan. |
+| `apikeypg_stats_failed` | `Stats` | Aggregate SELECT failure. |
+| `apikeypg_delete_failed` | `DeleteExpired` | DELETE failure. |
+| `apikeypg_rotate_failed` | `Rotate` | UPDATE failure либо валидация empty hash (`KindValidation`). |
+| `apikeypg_update_failed` | `UpdateScopes` | UPDATE failure. |
 
 ## Тестирование
 

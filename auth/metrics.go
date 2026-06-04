@@ -19,6 +19,8 @@ type authMetrics struct {
 	logout          *prometheus.CounterVec // scope=single|all
 	rateLimitDenied prometheus.Counter
 	idempotency     *prometheus.CounterVec // outcome=hit|miss|skip
+	apikeyAuths     *prometheus.CounterVec // outcome=success|missing|invalid|expired|revoked|error
+	apikeyLookup    prometheus.Histogram
 }
 
 // newAuthMetrics constructs and registers all auth collectors on reg.
@@ -63,6 +65,17 @@ func newAuthMetrics(reg prometheus.Registerer) *authMetrics {
 			Name:      "idempotency_total",
 			Help:      "Idempotency middleware events. hit=cached replay; miss=first execution stored; skip=request had no Idempotency-Key or was a safe method.",
 		}, []string{"outcome"}),
+		apikeyAuths: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "auth",
+			Name:      "apikey_authentications_total",
+			Help:      "API-key middleware outcomes. success=principal populated; missing/invalid/expired/revoked are reject paths; error=KeyStore returned non-NotFound (treated as 5xx upstream).",
+		}, []string{"outcome"}),
+		apikeyLookup: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "auth",
+			Name:      "apikey_lookup_duration_seconds",
+			Help:      "Wall-clock duration of KeyStore.Lookup calls under the APIKey middleware. Covers hit + miss + error paths.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 12),
+		}),
 	}
 	reg.MustRegister(
 		m.tokensIssued,
@@ -72,6 +85,8 @@ func newAuthMetrics(reg prometheus.Registerer) *authMetrics {
 		m.logout,
 		m.rateLimitDenied,
 		m.idempotency,
+		m.apikeyAuths,
+		m.apikeyLookup,
 	)
 	return m
 }
@@ -123,4 +138,18 @@ func (m *authMetrics) incIdempotency(outcome string) {
 		return
 	}
 	m.idempotency.WithLabelValues(outcome).Inc()
+}
+
+func (m *authMetrics) incAPIKeyAuth(outcome string) {
+	if m == nil {
+		return
+	}
+	m.apikeyAuths.WithLabelValues(outcome).Inc()
+}
+
+func (m *authMetrics) observeAPIKeyLookup(seconds float64) {
+	if m == nil {
+		return
+	}
+	m.apikeyLookup.Observe(seconds)
 }

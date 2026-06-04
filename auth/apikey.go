@@ -110,11 +110,33 @@ type KeyUsageTracker interface {
 // APIKeyOption tunes [Auth.APIKey].
 type APIKeyOption func(*apiKeyConfig)
 
+// APIKeyAuthSuccessHook fires after a successful API-key authentication,
+// AFTER the Principal is stashed in Locals but BEFORE the next handler
+// runs. Use for audit trails, Sentry user-scope wiring, request-id
+// tagging, etc.
+//
+// Panic-safe — a panicking hook is recovered + logged via the kit
+// logger (when [WithLogger] was wired); the request still proceeds
+// normally. Use the *fiber.Ctx for IP/path/headers; the flat
+// subject/jti/scopes/roles fields avoid leaking the generic Principal[C]
+// type through the option signature.
+type APIKeyAuthSuccessHook func(c *fiber.Ctx, subject, jti string, scopes, roles []string)
+
+// APIKeyAuthFailHook fires on every API-key reject path (missing /
+// invalid / expired / revoked / KeyStore error), BEFORE the 401 / 5xx
+// response leaves the wrapper. `code` is the stable [CodeAPIKey*]
+// constant so callers can switch on it without parsing log messages.
+//
+// Panic-safe — same convention as [APIKeyAuthSuccessHook].
+type APIKeyAuthFailHook func(c *fiber.Ctx, code string)
+
 type apiKeyConfig struct {
 	headerName  string
 	queryName   string
 	optional    bool
 	keyHashFunc func(key string, secret []byte) []byte
+	onSuccess   APIKeyAuthSuccessHook
+	onFail      APIKeyAuthFailHook
 }
 
 // WithAPIKeyHeader overrides the inbound header name. Default
@@ -141,6 +163,21 @@ func WithAPIKeyQuery(name string) APIKeyOption {
 // downgrade a forged key to anonymous.
 func WithAPIKeyOptional() APIKeyOption {
 	return func(c *apiKeyConfig) { c.optional = true }
+}
+
+// WithAPIKeyOnSuccess registers a callback fired after every successful
+// API-key authentication. See [APIKeyAuthSuccessHook] for semantics.
+// Multiple calls — last wins (the option list is reduced into a single
+// apiKeyConfig before middleware build).
+func WithAPIKeyOnSuccess(fn APIKeyAuthSuccessHook) APIKeyOption {
+	return func(c *apiKeyConfig) { c.onSuccess = fn }
+}
+
+// WithAPIKeyOnFail registers a callback fired on every API-key reject
+// path. See [APIKeyAuthFailHook] for semantics. Multiple calls — last
+// wins.
+func WithAPIKeyOnFail(fn APIKeyAuthFailHook) APIKeyOption {
+	return func(c *apiKeyConfig) { c.onFail = fn }
 }
 
 // APIKey returns a Fiber middleware that authenticates inbound
@@ -188,31 +225,57 @@ func (a *Auth[C]) APIKey(store KeyStore, opts ...APIKeyOption) fiber.Handler {
 			if cfg.optional {
 				return c.Next()
 			}
-			return apiKeyReject(c, xerrs.Unauthorized(CodeAPIKeyMissing,
-				"missing "+cfg.headerName+" header"))
+			err := xerrs.Unauthorized(CodeAPIKeyMissing,
+				"missing "+cfg.headerName+" header")
+			a.metrics.incAPIKeyAuth("missing")
+			a.maybeSecurityLog(c, "apikey_missing", err)
+			a.fireAPIKeyFail(c, CodeAPIKeyMissing, cfg.onFail)
+			return apiKeyReject(c, err)
 		}
 		hash := cfg.keyHashFunc(raw, secret)
+		start := time.Now()
 		rec, err := store.Lookup(c.UserContext(), hash)
+		a.metrics.observeAPIKeyLookup(time.Since(start).Seconds())
 		if err != nil {
 			// Suppress NotFound → 401 (same shape as missing key
 			// to deny existence side channels). Other errors flow
 			// through with their original Kind so 503 stays 503.
 			var e *xerrs.Error
 			if errors.As(err, &e) && e.Kind == xerrs.KindNotFound {
-				return apiKeyReject(c, xerrs.Unauthorized(CodeAPIKeyInvalid,
-					"API key not recognised"))
+				invalid := xerrs.Unauthorized(CodeAPIKeyInvalid,
+					"API key not recognised")
+				a.metrics.incAPIKeyAuth("invalid")
+				a.maybeSecurityLog(c, "apikey_invalid", invalid)
+				a.fireAPIKeyFail(c, CodeAPIKeyInvalid, cfg.onFail)
+				return apiKeyReject(c, invalid)
 			}
+			a.metrics.incAPIKeyAuth("error")
+			a.maybeSecurityLog(c, "apikey_lookup_error", err)
+			a.fireAPIKeyFail(c, "apikey_lookup_error", cfg.onFail)
 			return err
 		}
 		if !rec.RevokedAt.IsZero() {
-			return apiKeyReject(c, xerrs.Unauthorized(CodeAPIKeyRevoked,
-				"API key has been revoked"))
+			revoked := xerrs.Unauthorized(CodeAPIKeyRevoked,
+				"API key has been revoked")
+			a.metrics.incAPIKeyAuth("revoked")
+			a.maybeSecurityLog(c, "apikey_revoked", revoked)
+			a.fireAPIKeyFail(c, CodeAPIKeyRevoked, cfg.onFail)
+			return apiKeyReject(c, revoked)
 		}
 		if !rec.ExpiresAt.IsZero() && time.Now().After(rec.ExpiresAt) {
-			return apiKeyReject(c, xerrs.Unauthorized(CodeAPIKeyExpired,
-				"API key expired"))
+			expired := xerrs.Unauthorized(CodeAPIKeyExpired,
+				"API key expired")
+			a.metrics.incAPIKeyAuth("expired")
+			a.maybeSecurityLog(c, "apikey_expired", expired)
+			a.fireAPIKeyFail(c, CodeAPIKeyExpired, cfg.onFail)
+			return apiKeyReject(c, expired)
 		}
-		c.Locals(principalKey{}, recordToPrincipal[C](rec))
+		principal := recordToPrincipal[C](rec)
+		c.Locals(principalKey{}, principal)
+		a.metrics.incAPIKeyAuth("success")
+		a.maybeSecurityInfo(c, "apikey_auth_success",
+			"subject", principal.Subject, "jti", principal.JTI)
+		a.fireAPIKeySuccess(c, principal, cfg.onSuccess)
 		if tracker, ok := store.(KeyUsageTracker); ok && rec.ID != "" {
 			id := rec.ID
 			now := time.Now()
@@ -224,6 +287,38 @@ func (a *Auth[C]) APIKey(store KeyStore, opts ...APIKeyOption) fiber.Handler {
 		}
 		return c.Next()
 	}
+}
+
+// fireAPIKeySuccess invokes the success hook under a recover. The
+// recovered panic is logged via the kit logger when one is wired —
+// otherwise the panic is swallowed so a misbehaving hook can never
+// take down the request path.
+func (a *Auth[C]) fireAPIKeySuccess(c *fiber.Ctx, p *Principal[C], fn APIKeyAuthSuccessHook) {
+	if fn == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil && a.logger != nil {
+			a.logger.WarnContext(c.UserContext(), "auth.APIKey: OnSuccess panic recovered",
+				"panic", r, "subject", p.Subject)
+		}
+	}()
+	fn(c, p.Subject, p.JTI, p.Scopes, p.Roles)
+}
+
+// fireAPIKeyFail invokes the failure hook under a recover. Same
+// convention as [fireAPIKeySuccess].
+func (a *Auth[C]) fireAPIKeyFail(c *fiber.Ctx, code string, fn APIKeyAuthFailHook) {
+	if fn == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil && a.logger != nil {
+			a.logger.WarnContext(c.UserContext(), "auth.APIKey: OnFail panic recovered",
+				"panic", r, "code", code)
+		}
+	}()
+	fn(c, code)
 }
 
 // extractAPIKey reads the raw key from header or (when enabled)
