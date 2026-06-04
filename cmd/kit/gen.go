@@ -12,6 +12,7 @@ const usageGen = `kit gen — code / asset generators
 Usage:
   kit gen migration <name> [--dir migrations]
   kit gen k8s --name svc --image IMG [--namespace ns] [--out file]
+  kit gen db-cluster [--replicas N] [--out file]
 
 Generators are self-contained — no go.mod parsing, no AST rewrites.
 They emit text files (SQL templates, YAML manifests) the operator
@@ -31,6 +32,8 @@ func runGen(ctx context.Context, args []string) error {
 		return runGenMigration(ctx, args[1:])
 	case "k8s":
 		return runGenK8s(ctx, args[1:])
+	case "db-cluster":
+		return runGenDBCluster(ctx, args[1:])
 	case "-h", "--help", "help":
 		fmt.Fprint(os.Stderr, usageGen)
 		return nil
