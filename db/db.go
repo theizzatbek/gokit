@@ -30,9 +30,27 @@ type Querier interface {
 // (back-compat with the previous single-pool surface). For
 // Config.ReadURLs, entries are named "standby-1" / "standby-2" / … in
 // list order.
+//
+// The atomic state (lagMillis + healthy) is mutated by the lag-polling
+// goroutine and read on the hot path by [pickReadPool]. healthy starts
+// at 1 (the kit assumes a freshly-connected replica is good until
+// proven otherwise); lagMillis starts at 0.
 type readPoolEntry struct {
 	name string
 	pool *pgxpool.Pool
+
+	// lagMillis is the lag in milliseconds reported by the most
+	// recent [WithReplicaLagPolling] probe. Read on the hot path via
+	// atomic.LoadInt64 by pickReadPool when [WithReadLagBudget] is
+	// configured. -1 means "no recent probe available" (counts as
+	// healthy for routing — the kit favours optimism over surprising
+	// the caller).
+	lagMillis atomic.Int64
+
+	// healthy is 1 when the most recent probe succeeded, 0 when it
+	// failed. pickReadPool skips entries with healthy=0; the
+	// background poller revives them on the next successful probe.
+	healthy atomic.Bool
 }
 
 // readRoute names the routing policy across multiple read pools.
@@ -48,10 +66,10 @@ const (
 // Connect time, DB also holds one or more read-replica pools exposed via
 // ReadQuery / ReadQueryRow / ReadPool / ReadPools.
 type DB struct {
-	pool      *pgxpool.Pool   // primary (target_session_attrs=read-write)
-	readPools []readPoolEntry // dedicated standbys; nil when no replicas configured
-	route     readRoute       // routing strategy across readPools
-	nextRead  atomic.Uint64   // round-robin counter
+	pool      *pgxpool.Pool    // primary (target_session_attrs=read-write)
+	readPools []*readPoolEntry // dedicated standbys; nil when no replicas configured
+	route     readRoute        // routing strategy across readPools
+	nextRead  atomic.Uint64    // round-robin counter
 	opts      options
 
 	lagPoll struct {
@@ -66,6 +84,42 @@ type DB struct {
 // then call ReadFromPrimary(ctx) on the subsequent read so it does not
 // race against an out-of-date replica).
 type readPrefKey struct{}
+
+// queryNameCtxKey is the marker [WithQueryName] writes to ctx so the
+// kit's pgx tracer can read it back inside TraceQueryEnd and emit the
+// `name=` label on the duration histogram.
+type queryNameCtxKey struct{}
+
+// WithQueryName returns a derived context that tags every db query
+// issued under it with the supplied logical name. The kit's
+// `db_query_duration_seconds` histogram gains a `name` label set to
+// this value (and an empty `name=""` label for untagged queries).
+//
+// Cardinality safety: the value is consumed verbatim — DO NOT use
+// user-controlled input. Restrict names to a small fixed set per
+// service ("user_lookup", "list_orders", "outbox_drain", …) — the
+// kit makes no attempt to bound cardinality, and a runaway name set
+// will explode the metrics registry. Reach for [WithQueryName] only
+// when slice-and-dice analytics actually requires per-query
+// histograms; for the common case the unlabelled aggregate is fine.
+//
+// Nested WithQueryName calls — last write wins; the outer call's
+// name is overwritten for any query issued under the inner ctx.
+func WithQueryName(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, queryNameCtxKey{}, name)
+}
+
+// queryNameFrom reads the [WithQueryName] tag off ctx. Returns the
+// empty string when no tag is set — the kit emits that as the
+// label value, which Prometheus treats as a legitimate (if
+// uninformative) label value.
+func queryNameFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	v, _ := ctx.Value(queryNameCtxKey{}).(string)
+	return v
+}
 
 // ReadFromPrimary returns a derived context that overrides the read
 // router: subsequent ReadQuery / ReadQueryRow calls land on the primary
@@ -154,7 +208,7 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 				primary.Close()
 				return nil, perr
 			}
-			d.readPools = append(d.readPools, readPoolEntry{name: name, pool: rp})
+			d.readPools = append(d.readPools, newReadPoolEntry(name, rp))
 		}
 	case cfg.HasReadReplica:
 		readURL, err := buildPgxURL(cfg, "standby")
@@ -167,7 +221,7 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 			primary.Close()
 			return nil, err
 		}
-		d.readPools = append(d.readPools, readPoolEntry{name: "standby", pool: rp})
+		d.readPools = append(d.readPools, newReadPoolEntry("standby", rp))
 	}
 
 	// Spawn the lag-polling goroutine when both the option and at least
@@ -217,12 +271,23 @@ func normalizeReadURL(raw string) (string, error) {
 
 // closeReadPools is the rollback helper called when one read-pool fails
 // to connect after others have succeeded.
-func closeReadPools(entries []readPoolEntry) {
+func closeReadPools(entries []*readPoolEntry) {
 	for _, e := range entries {
-		if e.pool != nil {
+		if e != nil && e.pool != nil {
 			e.pool.Close()
 		}
 	}
+}
+
+// newReadPoolEntry constructs a read-pool entry with kit-default
+// initial atomic state (healthy=true, lagMillis=-1 meaning "no probe
+// yet"). Used by Connect to seed every entry before the lag-polling
+// goroutine has had a chance to write real values.
+func newReadPoolEntry(name string, p *pgxpool.Pool) *readPoolEntry {
+	e := &readPoolEntry{name: name, pool: p}
+	e.healthy.Store(true)
+	e.lagMillis.Store(-1)
+	return e
 }
 
 // connectPool opens one pool against raw, applies cfg knobs and the tracer
@@ -377,24 +442,83 @@ func (d *DB) ReadQueryRow(ctx context.Context, sql string, args ...any) pgx.Row 
 
 // pickReadPool implements the routing decision used by ReadQuery /
 // ReadQueryRow. Returns the primary pool when no replicas are
-// configured OR the ctx carries the [ReadFromPrimary] marker; otherwise
-// picks via [Config.ReadStrategy].
+// configured OR the ctx carries the [ReadFromPrimary] marker;
+// otherwise picks via [Config.ReadStrategy], skipping replicas marked
+// unhealthy or carrying lag above [WithReadLagBudget].
+//
+// When every replica is filtered out (all unhealthy, all over budget,
+// or both), the kit falls back to the primary rather than failing the
+// query — favouring availability over the "read-only intent" of the
+// caller. The skip event is counted in `db_replica_skipped_total`
+// when [WithMetrics] is wired so dashboards can spot the degradation.
 func (d *DB) pickReadPool(ctx context.Context) *pgxpool.Pool {
 	if readFromPrimaryRequested(ctx) || len(d.readPools) == 0 {
 		return d.pool
 	}
-	if len(d.readPools) == 1 {
-		return d.readPools[0].pool
+	eligible := d.eligibleReadPools()
+	if len(eligible) == 0 {
+		// Every replica is filtered out — fall back to primary.
+		d.opts.metrics.incReplicaFallback()
+		return d.pool
+	}
+	if len(eligible) == 1 {
+		return eligible[0].pool
 	}
 	switch d.route {
 	case routeRandom:
 		// rand.IntN is goroutine-safe (math/rand/v2 uses an internal
 		// per-thread PRNG); no synchronisation needed on the hot path.
-		return d.readPools[rand.IntN(len(d.readPools))].pool
+		return eligible[rand.IntN(len(eligible))].pool
 	default: // routeRoundRobin
 		n := d.nextRead.Add(1) - 1
-		return d.readPools[int(n%uint64(len(d.readPools)))].pool
+		return eligible[int(n%uint64(len(eligible)))].pool
 	}
+}
+
+// eligibleReadPools filters the read pools by health + lag budget. The
+// returned slice is a fresh view — never mutated by the caller; the
+// kit allocates it lazily only when filtering is necessary.
+//
+// Fast path: when neither WithReadLagBudget is configured AND every
+// pool is healthy, the function returns the underlying slice without
+// allocating.
+func (d *DB) eligibleReadPools() []*readPoolEntry {
+	budgetMS := int64(0)
+	if d.opts.readLagBudget > 0 {
+		budgetMS = d.opts.readLagBudget.Milliseconds()
+	}
+	allHealthy := true
+	if budgetMS == 0 {
+		// Only health matters; quick scan.
+		for _, e := range d.readPools {
+			if !e.healthy.Load() {
+				allHealthy = false
+				break
+			}
+		}
+		if allHealthy {
+			return d.readPools
+		}
+	}
+	out := make([]*readPoolEntry, 0, len(d.readPools))
+	for _, e := range d.readPools {
+		if !e.healthy.Load() {
+			d.opts.metrics.incReplicaSkipped(e.name, "unhealthy")
+			continue
+		}
+		if budgetMS > 0 {
+			lag := e.lagMillis.Load()
+			// lag == -1 means "no probe yet"; treat as healthy +
+			// within budget (kit favours optimism — a freshly-started
+			// replica is not necessarily over budget).
+			if lag >= 0 && lag > budgetMS {
+				d.opts.metrics.incReplicaSkipped(e.name, "over_budget")
+				continue
+			}
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // ReadPool returns the first read pool when one or more replicas are
@@ -415,16 +539,39 @@ func (d *DB) ReadPool() *pgxpool.Pool {
 func (d *DB) ReadPools() []ReadPoolInfo {
 	out := make([]ReadPoolInfo, 0, len(d.readPools))
 	for _, e := range d.readPools {
-		out = append(out, ReadPoolInfo{Name: e.name, Pool: e.pool})
+		out = append(out, ReadPoolInfo{
+			Name:       e.name,
+			Pool:       e.pool,
+			Healthy:    e.healthy.Load(),
+			LagSeconds: lagMillisToSeconds(e.lagMillis.Load()),
+		})
 	}
 	return out
 }
 
+// lagMillisToSeconds projects the atomic int64 lagMillis back into a
+// float seconds value for the public API. -1 → 0 (no probe yet); kit
+// treats "unknown lag" as 0 in the surface so callers don't need a
+// special case.
+func lagMillisToSeconds(ms int64) float64 {
+	if ms < 0 {
+		return 0
+	}
+	return float64(ms) / 1000.0
+}
+
 // ReadPoolInfo is the projection returned by [DB.ReadPools]. Name
 // matches the `pool=` label used in the kit's Prometheus collectors.
+//
+// Healthy and LagSeconds reflect the most recent
+// [WithReplicaLagPolling] probe. When polling is not wired, every
+// entry reports Healthy=true and LagSeconds=0 (kit-default initial
+// state).
 type ReadPoolInfo struct {
-	Name string
-	Pool *pgxpool.Pool
+	Name       string
+	Pool       *pgxpool.Pool
+	Healthy    bool
+	LagSeconds float64
 }
 
 // HasReadReplica reports whether at least one read-replica pool is

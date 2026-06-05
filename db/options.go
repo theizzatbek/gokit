@@ -27,6 +27,7 @@ type options struct {
 	statementTimeout time.Duration
 	connInit         []ConnInitFn
 	lagPoll          lagPollConfig
+	readLagBudget    time.Duration
 }
 
 // lagPollConfig captures the WithReplicaLagPolling settings.
@@ -140,6 +141,27 @@ func WithReplicaLagPolling(interval, threshold time.Duration) Option {
 		o.lagPoll.interval = interval
 		o.lagPoll.threshold = threshold
 	}
+}
+
+// WithReadLagBudget tightens the read-router: replicas whose tracked
+// replication lag exceeds `d` are skipped, and ReadQuery /
+// ReadQueryRow fall back to the primary when every replica is
+// over-budget. Has no effect without [WithReplicaLagPolling] (lag is
+// only tracked when a poller is running) — the option pair is the
+// production recipe for "tolerate sub-second lag but quarantine
+// a falling-behind replica".
+//
+// `d ≤ 0` disables the budget (all healthy replicas eligible —
+// matches the pre-budget behaviour). A freshly-started replica
+// reports lag = -1 ("no probe yet") and is treated as in-budget so
+// the kit doesn't surprise the caller by sending every query to the
+// primary during the first polling interval.
+//
+// Pairs with [WithMetrics] for visibility:
+//   - `db_replica_skipped_total{pool,reason=over_budget|unhealthy}`
+//   - `db_replica_fallback_total` (every replica filtered out → primary)
+func WithReadLagBudget(d time.Duration) Option {
+	return func(o *options) { o.readLagBudget = d }
 }
 
 // WithTracer attaches an external pgx.QueryTracer that runs alongside

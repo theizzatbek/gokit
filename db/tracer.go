@@ -21,10 +21,15 @@ type tracerCtxKey struct{}
 type tracerSpan struct {
 	start time.Time
 	sql   string
+	name  string
 }
 
 func (t *tracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	return context.WithValue(ctx, tracerCtxKey{}, &tracerSpan{start: time.Now(), sql: data.SQL})
+	return context.WithValue(ctx, tracerCtxKey{}, &tracerSpan{
+		start: time.Now(),
+		sql:   data.SQL,
+		name:  queryNameFrom(ctx),
+	})
 }
 
 func (t *tracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
@@ -35,7 +40,7 @@ func (t *tracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQ
 	elapsed := time.Since(span.start)
 
 	if t.metrics != nil {
-		t.metrics.observe(elapsed, data.Err)
+		t.metrics.observe(span.name, elapsed, data.Err)
 	}
 
 	slow := data.Err == nil && t.slowThreshold > 0 && elapsed > t.slowThreshold

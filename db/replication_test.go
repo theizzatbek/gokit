@@ -172,7 +172,7 @@ func TestPickReadPool_ReadFromPrimaryForcesPrimary(t *testing.T) {
 	rp := &pgxpool.Pool{}
 	d := &DB{
 		pool:      primary,
-		readPools: []readPoolEntry{{name: "standby-1", pool: rp}},
+		readPools: []*readPoolEntry{newReadPoolEntry("standby-1", rp)},
 	}
 	ctx := ReadFromPrimary(context.Background())
 	if got := d.pickReadPool(ctx); got != primary {
@@ -185,8 +185,10 @@ func TestPickReadPool_RoundRobin(t *testing.T) {
 	d := &DB{
 		pool:  &pgxpool.Pool{},
 		route: routeRoundRobin,
-		readPools: []readPoolEntry{
-			{name: "1", pool: a}, {name: "2", pool: b}, {name: "3", pool: c},
+		readPools: []*readPoolEntry{
+			newReadPoolEntry("1", a),
+			newReadPoolEntry("2", b),
+			newReadPoolEntry("3", c),
 		},
 	}
 	ctx := context.Background()
@@ -210,7 +212,7 @@ func TestPickReadPool_SingleReplicaSkipsRouting(t *testing.T) {
 	d := &DB{
 		pool:      &pgxpool.Pool{},
 		route:     routeRandom, // shouldn't fire rand.IntN with len 1
-		readPools: []readPoolEntry{{name: "only", pool: rp}},
+		readPools: []*readPoolEntry{newReadPoolEntry("only", rp)},
 	}
 	for i := 0; i < 10; i++ {
 		if got := d.pickReadPool(context.Background()); got != rp {
