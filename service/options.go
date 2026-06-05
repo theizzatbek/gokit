@@ -74,6 +74,7 @@ type options struct {
 	securityHeaderOpts         []fibermap.SecurityHeadersOption
 	bodyLimit                  int // WithBodyLimit — fiber.Config.BodyLimit override; 0 → fiber default (4 MiB)
 	dbOpts                     []db.Option
+	skipAutoDBMetrics          bool // WithoutAutoDBMetrics — suppress auto db.WithMetrics(s.metrics)
 	otelPgxOpts                []otelkit.PgxTracerOption
 	skipOtelPgxTracer          bool
 	outboxEnable               bool
@@ -551,13 +552,42 @@ func WithDBDrainTimeout(d time.Duration) Option {
 }
 
 // WithDBOptions appends to the db options applied by service.New.
-// `WithLogger` is already wired automatically; use this for
-// `db.WithMetrics`, `db.WithSlowQueryThreshold`, additional
-// `db.WithTracer` calls (e.g. plugging an audit tracer alongside
-// the OTel one auto-installed by [WithOtel]), or any future db
-// option the kit grows.
+// `db.WithLogger` and `db.WithMetrics` are already wired
+// automatically (the latter when [WithMetrics] is also configured —
+// see [WithoutAutoDBMetrics] for the opt-out). Use this for
+// `db.WithSlowQueryThreshold`, additional `db.WithTracer` calls
+// (e.g. plugging an audit tracer alongside the OTel one auto-
+// installed by [WithOtel]), `db.WithReadLagBudget`,
+// `db.WithReplicaLagPolling`, or any future db option the kit
+// grows.
+//
+// DO NOT pass `db.WithMetrics(reg)` here unless you ALSO pass
+// [WithoutAutoDBMetrics] — the kit's auto-wiring + this duplicate
+// registers the same collectors twice on the same registry and
+// `prometheus.MustRegister` panics. The convenient pattern for
+// unified scraping is to call only `service.WithMetrics(reg)` and
+// rely on the auto-wire.
 func WithDBOptions(opts ...db.Option) Option {
 	return func(o *options) { o.dbOpts = append(o.dbOpts, opts...) }
+}
+
+// WithoutAutoDBMetrics opts out of the kit-default auto-wiring of
+// `db.WithMetrics(s.metrics)`. Use when:
+//
+//   - The service wants its db metrics on a DIFFERENT registry than
+//     the one passed to [WithMetrics]. Pair this opt-out with
+//     `WithDBOptions(db.WithMetrics(otherReg))`.
+//   - The service explicitly does not want db_* series on /metrics
+//     (rare; the kit-default scrape is the canonical path).
+//
+// Without this opt the kit prepends `db.WithMetrics(s.metrics)` to
+// the dbOpts slice so db_query_duration_seconds + friends land on
+// the same registry as the rest of the kit. The op-out is a flag,
+// not a wrap — calling [WithDBOptions] separately to pass
+// `db.WithMetrics(s.metrics)` while ALSO not opting out PANICS at
+// Connect time via duplicate `prometheus.MustRegister`.
+func WithoutAutoDBMetrics() Option {
+	return func(o *options) { o.skipAutoDBMetrics = true }
 }
 
 // WithOtelPgxOptions configures the OTel pgx tracer that

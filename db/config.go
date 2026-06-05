@@ -89,6 +89,27 @@ type Config struct {
 	// ConnectBackoffMax caps the per-attempt wait. Default 0 (service
 	// injects 16s).
 	ConnectBackoffMax time.Duration `env:"CONNECT_BACKOFF_MAX"`
+
+	// LagBudget caps the acceptable replication lag on a read replica
+	// before the router skips it. Equivalent to wiring
+	// [WithReadLagBudget] programmatically — Config-derived value
+	// applies BEFORE any user-supplied option so explicit code wins.
+	//
+	// Only meaningful with at least one replica AND with LagPolling
+	// also configured (lag is only tracked when the poller runs).
+	// 0 = disabled (all healthy replicas eligible, default behaviour).
+	LagBudget time.Duration `env:"LAG_BUDGET"`
+
+	// LagPollInterval enables the background replication-lag poller.
+	// Equivalent to wiring [WithReplicaLagPolling] programmatically.
+	// 0 = disabled.
+	LagPollInterval time.Duration `env:"LAG_POLL_INTERVAL"`
+
+	// LagPollThreshold is the per-replica WARN threshold consumed by
+	// the lag-polling goroutine. Without it the gauge still updates
+	// but no log line is emitted. Only meaningful with
+	// LagPollInterval > 0.
+	LagPollThreshold time.Duration `env:"LAG_POLL_THRESHOLD"`
 }
 
 // buildPgxURL renders cfg as a libpq-style URL suitable for pgxpool.ParseConfig.
