@@ -456,6 +456,94 @@ err := svc.DB.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan
 
 Nested `WithQueryName` — last write wins; outer name перетирается для queries под inner ctx.
 
+## Connection pinning (`WithConn`)
+
+`(d) WithConn(ctx, fn func(*pgxpool.Conn) error) error` — acquire'ит один conn из primary-пула, передаёт его в `fn`, releases на return. Используйте когда последовательность query'ев ДОЛЖНА landить на один и тот же physical connection: temp tables (session-scoped), prepared statements reused across multiple Exec/Query, cursor FETCH, `SET LOCAL` semantics вне транзакции.
+
+```go
+err := svc.DB.WithConn(ctx, func(conn *pgxpool.Conn) error {
+    if _, err := conn.Exec(ctx, `CREATE TEMP TABLE stage (id int)`); err != nil {
+        return err
+    }
+    if _, err := conn.Exec(ctx, `INSERT INTO stage SELECT generate_series(1, 1000)`); err != nil {
+        return err
+    }
+    _, err := conn.Exec(ctx, `INSERT INTO users SELECT id FROM stage`)
+    return err
+    // stage автоматически дропается когда conn возвращается в пул.
+})
+```
+
+`(d) WithReadConn(ctx, fn)` — read-replica variant с тем же routing'ом, что и ReadQuery (round-robin / random / lag-budget). Fallback на primary когда нет replica или все отфильтрованы. `db.ReadFromPrimary(ctx)` форсит primary conn.
+
+Ошибки `fn` всплывают verbatim (no mapPgxErr wrap); Acquire/Release failure маппится в `*errs.Error{KindUnavailable, Code: "db_unavailable"}`.
+
+## Pool snapshot (`Stats`)
+
+`(d) Stats() Stats` возвращает snapshot всех pgxpool stats + replica health/lag за один cheap call. Подходит для `/admin` эндпоинтов, которые рендерят small dashboard без scraping'а Prometheus:
+
+```go
+s := svc.DB.Stats()
+fmt.Printf("primary: %d/%d acquired\n", s.Primary.Acquired, s.Primary.Max)
+if s.HasReplicas {
+    for _, r := range s.Replicas {
+        status := "healthy"
+        if !r.Healthy { status = "DOWN" }
+        fmt.Printf("%s [%s]: lag=%.2fs, %d/%d acquired\n",
+            r.Name, status, r.LagSeconds, r.Acquired, r.Max)
+    }
+}
+```
+
+`PoolStats{Name, Acquired, Idle, Max, Total, Healthy, LagSeconds}` — `Name` matches the `pool=` label кит'овских Prometheus collectors. `Healthy + LagSeconds` populated только для replica'ов (для primary всегда zero-value).
+
+## Keyset pagination (`Paginate`)
+
+Cursor-based pagination через канонический `WHERE key > $cursor ORDER BY key LIMIT N+1` pattern. Кит управляет cursor encoding'ом + сборкой slice'а, caller отвечает за SQL.
+
+```go
+type userKey struct{ ID string }
+type User struct { ID, Email string }
+
+scan := func(rows pgx.Rows) (User, userKey, error) {
+    var u User
+    err := rows.Scan(&u.ID, &u.Email)
+    return u, userKey{ID: u.ID}, err
+}
+
+prev, _ := db.DecodeCursor[userKey](req.Cursor)  // "" → zero
+page, err := db.Paginate[User, userKey](ctx, svc.DB, `
+    SELECT id, email FROM users
+    WHERE ($1::text = '' OR id > $1)
+    ORDER BY id
+    LIMIT $2
+`, 20, scan, prev.ID, 21)  // limit+1 — кит uses +1 для detection
+
+// page.Items: до 20 user'ов
+// page.NextCursor: opaque string — pass обратно в req.Cursor для next page
+```
+
+Cursor — base64(JSON) под капотом; кит guarantees round-trip safety через `EncodeCursor[K]` / `DecodeCursor[K]`. On-wire format unspecified — НЕ парсите сами.
+
+Malformed cursor → `*errs.Error{KindValidation, Code: "db_cursor_invalid"}` (surfaces как HTTP 400 через `errs.HTTP`).
+
+## Bulk UPDATE (`BulkUpdate`)
+
+Builder для `UPDATE table SET … FROM (VALUES …) AS t(…) WHERE table.key = t.key` — single round-trip для "у меня N rows и N новых values для каждого":
+
+```go
+n, err := db.NewBulkUpdate("users", "id").
+    Columns("email", "display_name").
+    Add("u-1", "alice@new.example", "Alice").
+    Add("u-2", "bob@new.example", "Bob").
+    Exec(ctx, svc.DB)
+// n = 2 (rows affected)
+```
+
+Stable Codes для validation failures (`db_bulk_no_table`, `db_bulk_no_key`, `db_bulk_no_columns`, `db_bulk_row_arity`). Empty bulk (no `Add` calls) — no-op, returns (0, nil), DB не touch'ится.
+
+Для thousands of rows предпочтительнее `CopyFrom` в temp table + single UPDATE — VALUES list grows linearly с row count.
+
 ## Error-модель
 
 Каждый метод прогоняет свою pgx-ошибку через `mapPgxErr` перед возвратом:
