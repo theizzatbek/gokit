@@ -129,9 +129,9 @@ func (d *DB) runLagPolling(ctx context.Context) {
 }
 
 // tickLagPolling runs one polling pass — one lag-query per replica,
-// followed by metric updates + threshold-warn logging. The per-pool
-// query gets a bounded sub-context so a stuck replica does not block
-// the whole tick.
+// followed by per-entry atomic state update + metric updates +
+// threshold-warn logging. The per-pool query gets a bounded
+// sub-context so a stuck replica does not block the whole tick.
 func (d *DB) tickLagPolling(ctx context.Context, threshold time.Duration) {
 	for _, e := range d.readPools {
 		qctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -139,6 +139,9 @@ func (d *DB) tickLagPolling(ctx context.Context, threshold time.Duration) {
 		cancel()
 
 		if !info.Healthy {
+			// Mark entry as unhealthy so pickReadPool routes around
+			// it; the next successful probe revives it.
+			e.healthy.Store(false)
 			if d.opts.logger != nil {
 				d.opts.logger.Warn("db: replica lag query failed",
 					"pool", e.name, "err", info.Err)
@@ -150,6 +153,11 @@ func (d *DB) tickLagPolling(ctx context.Context, threshold time.Duration) {
 			d.opts.metrics.setReplicaLag(e.name, -1)
 			continue
 		}
+		// Update atomic state used by the routing hot path. Done
+		// before metric/log emission so a concurrent ReadQuery sees
+		// the fresh values immediately.
+		e.healthy.Store(true)
+		e.lagMillis.Store(int64(info.LagSeconds * 1000))
 		d.opts.metrics.setReplicaLag(e.name, info.LagSeconds)
 		if threshold > 0 && info.LagSeconds > threshold.Seconds() {
 			if d.opts.logger != nil {

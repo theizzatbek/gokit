@@ -15,8 +15,8 @@ func TestMetricsCollector_ObservesSuccessAndError(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	mc := newMetricsCollector(reg)
 
-	mc.observe(50*time.Millisecond, nil)
-	mc.observe(10*time.Millisecond, errors.New("x"))
+	mc.observe("", 50*time.Millisecond, nil)
+	mc.observe("", 10*time.Millisecond, errors.New("x"))
 
 	if got := testutil.CollectAndCount(mc.duration); got == 0 {
 		t.Fatal("duration histogram saw no observations")

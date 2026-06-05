@@ -368,6 +368,94 @@ d, _ := db.Connect(ctx, cfg,
 - Goroutine завершается на `Close()` (включая `Drain` через `service.OnShutdown`).
 - No-op когда не настроен replica либо `interval ≤ 0`.
 
+### Smart read-routing (`WithReadLagBudget`)
+
+Поверх lag-polling'а `WithReadLagBudget(d)` превращает router в health-aware: replicas с `tracked lag > d` или с failed lag-probe пропускаются, и `ReadQuery` fallback'ится на primary когда все replicas отфильтрованы:
+
+```go
+d, _ := db.Connect(ctx, cfg,
+    db.WithMetrics(promReg),
+    db.WithReplicaLagPolling(10*time.Second, 30*time.Second),
+    db.WithReadLagBudget(5*time.Second),  // > 5s lag → skip
+)
+```
+
+| Метрика | Заметки |
+|---|---|
+| `db_replica_skipped_total{pool, reason="unhealthy"}` | Probe failed, replica помечен `healthy=false`. Revive на следующем успешном probe'е. |
+| `db_replica_skipped_total{pool, reason="over_budget"}` | `tracked_lag > budget`. |
+| `db_replica_fallback_total` | Все replica отфильтрованы → запрос ушёл на primary. **Это alert-signal деградации.** |
+
+Freshly-started replica (нет ещё ни одного probe'а) считается healthy + in-budget — kit favours optimism чтобы не surprise'ить caller'а во время первого polling-интервала.
+
+`ReadPoolInfo` теперь содержит `Healthy bool` + `LagSeconds float64` — admin-эндпоинты могут отрендерить per-replica state без дополнительного запроса.
+
+## Query-helpers (ergonomics)
+
+Тонкие обёртки над повторяющимися паттернами. Все принимают `db.Querier`, так что работают с `*DB` и `*Tx` одинаково.
+
+```go
+// SELECT EXISTS(...) → bool
+ok, err := db.Exists(ctx, svc.DB,
+    `SELECT 1 FROM users WHERE email = $1`, email)
+
+// SELECT count(*) FROM (...) → int64
+n, err := db.Count(ctx, svc.DB,
+    `SELECT 1 FROM events WHERE created_at >= $1`, since)
+
+// Single-column → []T (generic)
+ids, err := db.Pluck[string](ctx, svc.DB,
+    `SELECT id FROM users WHERE org_id = $1`, orgID)
+
+// Single-row single-column → T
+email, err := db.Get[string](ctx, svc.DB,
+    `SELECT email FROM users WHERE id = $1`, userID)
+
+// "no rows" classifier — заменяет errors.As + .Kind == NotFound
+if err != nil && db.NotFound(err) { return nil }
+```
+
+Все маппят ошибки через тот же `mapPgxErr`. `Pluck` возвращает empty slice (not nil) когда rows.Next пуст. Все nil-safe (вызов с nil Querier → `*errs.Error{KindValidation, Code: "db_nil_querier"}`).
+
+## Batch (one round-trip multi-statement)
+
+`db.NewBatch().Queue(...).Queue(...)` собирает N statements, `(d) SendBatch(ctx, b)` (или `(tx) SendBatch`) шипит их за один round-trip через pgx extended-query protocol:
+
+```go
+b := db.NewBatch().
+    Queue(`UPDATE accounts SET balance = balance - $1 WHERE id = $2`, amt, from).
+    Queue(`UPDATE accounts SET balance = balance + $1 WHERE id = $2`, amt, to).
+    Queue(`INSERT INTO ledger(from_acc, to_acc, amount) VALUES ($1, $2, $3)`, from, to, amt)
+
+res, err := svc.DB.Tx(ctx, func(tx *db.Tx) error {
+    br, err := tx.SendBatch(ctx, b)
+    if err != nil { return err }
+    defer br.Close()
+    if _, err := br.Exec(); err != nil { return err }
+    if _, err := br.Exec(); err != nil { return err }
+    if _, err := br.Exec(); err != nil { return err }
+    return nil
+})
+```
+
+Результаты iterate'аются `Exec()` / `Query()` / `QueryRow()` в **порядке Queue'а** — pgx pipeline'ит протокол в том же порядке. Над-iteration → `*errs.Error{Code: "db_batch_overrun"}`. Не забывайте `defer br.Close()` — leaked BatchResults удерживает pgx-conn до конца процесса.
+
+Для bulk-insert'а (тысячи row'ов) используйте `CopyFrom` — у Batch'а есть per-statement protocol-overhead.
+
+## Query-name tagging
+
+`db.WithQueryName(ctx, "user_lookup")` тегает все queries под этим ctx именем — `db_query_duration_seconds` получает label `name="user_lookup"`:
+
+```go
+ctx = db.WithQueryName(ctx, "user_lookup")
+err := svc.DB.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&id)
+// → db_query_duration_seconds{name="user_lookup", outcome="success"}
+```
+
+**Cardinality safety:** label значение consumed verbatim — НИКОГДА не используйте user-controlled input. Ограничьте имена small fixed set per service (`"user_lookup"`, `"list_orders"`, `"outbox_drain"`) — runaway name set взорвёт metrics registry. Reach for `WithQueryName` только когда per-query slice-and-dice analytics реально нужны; для common case unlabelled aggregate (`name=""`) достаточен.
+
+Nested `WithQueryName` — last write wins; outer name перетирается для queries под inner ctx.
+
 ## Error-модель
 
 Каждый метод прогоняет свою pgx-ошибку через `mapPgxErr` перед возвратом:

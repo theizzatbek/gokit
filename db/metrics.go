@@ -25,14 +25,16 @@ type poolStat struct {
 // during Connect; no locking because there are no concurrent attaches and
 // the map is sealed before the first scrape.
 type metricsCollector struct {
-	pools      map[string]*pgxpool.Pool
-	poolSize   *prometheus.GaugeVec
-	duration   *prometheus.HistogramVec
-	txTotal    *prometheus.CounterVec   // kind=tx|savepoint, outcome=commit|rollback|panic
-	txLatency  *prometheus.HistogramVec // kind, outcome
-	slowQuery  prometheus.Counter
-	txRetries  prometheus.Counter
-	replicaLag *prometheus.GaugeVec // pool="standby[-N]"
+	pools           map[string]*pgxpool.Pool
+	poolSize        *prometheus.GaugeVec
+	duration        *prometheus.HistogramVec
+	txTotal         *prometheus.CounterVec   // kind=tx|savepoint, outcome=commit|rollback|panic
+	txLatency       *prometheus.HistogramVec // kind, outcome
+	slowQuery       prometheus.Counter
+	txRetries       prometheus.Counter
+	replicaLag      *prometheus.GaugeVec   // pool="standby[-N]"
+	replicaSkipped  *prometheus.CounterVec // pool, reason=unhealthy|over_budget
+	replicaFallback prometheus.Counter
 }
 
 func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
@@ -44,9 +46,9 @@ func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
 		}, []string{"pool", "state"}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "db_query_duration_seconds",
-			Help:    "Histogram of pgx query durations.",
+			Help:    "Histogram of pgx query durations. The `name` label is populated when ctx carries [WithQueryName] — empty otherwise; operators must keep the name set bounded.",
 			Buckets: prometheus.DefBuckets,
-		}, []string{"outcome"}),
+		}, []string{"name", "outcome"}),
 		txTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "db_tx_total",
 			Help: "Number of completed transactions/savepoints by kind (tx=top-level BEGIN, savepoint=nested) and outcome (commit, rollback from returned error, panic recovered + re-thrown).",
@@ -68,6 +70,14 @@ func newMetricsCollector(reg prometheus.Registerer) *metricsCollector {
 			Name: "db_replica_lag_seconds",
 			Help: "Per-replica replication lag in seconds (from `now() - pg_last_xact_replay_timestamp()`); -1 when the most recent probe failed.",
 		}, []string{"pool"}),
+		replicaSkipped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "db_replica_skipped_total",
+			Help: "Number of times the read router skipped a replica because it was unhealthy (failed probe) or over the WithReadLagBudget threshold.",
+		}, []string{"pool", "reason"}),
+		replicaFallback: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "db_replica_fallback_total",
+			Help: "Number of read queries that fell back to the primary because every configured replica was filtered out (unhealthy AND/OR over budget). A non-zero rate is the alert signal that replica health has degraded.",
+		}),
 	}
 	reg.MustRegister(mc)
 	return mc
@@ -82,6 +92,8 @@ func (m *metricsCollector) Describe(ch chan<- *prometheus.Desc) {
 	m.slowQuery.Describe(ch)
 	m.txRetries.Describe(ch)
 	m.replicaLag.Describe(ch)
+	m.replicaSkipped.Describe(ch)
+	m.replicaFallback.Describe(ch)
 }
 
 // Collect implements prometheus.Collector. Refreshes pool gauges from the
@@ -95,6 +107,25 @@ func (m *metricsCollector) Collect(ch chan<- prometheus.Metric) {
 	m.slowQuery.Collect(ch)
 	m.txRetries.Collect(ch)
 	m.replicaLag.Collect(ch)
+	m.replicaSkipped.Collect(ch)
+	m.replicaFallback.Collect(ch)
+}
+
+// incReplicaSkipped bumps the per-replica skip counter labelled by
+// reason. nil-safe.
+func (m *metricsCollector) incReplicaSkipped(pool, reason string) {
+	if m == nil {
+		return
+	}
+	m.replicaSkipped.WithLabelValues(pool, reason).Inc()
+}
+
+// incReplicaFallback bumps the all-replicas-down counter. nil-safe.
+func (m *metricsCollector) incReplicaFallback() {
+	if m == nil {
+		return
+	}
+	m.replicaFallback.Inc()
 }
 
 // setReplicaLag updates the per-pool replica-lag gauge. No-op on nil
@@ -112,12 +143,12 @@ func (m *metricsCollector) attach(name string, p *pgxpool.Pool) {
 	m.pools[name] = p
 }
 
-func (m *metricsCollector) observe(elapsed time.Duration, err error) {
+func (m *metricsCollector) observe(name string, elapsed time.Duration, err error) {
 	outcome := "success"
 	if err != nil {
 		outcome = "error"
 	}
-	m.duration.WithLabelValues(outcome).Observe(elapsed.Seconds())
+	m.duration.WithLabelValues(name, outcome).Observe(elapsed.Seconds())
 }
 
 // observeTx records the outcome of a top-level transaction or
