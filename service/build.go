@@ -189,7 +189,17 @@ func (s *Service[T, C]) buildDB(ctx context.Context) error {
 		&s.cfg.DB.ConnectMaxRetries,
 		&s.cfg.DB.ConnectBackoffBase,
 		&s.cfg.DB.ConnectBackoffMax)
-	dbOpts := append([]db.Option{db.WithLogger(s.logger)}, s.opts.dbOpts...)
+	// Kit-default observability for the db pool: WithLogger always,
+	// WithMetrics when the service has a registry AND the caller did
+	// not opt out via WithoutAutoDBMetrics. User-supplied dbOpts run
+	// LAST so explicit configuration wins on the same field; but note
+	// that double-registering db.WithMetrics on the same registry
+	// panics — see [WithoutAutoDBMetrics] doc for the conflict path.
+	dbOpts := []db.Option{db.WithLogger(s.logger)}
+	if !s.opts.skipAutoDBMetrics && s.metrics != nil {
+		dbOpts = append(dbOpts, db.WithMetrics(s.metrics))
+	}
+	dbOpts = append(dbOpts, s.opts.dbOpts...)
 	d, err := db.Connect(ctx, s.cfg.DB, dbOpts...)
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeDBConnectFailed, "service: db connect failed")

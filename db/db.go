@@ -161,6 +161,11 @@ func readFromPrimaryRequested(ctx context.Context) bool {
 // pool is observable independently.
 func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 	o := options{}
+	// Config-derived options apply FIRST so user-supplied opts win on
+	// the same field (last write wins on the Option closure).
+	for _, fn := range configDerivedOptions(cfg) {
+		fn(&o)
+	}
 	for _, fn := range opts {
 		fn(&o)
 	}
@@ -231,6 +236,26 @@ func Connect(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 	}
 
 	return d, nil
+}
+
+// configDerivedOptions translates env-driven Config fields into kit
+// Option closures, so a service that does nothing but
+// `env.Parse(&cfg) + db.Connect(ctx, cfg)` still gets the multi-
+// replica observability pack (lag polling + budget) when the
+// matching env vars are set. The returned slice is applied BEFORE
+// user-supplied opts so explicit programmatic configuration wins on
+// the same field.
+//
+// Returns nil when no Config-derived options apply.
+func configDerivedOptions(cfg Config) []Option {
+	var out []Option
+	if cfg.LagPollInterval > 0 {
+		out = append(out, WithReplicaLagPolling(cfg.LagPollInterval, cfg.LagPollThreshold))
+	}
+	if cfg.LagBudget > 0 {
+		out = append(out, WithReadLagBudget(cfg.LagBudget))
+	}
+	return out
 }
 
 // parseReadRoute maps the string form to the internal enum. Empty / "" /

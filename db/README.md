@@ -57,6 +57,9 @@ func main() {
 | `HasReadReplica` | `DB_HAS_READ_REPLICA` | `false` | открывает второй пул против standby. См. [Read replicas](#read-replicas). |
 | `ReadURLs` | `DB_READ_URLS` (comma-separated) | пусто | список отдельных read-replica URL'ов. Перекрывает `HasReadReplica`. См. [Multi-replica routing](#multi-replica-routing). |
 | `ReadStrategy` | `DB_READ_STRATEGY` | `round_robin` | `round_robin` или `random` — стратегия выбора replica при нескольких ReadURLs. |
+| `LagBudget` | `DB_LAG_BUDGET` | `0` (off) | Cap на tracked replica lag; replicas над budget'ом скипаются router'ом. Эквивалентно `WithReadLagBudget(d)`. Требует `LagPollInterval`. |
+| `LagPollInterval` | `DB_LAG_POLL_INTERVAL` | `0` (off) | Включает фоновую goroutine, которая polls лаг каждого replica. Эквивалентно `WithReplicaLagPolling(interval, threshold)`. |
+| `LagPollThreshold` | `DB_LAG_POLL_THRESHOLD` | `0` (off) | WARN-threshold для polling goroutine. Имеет смысл только с `LagPollInterval > 0`. |
 | `MaxConns` | `DB_MAX_CONNS` | 10 | |
 | `MinConns` | `DB_MIN_CONNS` | 0 | |
 | `MaxConnLifetime` | `DB_MAX_LIFETIME` | 1h | |
@@ -298,6 +301,21 @@ DB_READ_URLS=postgres://app:p@rep1.az-a:5432/appdb,postgres://app:p@rep2.az-b:54
 Кит откроет по pgxpool на каждый URL. URL без `target_session_attrs` авто-получит `standby` (PG 14+); передайте параметр явно (`target_session_attrs=any`), чтобы override'нуть для analytics-replica, которая может быть promoted в primary.
 
 `ReadURLs` перекрывает `HasReadReplica` — если оба заданы, `HasReadReplica` игнорируется.
+
+### Полная env-driven multi-replica setup
+
+`db.Connect` авто-применяет `WithReplicaLagPolling` + `WithReadLagBudget` из Config-полей `LagPollInterval` / `LagPollThreshold` / `LagBudget` (env: `DB_LAG_POLL_INTERVAL` / `DB_LAG_POLL_THRESHOLD` / `DB_LAG_BUDGET`). Полная production-ready setup из env:
+
+```bash
+DB_URL=postgres://app:p@primary:5432/appdb
+DB_READ_URLS=postgres://app:p@rep1:5432/appdb,postgres://app:p@rep2:5432/appdb
+DB_READ_STRATEGY=round_robin
+DB_LAG_POLL_INTERVAL=10s
+DB_LAG_POLL_THRESHOLD=30s
+DB_LAG_BUDGET=5s
+```
+
+Сервис под `service.New` подхватит всё автоматически — service.Config embed'ит db.Config с `envPrefix:"DB_"`. **Config-derived опции применяются BEFORE user-supplied** (через `service.WithDBOptions` / прямой вызов `db.Connect`'у с opts), так что explicit programmatic configuration перекрывает env-defaults через last-write-wins.
 
 ### Стратегия выбора
 
