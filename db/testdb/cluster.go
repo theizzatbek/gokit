@@ -297,9 +297,9 @@ func (c *Cluster) WaitForReplication(ctx context.Context) error {
 		return nil
 	}
 	const (
-		pollEvery   = 50 * time.Millisecond
-		primaryLSN  = `SELECT pg_current_wal_lsn()::text`
-		replicaLSN  = `SELECT pg_last_wal_replay_lsn()::text`
+		pollEvery  = 50 * time.Millisecond
+		primaryLSN = `SELECT pg_current_wal_lsn()::text`
+		replicaLSN = `SELECT pg_last_wal_replay_lsn()::text`
 	)
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
