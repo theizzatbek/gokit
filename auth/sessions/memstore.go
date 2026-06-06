@@ -107,7 +107,10 @@ func (s *MemoryStore) ListBySubject(_ context.Context, subject string) ([]Sessio
 }
 
 // Stats implements [Lister]. Walks every row under the lock — O(N).
-// For a dev store with thousands of sessions max, that's fine.
+// For a dev store with thousands of sessions max, that's fine. Rows
+// past their ExpiresAt are excluded from Active and counted only
+// toward Total (matching the auto-evict semantics of the production
+// sessionsredis backend, where expired rows are simply gone).
 func (s *MemoryStore) Stats(_ context.Context) (StoreStats, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -115,9 +118,7 @@ func (s *MemoryStore) Stats(_ context.Context) (StoreStats, error) {
 	var out StoreStats
 	for _, sess := range s.byID {
 		out.Total++
-		if !sess.ExpiresAt.IsZero() && now.After(sess.ExpiresAt) {
-			out.Expired++
-		} else {
+		if sess.ExpiresAt.IsZero() || !now.After(sess.ExpiresAt) {
 			out.Active++
 		}
 	}

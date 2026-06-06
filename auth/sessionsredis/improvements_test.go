@@ -77,15 +77,15 @@ func TestStore_Stats_Redis(t *testing.T) {
 			CreatedAt: now, LastSeenAt: now, ExpiresAt: now.Add(time.Hour),
 		})
 	}
-	// Redis EXPIREAT in the past would drop the row immediately, so we can't
-	// produce an "Expired" record here — that bucket is intentionally
-	// unreachable for the Redis backend (see sessionsredis.Store.Stats docs).
+	// Redis EXPIREAT in the past would drop the row immediately, so the
+	// "expired but enumerable" state is intentionally unreachable for
+	// the Redis backend — Stats only reports Active + Total.
 	stats, err := s.Stats(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Total != 2 || stats.Active != 2 || stats.Expired != 0 {
-		t.Errorf("stats = %+v, want total=2 active=2 expired=0", stats)
+	if stats.Total != 2 || stats.Active != 2 {
+		t.Errorf("stats = %+v, want total=2 active=2", stats)
 	}
 }
 
