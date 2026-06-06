@@ -285,27 +285,36 @@ func startBitnamiReplica(ctx context.Context, cfg config, networkName string, in
 // Returns ctx.Err() on timeout; nil when every replica caught up.
 // A no-replica cluster (defensive — SpinCluster always has ≥1)
 // returns nil immediately.
+//
+// Implementation note: pg_current_wal_lsn() can only run on the
+// primary (standbys raise SQLSTATE 55000 "recovery is in progress"),
+// and pg_last_wal_replay_lsn() only returns useful data on a standby.
+// So the probe fans out: primary LSN from c.Primary, replay LSN from
+// each c.Replicas[i], string-equal compare (LSNs are formatted X/Y
+// hex — string equality is the right cheap test for caught-up).
 func (c *Cluster) WaitForReplication(ctx context.Context) error {
 	if c == nil || c.Primary == nil || len(c.Replicas) == 0 {
 		return nil
 	}
 	const (
-		pollEvery = 50 * time.Millisecond
-		query     = `
-			SELECT
-			  (SELECT pg_current_wal_lsn()) - (SELECT pg_last_wal_replay_lsn()) AS lag_bytes
-		`
+		pollEvery   = 50 * time.Millisecond
+		primaryLSN  = `SELECT pg_current_wal_lsn()::text`
+		replicaLSN  = `SELECT pg_last_wal_replay_lsn()::text`
 	)
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
 	for {
+		var primary string
+		if err := c.Primary.QueryRow(ctx, primaryLSN).Scan(&primary); err != nil {
+			return fmt.Errorf("primary lsn probe: %w", err)
+		}
 		caughtUp := true
 		for _, r := range c.Replicas {
-			var lag int64
-			if err := r.QueryRow(ctx, query).Scan(&lag); err != nil {
-				return fmt.Errorf("replica lag probe: %w", err)
+			var replay string
+			if err := r.QueryRow(ctx, replicaLSN).Scan(&replay); err != nil {
+				return fmt.Errorf("replica replay-lsn probe: %w", err)
 			}
-			if lag != 0 {
+			if replay != primary {
 				caughtUp = false
 				break
 			}
