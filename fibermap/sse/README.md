@@ -78,7 +78,7 @@ func (s *Stream) Comment(text string) error
 func (s *Stream) Err() error
 ```
 
-Stream **не safe для concurrent use** — pin одну goroutine per Stream. Если нужно multi-publisher SSE, используйте channel + single fan-in goroutine.
+Stream **не safe для concurrent use** — pin одну goroutine per Stream. Если нужно multi-publisher SSE, используйте channel + single fan-in goroutine. Параллельный вызов `Send` / `SendJSON` / `Comment` детектится в runtime через CAS-guard и **паникует второго caller'a** с понятным сообщением (pgx-style) — лучше упасть громко на ревью, чем тихо корраптить wire frame.
 
 ## Multiline data
 
