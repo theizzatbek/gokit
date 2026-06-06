@@ -31,7 +31,7 @@ type config struct {
 func defaultConfig() config {
 	return config{
 		image:           "postgres:16-alpine",
-		clusterImage:    "bitnami/postgresql:16",
+		clusterImage:    "bitnamilegacy/postgresql:16",
 		database:        "testdb",
 		username:        "test",
 		password:        "test",
@@ -50,9 +50,12 @@ func WithImage(image string) Option {
 }
 
 // WithClusterImage overrides the Postgres image used by
-// [SpinCluster]. Default "bitnami/postgresql:16" — the image MUST
-// support the POSTGRESQL_REPLICATION_MODE env vars Bitnami ships
-// with; the official `postgres:` image does NOT.
+// [SpinCluster]. Default "bitnamilegacy/postgresql:16" — the image
+// MUST support the POSTGRESQL_REPLICATION_MODE env vars Bitnami ships
+// with; the official `postgres:` image does NOT. We track the
+// `bitnamilegacy` namespace because Bitnami removed their free public
+// images from the original `bitnami/` namespace in late 2025; the
+// legacy mirror is a byte-identical community fallback.
 func WithClusterImage(image string) ClusterOption {
 	return func(c *config) { c.clusterImage = image }
 }

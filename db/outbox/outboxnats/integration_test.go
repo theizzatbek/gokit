@@ -51,8 +51,18 @@ func newTestClient(t *testing.T) *natsclient.Client {
 	if testing.Short() || testURL == "" {
 		t.Skip("integration test — Docker required")
 	}
+	// testcontainers NATS occasionally accepts TCP before the server
+	// is fully ready and kicks the first connection with EOF; the
+	// retry budget here absorbs that startup window without making
+	// every other test wait.
 	c, err := natsclient.Connect(context.Background(),
-		natsclient.Config{URL: testURL, Name: "outboxnats-test"})
+		natsclient.Config{
+			URL:                testURL,
+			Name:               "outboxnats-test",
+			ConnectMaxRetries:  5,
+			ConnectBackoffBase: 200 * time.Millisecond,
+			ConnectBackoffMax:  2 * time.Second,
+		})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}

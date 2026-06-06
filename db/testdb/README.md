@@ -97,7 +97,7 @@ func TestReplicationLag_Settles(t *testing.T) {
 
 ### Как работает
 
-- **Image: `bitnami/postgresql:16`** — Bitnami's image имеет env-driven streaming-replication wiring out of the box (`POSTGRESQL_REPLICATION_MODE=master|slave`). Vanilla `postgres:` image потребовал бы pg_basebackup + recovery.conf скрипты внутри testcontainer setup'а.
+- **Image: `bitnamilegacy/postgresql:16`** — Bitnami's image имеет env-driven streaming-replication wiring out of the box (`POSTGRESQL_REPLICATION_MODE=master|slave`). Vanilla `postgres:` image потребовал бы pg_basebackup + recovery.conf скрипты внутри testcontainer setup'а.
 - **Docker network** — primary и все standby живут в общей сети; standbys резолвят primary через alias `"primary"`.
 - **Per-call контейнеры** — `SpinCluster` ВСЕГДА строит новые контейнеры, потому что cross-test state в реплицирующей паре сложно почистить.
 - **WaitForReplication** — блокирует пока `pg_current_wal_lsn() - pg_last_wal_replay_lsn() == 0` на каждом replica или ctx не expired'нулся. Polling каждые 50ms.
@@ -106,13 +106,13 @@ func TestReplicationLag_Settles(t *testing.T) {
 
 | Опция | По умолчанию | Заметки |
 |---|---|---|
-| `WithClusterImage(image)` | `bitnami/postgresql:16` | Должен поддерживать `POSTGRESQL_REPLICATION_MODE`. |
+| `WithClusterImage(image)` | `bitnamilegacy/postgresql:16` | Должен поддерживать `POSTGRESQL_REPLICATION_MODE`. |
 | `WithReplicationCredentials(u, pw)` | `repl`/`repl` | Replication-account для streaming. |
 | `WithConfigKVs(map)` | none | Extra `postgresql.conf` ключи на primary (passed как `-c key=value`). Полезно для тестов, которым нужно специфическое `wal_level` / `max_wal_senders` / etc. |
 
 ### Performance-заметки
 
-- Cold pull `bitnami/postgresql:16` — ~600MB; первый запуск может занять минуты. Затем cached.
+- Cold pull `bitnamilegacy/postgresql:16` — ~600MB; первый запуск может занять минуты. Затем cached.
 - Warm boot 1 primary + 1 replica — ~15s локально, ~30s в CI с холодным Docker socket'ом.
 - Boot scales примерно линейно с количеством replicas. Не запускайте `SpinCluster(t, 10)` в каждом тесте.
 
@@ -133,4 +133,4 @@ func TestReplicationLag_Settles(t *testing.T) {
 
 - [`db/`](../README.md) — родительский пакет: `db.Config{ReadURLs, ReadStrategy}` + `db.ReadFromPrimary(ctx)` + `db.ReplicationLag(ctx)`.
 - [testcontainers-go/modules/postgres](https://golang.testcontainers.org/modules/postgres/) — upstream module.
-- [Bitnami PostgreSQL Image](https://hub.docker.com/r/bitnami/postgresql) — replication env vars reference.
+- [Bitnami PostgreSQL Image (legacy mirror)](https://hub.docker.com/r/bitnamilegacy/postgresql) — replication env vars reference.
