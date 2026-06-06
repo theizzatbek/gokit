@@ -37,7 +37,7 @@ func TestStats_HasReplicasFlag(t *testing.T) {
 	// Stat() panics on a zero-value pool, so we can't fully exercise
 	// the projection here. The flag-only assertion stays valid: the
 	// kit reports HasReplicas from the slice length, not from Stat().
-	if got := d2.HasReadReplica(); !got {
-		t.Errorf("HasReadReplica=%v, want true", got)
+	if got := len(d2.ReadPools()); got == 0 {
+		t.Errorf("len(ReadPools())=0, want >0")
 	}
 }

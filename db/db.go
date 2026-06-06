@@ -64,7 +64,7 @@ const (
 // DB wraps a *pgxpool.Pool with the kit's error-mapping and transaction
 // helpers. When Config.HasReadReplica or Config.ReadURLs were set at
 // Connect time, DB also holds one or more read-replica pools exposed via
-// ReadQuery / ReadQueryRow / ReadPool / ReadPools.
+// ReadQuery / ReadQueryRow / ReadPools.
 type DB struct {
 	pool      *pgxpool.Pool    // primary (target_session_attrs=read-write)
 	readPools []*readPoolEntry // dedicated standbys; nil when no replicas configured
@@ -546,17 +546,6 @@ func (d *DB) eligibleReadPools() []*readPoolEntry {
 	return out
 }
 
-// ReadPool returns the first read pool when one or more replicas are
-// configured; nil otherwise. Kept for back-compat with the previous
-// single-pool surface — new code should prefer [DB.ReadPools] to
-// inspect every configured replica.
-func (d *DB) ReadPool() *pgxpool.Pool {
-	if len(d.readPools) == 0 {
-		return nil
-	}
-	return d.readPools[0].pool
-}
-
 // ReadPools returns every configured read-replica pool together with its
 // stable display name ("standby" when [Config.HasReadReplica] was set,
 // "standby-1" / "standby-2" / … in [Config.ReadURLs] index order).
@@ -598,10 +587,5 @@ type ReadPoolInfo struct {
 	Healthy    bool
 	LagSeconds float64
 }
-
-// HasReadReplica reports whether at least one read-replica pool is
-// configured. Useful for admin endpoints + tests that branch on
-// replica-availability.
-func (d *DB) HasReadReplica() bool { return len(d.readPools) > 0 }
 
 var _ Querier = (*DB)(nil)
