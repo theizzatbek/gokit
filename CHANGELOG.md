@@ -54,6 +54,18 @@ This is the bootstrap entry; prior history lives in `git log`.
   fails loudly: the second caller panics with a guiding message
   naming the offending method, pgx-style. Sequential reuse from
   one goroutine (the canonical happy path) is unaffected.
+- `cronmap.(*Runtime).TriggerJob` now requires a third explicit
+  argument: `cronmap.OverrideOK{}`. The method bypasses both the
+  singleton (leader-election) lock AND the per-job pause flag —
+  intentional for /admin force-run actions, but the bare
+  `TriggerJob(ctx, "name")` signature gave no signal of that at
+  the call site, and an /admin endpoint forwarded straight from
+  HTTP could shred leader-election invariants without anyone
+  noticing on review. The empty-struct token has zero runtime
+  cost; its purpose is to surface "I know this bypasses cluster
+  safety" in greps + code review. Replace
+  `rt.TriggerJob(ctx, "x")` with
+  `rt.TriggerJob(ctx, "x", cronmap.OverrideOK{})`.
 
 ### Added
 - `db/migrate/` — four additive helpers around the existing runner.
