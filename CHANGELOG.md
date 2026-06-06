@@ -67,6 +67,23 @@ This is the bootstrap entry; prior history lives in `git log`.
   `rt.TriggerJob(ctx, "x")` with
   `rt.TriggerJob(ctx, "x", cronmap.OverrideOK{})`.
 
+### Documentation
+- `clients/webhooks.WorkerConfig.Propagator` — clarified the
+  contract ahead of v1 freeze. The field is the single source of
+  truth for outbound tracing header injection: the worker calls
+  `Propagator.Inject(ctx, req.Header)` once per attempt, whatever
+  headers the propagator emits land verbatim. nil (default) means
+  no tracing headers — the kit does NOT fall back to a built-in
+  propagator, does NOT silently call `otel.GetTextMapPropagator()`,
+  does NOT read any global state. The recommended config remains
+  `cfg.Propagator = otel.GetTextMapPropagator()` (W3C TraceContext
+  + Baggage composite), matching otelhttp + clients/nats. v1
+  freezes this knob as the only tracing injection point on a
+  Worker: no side-channel `B3Propagator` / `DatadogHeaders` fields
+  in v1 minors — multi-format callers compose
+  `propagation.NewCompositeTextMapPropagator(...)` and pass the
+  composite. Doc-string + README updated; no code change.
+
 ### Fixed
 - `fibermap/wsnats.runBridge` now unblocks its WS read promptly on
   cancellation. Previously, after the loop's per-connection ctx
