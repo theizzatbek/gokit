@@ -130,20 +130,25 @@ func bootCluster(ctx context.Context, replicas int, cfg config) (*Cluster, func(
 			return nil, teardown, fmt.Errorf("replica %d: %w", i+1, rerr)
 		}
 		containers = append(containers, c)
+		// Each per-replica handle is structurally a "primary" pool from
+		// db.Connect's perspective, but the underlying server is a
+		// standby. Build the URL with target_session_attrs=standby so
+		// buildPgxURL skips its default read-write injection (which
+		// would make pgx reject the connection as "read only").
+		replicaURL := fmt.Sprintf(
+			"postgres://%s:%s@%s:%d/%s?sslmode=disable&target_session_attrs=standby",
+			cfg.username, cfg.password, host, port, cfg.database)
 		rdb, rerr := db.Connect(context.Background(), db.Config{
-			Host: host, Port: port,
-			User: cfg.username, Password: cfg.password, Database: cfg.database,
-			SSLMode: "disable", ConnectTimeout: 5 * time.Second,
-			MaxConns: cfg.maxConns,
+			URL:            replicaURL,
+			ConnectTimeout: 5 * time.Second,
+			MaxConns:       cfg.maxConns,
 		})
 		if rerr != nil {
 			return nil, teardown, fmt.Errorf("connect replica %d: %w", i+1, rerr)
 		}
 		handles = append(handles, rdb)
 		replicaDBs = append(replicaDBs, rdb)
-		replicaURLs = append(replicaURLs,
-			fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
-				cfg.username, cfg.password, host, port, cfg.database))
+		replicaURLs = append(replicaURLs, replicaURL)
 	}
 
 	// Multi-DB wires the primary as the writable pool + every replica
