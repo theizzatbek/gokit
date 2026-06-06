@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+
+	"github.com/theizzatbek/gokit/auth/internal/principalkey"
 	"github.com/theizzatbek/gokit/errs"
 )
 
@@ -29,7 +31,7 @@ func TestFrom_ReturnsStoredPrincipal(t *testing.T) {
 	app := fiber.New()
 	want := &Principal[testClaims]{Subject: "u-1", Scopes: []string{"a"}, Claims: testClaims{TenantID: "t-1"}}
 	app.Get("/", func(c *fiber.Ctx) error {
-		c.Locals(principalKey{}, want)
+		c.Locals(principalkey.Key{}, want)
 		got, ok := From[testClaims](c)
 		if !ok || got != want {
 			t.Fatalf("From = (%v,%v), want %v,true", got, ok, want)
@@ -55,7 +57,7 @@ func TestMustFrom_Returns500WhenAbsent(t *testing.T) {
 func TestSubject_HelperReadsFrom(t *testing.T) {
 	app := fiber.New()
 	app.Get("/", func(c *fiber.Ctx) error {
-		c.Locals(principalKey{}, &Principal[testClaims]{Subject: "u-7"})
+		c.Locals(principalkey.Key{}, &Principal[testClaims]{Subject: "u-7"})
 		if Subject[testClaims](c) != "u-7" {
 			t.Fatalf("Subject = %q", Subject[testClaims](c))
 		}
@@ -67,7 +69,7 @@ func TestSubject_HelperReadsFrom(t *testing.T) {
 func TestHasScope_True(t *testing.T) {
 	app := fiber.New()
 	app.Get("/", func(c *fiber.Ctx) error {
-		c.Locals(principalKey{}, &Principal[testClaims]{Scopes: []string{"posts:read", "posts:write"}})
+		c.Locals(principalkey.Key{}, &Principal[testClaims]{Scopes: []string{"posts:read", "posts:write"}})
 		if !HasScope[testClaims](c, "posts:write") {
 			t.Fatalf("HasScope = false, want true")
 		}

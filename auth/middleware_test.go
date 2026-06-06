@@ -9,6 +9,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/theizzatbek/gokit/auth/internal/principalkey"
 	"github.com/theizzatbek/gokit/errs"
 )
 
@@ -112,7 +113,7 @@ func TestRequireScope_AllPresentPasses(t *testing.T) {
 	a := mustNewAuth(t)
 	app := fiber.New(fiber.Config{ErrorHandler: testErrHandler})
 	app.Use(func(c *fiber.Ctx) error {
-		c.Locals(principalKey{}, &Principal[testClaims]{Scopes: []string{"a", "b", "c"}})
+		c.Locals(principalkey.Key{}, &Principal[testClaims]{Scopes: []string{"a", "b", "c"}})
 		return c.Next()
 	})
 	app.Use(a.RequireScope("a", "b"))
@@ -127,7 +128,7 @@ func TestRequireScope_MissingScopeReturns403(t *testing.T) {
 	a := mustNewAuth(t)
 	app := fiber.New(fiber.Config{ErrorHandler: testErrHandler})
 	app.Use(func(c *fiber.Ctx) error {
-		c.Locals(principalKey{}, &Principal[testClaims]{Scopes: []string{"a"}})
+		c.Locals(principalkey.Key{}, &Principal[testClaims]{Scopes: []string{"a"}})
 		return c.Next()
 	})
 	app.Use(a.RequireScope("a", "missing"))
@@ -153,7 +154,7 @@ func TestRequireRole_AllPresentPasses(t *testing.T) {
 	a := mustNewAuth(t)
 	app := fiber.New(fiber.Config{ErrorHandler: testErrHandler})
 	app.Use(func(c *fiber.Ctx) error {
-		c.Locals(principalKey{}, &Principal[testClaims]{Roles: []string{"admin"}})
+		c.Locals(principalkey.Key{}, &Principal[testClaims]{Roles: []string{"admin"}})
 		return c.Next()
 	})
 	app.Use(a.RequireRole("admin"))
@@ -168,7 +169,7 @@ func TestRequireRole_MissingRoleReturns403(t *testing.T) {
 	a := mustNewAuth(t)
 	app := fiber.New(fiber.Config{ErrorHandler: testErrHandler})
 	app.Use(func(c *fiber.Ctx) error {
-		c.Locals(principalKey{}, &Principal[testClaims]{Roles: []string{"user"}})
+		c.Locals(principalkey.Key{}, &Principal[testClaims]{Roles: []string{"user"}})
 		return c.Next()
 	})
 	app.Use(a.RequireRole("admin"))

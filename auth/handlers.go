@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/theizzatbek/gokit/auth/internal/principalkey"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
@@ -49,7 +50,7 @@ func (a *Auth[C]) IssueLogin(c *fiber.Ctx, res LoginResult[C]) error {
 		return err
 	}
 
-	c.Locals(principalKey{}, &Principal[C]{
+	c.Locals(principalkey.Key{}, &Principal[C]{
 		Subject: pair.Subject,
 		Scopes:  res.Scopes,
 		Roles:   res.Roles,

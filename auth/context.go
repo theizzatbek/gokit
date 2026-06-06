@@ -5,12 +5,14 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/theizzatbek/gokit/auth/internal/principalkey"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Principal is the authenticated identity attached to a request. It is stored
-// in fiber.Locals under principalKey{} by Bearer middleware after a successful
-// token verification, and read by From / MustFrom / scope-check middleware.
+// in fiber.Locals under principalkey.Key{} by Bearer middleware after a
+// successful token verification, and read by From / MustFrom / scope-check
+// middleware.
 type Principal[C any] struct {
 	Subject  string
 	Issuer   string
@@ -24,14 +26,10 @@ type Principal[C any] struct {
 	Raw      string
 }
 
-// principalKey is the unexported Locals key for Principal. Declared as a typed
-// empty struct so two strings with the same value cannot collide.
-type principalKey struct{}
-
 // From returns the Principal stored by Bearer middleware, or (nil, false) if
 // the route is anonymous (bearer:optional with no token). Does not panic.
 func From[C any](c *fiber.Ctx) (*Principal[C], bool) {
-	v := c.Locals(principalKey{})
+	v := c.Locals(principalkey.Key{})
 	if v == nil {
 		return nil, false
 	}
@@ -60,21 +58,6 @@ func Subject[C any](c *fiber.Ctx) string {
 		return p.Subject
 	}
 	return ""
-}
-
-// SetPrincipalForTest stores p under the Locals slot Bearer
-// middleware normally populates, so downstream code that calls
-// From[C](c) / Subject[C](c) sees it as if a real bearer token had
-// been verified.
-//
-// Intended for integration tests of cross-cutting layers (Sentry
-// user scope, request-scoped logging, metrics labels) that depend on
-// principal presence but don't want to mint a real JWT. Production
-// code MUST NOT call this — it bypasses every verification path. The
-// name is prefixed `ForTest` to make accidental use obvious in code
-// review and surface in greps.
-func SetPrincipalForTest[C any](c *fiber.Ctx, p *Principal[C]) {
-	c.Locals(principalKey{}, p)
 }
 
 // HasScope returns true iff a Principal exists AND has scope s. Convenience

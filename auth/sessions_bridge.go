@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/theizzatbek/gokit/auth/internal/principalkey"
 	"github.com/theizzatbek/gokit/auth/sessions"
 )
 
@@ -34,6 +35,6 @@ func (a *Auth[C]) Sessions(cfg sessions.Config, opts ...sessions.ManagerOption) 
 				Claims:  claims,
 				Expires: expires,
 			}
-			c.Locals(principalKey{}, p)
+			c.Locals(principalkey.Key{}, p)
 		}, opts...)
 }
