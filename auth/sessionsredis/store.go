@@ -140,8 +140,13 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 }
 
 // ListBySubject implements [sessions.Lister]. Backed by the subject
-// SET + pipelined HGetAll; members of the set whose backing HASH has
-// already been EXPIREATd are silently skipped.
+// SET + pipelined HGetAll; stale set members are silently skipped:
+//   - HASH already EXPIREATd (HGetAll returns empty), or
+//   - HASH still exists but its `subject` field no longer matches —
+//     happens when Create is called twice with the same ID and a
+//     different subject (admin reassign, test fixtures). The old
+//     subject's SET keeps the dangling ID; we filter it here so the
+//     returned slice reflects the HASH's authoritative subject.
 //
 // Empty subject returns an empty slice without touching Redis.
 func (s *Store) ListBySubject(ctx context.Context, subject string) ([]sessions.Session, error) {
@@ -170,6 +175,9 @@ func (s *Store) ListBySubject(ctx context.Context, subject string) ([]sessions.S
 		res := cmd.Val()
 		if len(res) == 0 {
 			continue // hash EXPIREATd, stale set member
+		}
+		if res["subject"] != subject {
+			continue // subject reassigned, stale set member
 		}
 		out = append(out, sessions.Session{
 			ID:         ids[i],

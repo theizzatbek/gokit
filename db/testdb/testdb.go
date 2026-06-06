@@ -18,21 +18,21 @@ import (
 
 // sharedContainer is the process-wide single-node container reused by
 // [Spin] calls that did NOT pass [WithFreshPerTest]. Lazy init via
-// shared.once on the first call; cleanup is registered with
-// t.Cleanup on each caller so the container is Terminated only after
-// the LAST test exits (testing.T cleanup runs in reverse order on
-// the binary's exit).
+// shared.once on the first call. Termination is intentionally NOT
+// handled here — testcontainers' Reaper ("Ryuk") tears the container
+// down when the test binary exits. A previous version used a
+// per-caller refcount to terminate when refs hit 0, but that broke
+// sequential tests: refs went 1→0→1 between tests, the cleanup
+// terminated the container at refs==0, and the next Spin reused
+// stale shared.cfg pointing at the dead container.
 //
 // The reuse pattern intentionally trades a bit of cross-test
 // coupling (everything lands in the same physical DB) for a 5-10x
 // speedup on suites that touch Postgres in every test.
 type sharedContainer struct {
-	once    sync.Once
-	cfg     db.Config
-	cleanup func() // single-shot Terminate
-	err     error
-	refs    int32
-	refMu   sync.Mutex
+	once sync.Once
+	cfg  db.Config
+	err  error
 }
 
 var shared sharedContainer
@@ -64,32 +64,22 @@ func Spin(t *testing.T, opts ...Option) *db.DB {
 }
 
 // spinShared bootstraps (or reuses) the process-wide container and
-// returns a *db.DB scoped to a fresh schema.
+// returns a *db.DB scoped to a fresh schema. Container teardown is
+// delegated to testcontainers Reaper (Ryuk) at process exit.
 func spinShared(t *testing.T, cfg config) *db.DB {
 	shared.once.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.startupTimeout)
 		defer cancel()
-		c, dbCfg, err := startSinglePostgres(ctx, cfg)
+		_, dbCfg, err := startSinglePostgres(ctx, cfg)
 		if err != nil {
 			shared.err = err
 			return
 		}
 		shared.cfg = dbCfg
-		shared.cleanup = func() {
-			_ = testcontainers.TerminateContainer(c)
-		}
 	})
 	if shared.err != nil {
 		t.Fatalf("testdb: shared container init: %v", shared.err)
 	}
-
-	// Reference-count callers so the shared cleanup fires exactly
-	// once after the final Spin caller's t.Cleanup runs. Without
-	// this, the FIRST test's t.Cleanup would terminate the container
-	// and every subsequent test in the same binary would fail.
-	shared.refMu.Lock()
-	shared.refs++
-	shared.refMu.Unlock()
 
 	d, err := db.Connect(context.Background(), shared.cfg)
 	if err != nil {
@@ -108,19 +98,9 @@ func spinShared(t *testing.T, cfg config) *db.DB {
 		t.Fatalf("testdb: set search_path: %v", err)
 	}
 	t.Cleanup(func() {
-		// Drop the per-test schema; ignore failure (the container
-		// will be torn down anyway when refs hits 0).
 		_, _ = d.Pool().Exec(context.Background(),
 			fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schema))
 		d.Close()
-
-		shared.refMu.Lock()
-		shared.refs--
-		last := shared.refs == 0
-		shared.refMu.Unlock()
-		if last && shared.cleanup != nil {
-			shared.cleanup()
-		}
 	})
 	return d
 }

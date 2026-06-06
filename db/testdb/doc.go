@@ -21,11 +21,13 @@
 // # Image policy
 //
 // Single-node uses the official `postgres:16-alpine` image (~80MB).
-// Cluster uses `bitnami/postgresql:16` (~600MB) because Bitnami's
-// image carries env-driven streaming-replication wiring out of the
-// box — implementing the same dance against the official image
-// would mean shell-scripting pg_basebackup + recovery.conf inside
-// the test helper.
+// Cluster uses `bitnamilegacy/postgresql:16` (~600MB) because
+// Bitnami's image carries env-driven streaming-replication wiring out
+// of the box — implementing the same dance against the official
+// image would mean shell-scripting pg_basebackup + recovery.conf
+// inside the test helper. The `bitnamilegacy` namespace is the
+// community fallback for Bitnami's free public images after the
+// upstream `bitnami/` namespace was removed in late 2025.
 //
 // Override either image via [WithImage] / [WithClusterImage] when
 // your CI needs to mirror a specific version.
