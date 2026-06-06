@@ -272,14 +272,25 @@ type Snapshot struct {
 }
 ```
 
-Дефолтный `AIMDController` — additive-increase / multiplicative-decrease
-(TCP-style):
+Шипятся две реализации `Controller`:
+
+**`AIMDController`** — additive-increase / multiplicative-decrease (TCP-style):
 - `Latency.Count == 0` (no traffic) → hold capacity. Защищает от unintended
   shrink при open-circuit-period.
 - `ErrorRate ≥ ErrorThreshold` → `cap × DecreaseFactor`, floor 1.
 - Иначе → `cap + IncreaseStep`.
 
-Vegas / Gradient2 controllers — open question (v2 за тем же interface).
+**`VegasController`** — TCP-Vegas-inspired, latency-aware. Запоминает минимальный наблюдённый `P50` как baseline (proxy на "propagation delay") и оценивает queue length по отношению `current P50 / baseline`:
+- `Latency.Count == 0` → hold (та же конвенция, что и AIMD).
+- `ErrorRate ≥ ErrorThreshold` → `cap / 2`, floor 1 (TCP Vegas сам по себе не реагирует на loss-style сигналы; в service-mesh контексте трактуем 5xx + cancellation как packet loss).
+- `queueSize = capacity - capacity * baseline / P50`:
+  - `queueSize < Alpha` (default 2) → `cap + 1` (есть headroom — push).
+  - `queueSize > Beta` (default 6) → `cap - 1` (началось queueing — pull back).
+  - Между Alpha и Beta — hold (sweet spot).
+
+Когда выбирать что: AIMD реагирует только на ошибки и monotonically растёт между ними — хорош, если downstream хорошо различает success/failure и latency не главный сигнал. Vegas реагирует на latency raise задолго до того, как downstream начнёт фейлиться — лучше для случаев, когда нагрузка деградирует постепенно (DB connection pool exhaustion, slow downstream без 5xx).
+
+Расширение: `Controller` — open extension point. Gradient2 или другие алгоритмы могут жить за тем же interface'ом — write a struct with a single `Next(Snapshot) int` method.
 
 ### Error rate источник
 

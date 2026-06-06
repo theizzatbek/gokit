@@ -113,6 +113,105 @@ func (c *AIMDController) Next(s Snapshot) int {
 	return s.Capacity + inc
 }
 
+// VegasController implements a TCP-Vegas-inspired control law on
+// top of the bulkhead's per-tick Snapshot.
+//
+// The classic Vegas insight: by tracking the minimum observed
+// latency ("base"), you can estimate how much queueing the current
+// observed latency reveals — without needing access to internal
+// queue counters. Translated to bulkhead capacity:
+//
+//	estimated  = capacity * base / p50    (ideal-rate slots in flight)
+//	queueSize  = capacity - estimated     (slots stuck behind queueing)
+//
+//	if queueSize < Alpha  → +1   (more headroom available; push)
+//	if queueSize > Beta   → -1   (queueing detected; pull back)
+//	otherwise              hold (sweet spot)
+//
+// On top of the latency loop, hard errors trigger a multiplicative
+// cut (capacity / 2, floored at 1) regardless of queueSize — TCP
+// Vegas does not handle loss-style signals, but in a service-mesh
+// context we treat upstream 5xx + cancellations as the same
+// distress signal as packet loss.
+//
+// No-traffic ticks (Latency.Count == 0) leave capacity unchanged —
+// same convention as [AIMDController]. The base-latency floor
+// updates monotonically downward as faster samples land, so a
+// long-running bulkhead naturally tracks an improving downstream
+// without needing periodic resets.
+type VegasController struct {
+	// Alpha is the lower queue-size threshold. queueSize below this
+	// triggers additive growth (capacity += 1). Default 2.
+	Alpha int
+
+	// Beta is the upper queue-size threshold. queueSize above this
+	// triggers additive shrink (capacity -= 1). Must be > Alpha;
+	// default Alpha + 4 (or 6 when Alpha is also default).
+	Beta int
+
+	// ErrorThreshold triggers a multiplicative cut independent of
+	// the latency-based queue estimation. When ErrorRate >= threshold
+	// the controller returns capacity/2 (floored at 1). Default 0.1
+	// (10%).
+	ErrorThreshold float64
+
+	mu          sync.Mutex
+	baseLatency time.Duration // monotone-down EWMA-ish minimum
+}
+
+// Next implements [Controller].
+func (v *VegasController) Next(s Snapshot) int {
+	if s.Latency.Count == 0 {
+		return s.Capacity
+	}
+
+	v.mu.Lock()
+	if v.baseLatency == 0 || (s.Latency.P50 > 0 && s.Latency.P50 < v.baseLatency) {
+		v.baseLatency = s.Latency.P50
+	}
+	base := v.baseLatency
+	v.mu.Unlock()
+
+	threshold := v.ErrorThreshold
+	if threshold <= 0 {
+		threshold = 0.1
+	}
+	if s.ErrorRate >= threshold {
+		next := s.Capacity / 2
+		if next < 1 {
+			return 1
+		}
+		return next
+	}
+
+	if s.Latency.P50 <= 0 || base <= 0 {
+		return s.Capacity
+	}
+
+	alpha := v.Alpha
+	if alpha <= 0 {
+		alpha = 2
+	}
+	beta := v.Beta
+	if beta <= alpha {
+		beta = alpha + 4
+	}
+
+	estimated := int(float64(s.Capacity) * float64(base) / float64(s.Latency.P50))
+	queueSize := s.Capacity - estimated
+	if queueSize < alpha {
+		return s.Capacity + 1
+	}
+	if queueSize > beta {
+		next := s.Capacity - 1
+		if next < 1 {
+			return 1
+		}
+		return next
+	}
+	return s.Capacity
+}
+
 // adaptiveState holds the runtime data the tick loop reads + writes.
 // Constructed inside [New] when [WithAdaptive] is set; nil otherwise.
 type adaptiveState struct {
