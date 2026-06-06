@@ -179,7 +179,7 @@ kit gen k8s --name myservice --image myreg/myservice:v1.0 \
 
 #### `kit gen db-cluster [--replicas N] [flags]`
 
-Эмитит `docker-compose.yml` для Postgres primary + N standby со streaming replication из коробки (через bitnami/postgresql env vars). Используйте для локального dev'а кода, который консьюмит kit's multi-replica routing.
+Эмитит `docker-compose.yml` для Postgres primary + N standby со streaming replication из коробки (через bitnamilegacy/postgresql env vars). Используйте для локального dev'а кода, который консьюмит kit's multi-replica routing.
 
 ```sh
 kit gen db-cluster --replicas 2 --out docker-compose.db.yml
@@ -194,7 +194,7 @@ DB_READ_URLS=postgres://app:changeme@localhost:5433/appdb,postgres://app:changem
 | Флаг | По умолчанию | Заметки |
 |---|---|---|
 | `--replicas N` | 1 | Число standby (min 1). |
-| `--image IMG` | `bitnami/postgresql:16` | Должен поддерживать `POSTGRESQL_REPLICATION_MODE`. |
+| `--image IMG` | `bitnamilegacy/postgresql:16` | Должен поддерживать `POSTGRESQL_REPLICATION_MODE`. |
 | `--db NAME` | `appdb` | Имя application БД. |
 | `--user USER` | `app` | Application user. |
 | `--password PW` | `changeme` | Application password. **Замените для любого persistent setup'а.** |
