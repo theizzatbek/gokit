@@ -152,6 +152,25 @@ This is the bootstrap entry; prior history lives in `git log`.
   already covered by an internal mutex).
 
 ### Added
+- `db/testdb.BootCluster(ctx, replicas, opts...) (*Cluster, func(), error)`
+  — lower-level cluster bootstrap helper that mirrors what
+  SpinCluster wraps, minus the `*testing.T` coupling. Returns the
+  Cluster handle plus a teardown closure the caller owns. Designed
+  for `TestMain` — `SpinCluster` boots a fresh cluster on every
+  call (~15-30s) because cross-test replication state does not
+  isolate cleanly the way schema namespaces do, which adds up
+  fast in packages with multiple cluster-based tests;
+  `BootCluster` lets such packages share one cluster across the
+  whole binary and pay the boot cost exactly once. Trade-off is
+  explicit in the doc-string + README: caller owns cross-test
+  isolation (TRUNCATE rows between tests, watch for WAL /
+  pg_stat_replication leaks, recreate schemas after DDL).
+  `teardown` is non-nil even when err != nil — partial boots
+  still need it called. The `SpinCluster` doc-string + package
+  README now also call out the performance-trap of per-call boots
+  explicitly so readers reach for `BootCluster` before adding
+  their tenth `SpinCluster` call in a row.
+
 - `bulkhead.VegasController` — second built-in implementation of
   the `Controller` extension point, joining `AIMDController`. A
   TCP-Vegas-inspired control law that learns a baseline latency
