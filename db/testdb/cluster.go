@@ -47,9 +47,25 @@ type Cluster struct {
 // dance the kit would otherwise have to script. Override via
 // [WithClusterImage] when CI must pin a specific tag.
 //
-// Boot time: ~15-30s for primary + 1 replica on a warm Docker cache;
-// scales roughly linearly with replica count. The startup timeout
-// (default 120s, override via [WithStartupTimeout]) bounds the wait.
+// # Performance trap
+//
+// Boot time: ~15-30s for primary + 1 replica on a warm Docker
+// cache; scales roughly linearly with replica count. Every
+// SpinCluster call pays that cost from scratch — unlike [Spin]
+// (which reuses one single-node container across the whole test
+// binary via schema isolation), SpinCluster is per-call by design
+// because streaming replication state does not isolate cleanly
+// across tests in the same way schema namespaces do.
+//
+// If you have multiple cluster-based tests in one package, the
+// bootstrap cost adds up fast. Use [BootCluster] from `TestMain`
+// to share one cluster across the package and pay the cost once
+// — but accept the trade-off: you own cross-test isolation
+// yourself (TRUNCATE / DROP SCHEMA, watch for WAL state that
+// leaks across tests).
+//
+// The startup timeout (default 120s, override via
+// [WithStartupTimeout]) bounds the wait.
 func SpinCluster(t *testing.T, replicas int, opts ...ClusterOption) *Cluster {
 	t.Helper()
 	if testing.Short() {
@@ -71,6 +87,54 @@ func SpinCluster(t *testing.T, replicas int, opts ...ClusterOption) *Cluster {
 	}
 	t.Cleanup(teardown)
 	return cluster
+}
+
+// BootCluster is the lower-level cluster bootstrap helper that
+// SpinCluster wraps. Returns the [Cluster] handle plus a teardown
+// closure the caller must invoke when done — no [*testing.T]
+// integration, no t.Cleanup magic.
+//
+// Use from `TestMain` when one cluster should serve every test in
+// the package and the ~15-30s boot cost is worth paying exactly
+// once:
+//
+//	var shared *testdb.Cluster
+//
+//	func TestMain(m *testing.M) {
+//	    if testing.Short() {
+//	        os.Exit(m.Run())
+//	    }
+//	    ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+//	    defer cancel()
+//	    cluster, teardown, err := testdb.BootCluster(ctx, 1)
+//	    if err != nil {
+//	        log.Fatalf("BootCluster: %v", err)
+//	    }
+//	    defer teardown()
+//	    shared = cluster
+//	    os.Exit(m.Run())
+//	}
+//
+// Trade-off: SpinCluster gives every test a fresh, isolated
+// cluster — replication state, WAL, pg_hba — start clean.
+// BootCluster shares one cluster across the package, which means
+// the caller owns cross-test isolation: TRUNCATE rows between
+// tests, watch for WAL or pg_stat_replication state that leaks,
+// re-create schemas if a test runs DDL. The kit will not enforce
+// any of that — the helper is intentionally raw.
+//
+// teardown is non-nil even when err != nil — partial boot leaves
+// containers + network around and the caller must call teardown
+// to free them. Calling teardown more than once is safe but
+// pointless.
+//
+// `replicas == 0` is treated as 1 (matching SpinCluster).
+func BootCluster(ctx context.Context, replicas int, opts ...ClusterOption) (*Cluster, func(), error) {
+	if replicas <= 0 {
+		replicas = 1
+	}
+	cfg := applyClusterOptions(opts)
+	return bootCluster(ctx, replicas, cfg)
 }
 
 // bootCluster does the orchestration: docker network, primary

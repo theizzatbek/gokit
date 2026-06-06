@@ -99,7 +99,7 @@ func TestReplicationLag_Settles(t *testing.T) {
 
 - **Image: `bitnamilegacy/postgresql:16`** — Bitnami's image имеет env-driven streaming-replication wiring out of the box (`POSTGRESQL_REPLICATION_MODE=master|slave`). Vanilla `postgres:` image потребовал бы pg_basebackup + recovery.conf скрипты внутри testcontainer setup'а.
 - **Docker network** — primary и все standby живут в общей сети; standbys резолвят primary через alias `"primary"`.
-- **Per-call контейнеры** — `SpinCluster` ВСЕГДА строит новые контейнеры, потому что cross-test state в реплицирующей паре сложно почистить.
+- **Per-call контейнеры по умолчанию** — `SpinCluster` ВСЕГДА строит новые контейнеры на вызов, потому что cross-test state в реплицирующей паре сложно почистить автоматически (streaming WAL, `pg_stat_replication`, `pg_hba.conf` тоже не пере-`SET search_path`-ишь). См. `BootCluster` ниже для package-level reuse.
 - **WaitForReplication** — блокирует пока `pg_current_wal_lsn() - pg_last_wal_replay_lsn() == 0` на каждом replica или ctx не expired'нулся. Polling каждые 50ms.
 
 ### Опции (в дополнение к Spin'овым)
@@ -120,8 +120,39 @@ func TestReplicationLag_Settles(t *testing.T) {
 
 - **Используйте `Spin` (а не `SpinCluster`) везде где возможно** — он в 10-50x быстрее.
 - **Per-test schema через `Spin` обычно достаточно** для cross-test isolation'а. Reach for `WithFreshPerTest` только когда confirmed cross-test interaction.
-- **Cluster boot занимает время** — группируйте cluster-зависимые тесты в один `_test.go` файл и (если testcontainers-go поддерживает) reuse контейнеры между ними через дополнительный wrapper.
+- **Cluster boot занимает время** — для повторных cluster-зависимых тестов внутри одного пакета используйте `BootCluster` из `TestMain` (см. ниже), boot платится один раз.
 - **Не забывайте `WaitForReplication`** перед каждым read'ом с replicas — без этого получите flaky tests когда replica lag > 0.
+
+### Package-level reuse через `BootCluster`
+
+`SpinCluster` нужен `*testing.T` и регистрирует cleanup через `t.Cleanup` — отлично для per-test изоляции, но 15-30s boot платится за каждый cluster-зависимый тест. Если у вас несколько таких тестов в одном пакете, шарьте кластер через `TestMain`:
+
+```go
+var shared *testdb.Cluster
+
+func TestMain(m *testing.M) {
+    if testing.Short() {
+        os.Exit(m.Run())
+    }
+    ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+    defer cancel()
+    cluster, teardown, err := testdb.BootCluster(ctx, 1)
+    if err != nil {
+        log.Fatalf("BootCluster: %v", err)
+    }
+    defer teardown()
+    shared = cluster
+    os.Exit(m.Run())
+}
+
+func TestSomething(t *testing.T) {
+    // используем shared.Primary / shared.Replicas / shared.Multi
+}
+```
+
+**Trade-off.** `SpinCluster` даёт каждому тесту fresh cluster (WAL, replication state, `pg_stat_replication` — всё чистое). `BootCluster` шарит один cluster — caller сам отвечает за cross-test isolation: TRUNCATE rows между тестами, наблюдает за WAL/replication state, который может протечь, пере-создаёт schemas если test делает DDL. Kit ничего не enforce'ит — helper намеренно raw.
+
+`teardown` non-nil даже при `err != nil` — partial boot оставляет containers + network, caller должен дёрнуть `teardown` чтобы освободить. Повторный вызов `teardown` безопасен, но бесполезен.
 
 ## Limitations
 

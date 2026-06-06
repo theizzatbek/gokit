@@ -14,9 +14,19 @@
 //     that depends on the kit's multi-replica routing (PR #138) or to
 //     reproduce production-like read-after-write timing issues.
 //
-// Both helpers register cleanup with t.Cleanup so callers never have
-// to remember Close()/Terminate(). Both skip under `go test -short`
-// (a Docker daemon is required for any container-backed test).
+//   - [BootCluster] — same wiring as SpinCluster but without the
+//     [*testing.T] coupling: returns the [Cluster] + a teardown
+//     closure the caller owns. Use from `TestMain` to share one
+//     cluster across an entire test binary — ~15-30s boot paid once
+//     instead of per test. Caller takes responsibility for
+//     cross-test isolation (TRUNCATE between tests, watch WAL state).
+//
+// Spin / SpinCluster register cleanup with t.Cleanup so callers
+// never have to remember Close()/Terminate() and skip themselves
+// under `go test -short`. BootCluster runs unconditionally — TestMain
+// callers should guard with `if testing.Short() { os.Exit(m.Run()) }`
+// before calling it. A Docker daemon is required for any
+// container-backed test.
 //
 // # Image policy
 //
