@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A composable Go service kit (`github.com/theizzatbek/gokit`, Go 1.23+) — eight independently importable packages that cover routing, errors, database, auth, outbound HTTP, declarative outbound APIs, and NATS event streaming. Each subpackage lives under the umbrella module path; root `gokit` package itself has no exported symbols — it exists only as the module path. Tests use stdlib + each subpackage's specific helpers (testcontainers for `db`/`auth/refreshpg`/`auth/refreshredis`/`clients/nats`; in-process Fiber test helpers for `fibermap`).
 
-The YAML-declarative router that originally gave the repo its name now lives at `fibermap/` as one of the eight peers. The "Architecture" section below describes that subpackage specifically — those patterns are not necessarily mirrored in `errs`, `db`, `auth`, or `clients/*` (each has its own design spec under `docs/superpowers/specs/` and a kit-overview page under `docs/packages/`).
+The YAML-declarative router that originally gave the repo its name now lives at `fibermap/` as one of the eight peers. The "Architecture" section below describes that subpackage specifically — those patterns are not necessarily mirrored in `errs`, `db`, `auth`, or `clients/*` (each has its own design spec under `docs/superpowers/specs/` and a per-package `README.md` next to the code).
 
 ## Commands
 
@@ -24,7 +24,7 @@ There is no Makefile and no project-wide linter config.
 
 ## Architecture — `fibermap/` subpackage internals
 
-The notes in this section describe the `gokit/fibermap` router (the YAML build-once-mount-once configurator). Same patterns are not necessarily mirrored in other subpackages — see `docs/packages/<area>.md` for those.
+The notes in this section describe the `gokit/fibermap` router (the YAML build-once-mount-once configurator). Same patterns are not necessarily mirrored in other subpackages — see the per-package `README.md` next to the code for those.
 
 The whole router is a build-once-mount-once configurator (`Engine[T]`) parameterized by the per-request payload type `T`. Understanding the system means understanding three things that span files:
 
@@ -52,17 +52,25 @@ Register stage is the one exception that does **not** return an error: `Register
 
 ## Subpackages
 
-Each entry is a one-liner: what it is + где смотреть полное описание. Полные API-спеки (контракты, env-vars, observability) живут в `docs/packages/`.
+Полный каталог пакетов + 1-line описание каждого — в [`README.md`](README.md)
+(раздел «Что в коробке»). API-контракты живут в `<subpkg>/README.md` и
+`<subpkg>/doc.go` рядом с кодом — это canonical источник, синхронизировать
+кит-overview с per-package README дороже чем держать одну точку правды.
 
-- `errs/`, `errs/errsval/` — типизированные ошибки + HTTP-маппинг → [docs/packages/errs.md](docs/packages/errs.md)
-- `db/`, `db/sqb/`, `db/testdb/` — pgx-pool, мульти-реплики, testcontainers → [docs/packages/db.md](docs/packages/db.md)
-- `auth/`, `auth/refreshpg/`, `auth/refreshredis/`, `auth/apikeypg/`, `auth/fibermount/`, `auth/sessions/`, `auth/sessionsredis/` — JWT, sessions, refresh, API keys → [docs/packages/auth.md](docs/packages/auth.md)
-- `clients/nats/`, `clients/httpc/`, `clients/apimap/`, `clients/natsmap/`, `clients/redis/`, `clients/cache/`, `clients/webhooks/` — outbound integrations → [docs/packages/clients.md](docs/packages/clients.md)
-- `breaker/`, `bulkhead/`, `batch/` — resilience-примитивы → [docs/packages/resilience.md](docs/packages/resilience.md)
-- `cronmap/` — декларативный cron поверх YAML → [docs/packages/cronmap.md](docs/packages/cronmap.md)
-- `fibermap/sse/`, `fibermap/ws/`, `fibermap/wsnats/`, `fibermap.ErrorHandler` — стримы и WebSocket поверх router'a → [docs/packages/fibermap-extras.md](docs/packages/fibermap-extras.md)
-- `sentrykit/` — Sentry bootstrap + Fiber middleware + slog breadcrumbs → [docs/packages/sentrykit.md](docs/packages/sentrykit.md)
-- `service/` — all-in-one bootstrap (бандл всего вышеперечисленного) → [docs/packages/service.md](docs/packages/service.md)
+Ключевые группы по доменам, чтобы быстро ориентироваться:
+
+- **Базовые блоки** — `fibermap/`, `errs/`, `errs/errsval/`, `reqctx/`
+- **БД** — `db/`, `db/sqb/`, `db/testdb/`, `db/migrate/`, `db/lock/`, `db/jobs/`, `db/outbox/`+`outboxnats/`, `db/inbox/`+`inboxnats/`
+- **Auth** — `auth/`, `auth/refreshpg/`, `auth/refreshredis/`, `auth/apikeypg/`, `auth/sessions/`+`sessionsredis/`, `auth/fibermount/`
+- **Outbound** — `clients/httpc/`, `clients/apimap/`
+- **NATS** — `clients/nats/`, `clients/natsmap/`+`natsgw/`
+- **Redis** — `clients/redis/`, `clients/cache/`, `clients/ratelimit/`
+- **Прочие clients** — `clients/s3/`, `clients/email/`, `clients/webhooks/`
+- **Resilience** — `breaker/`, `bulkhead/`, `batch/`
+- **Observability** — `otelkit/`, `sentrykit/`
+- **Scheduling** — `cronmap/`
+- **Operations** — `audit/`, `runbook/`, `fibermap/uploadguard/`
+- **Bundle** — `service/`
 
 ## YAML shape
 
