@@ -230,18 +230,22 @@ func TestWorker_FailedPublishRetries(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = w.Stop() })
 
-	waitFor(t, 2*time.Second, func() bool { return atomic.LoadInt32(&attempts) >= 3 })
-
+	// Wait for the worker's Tx to commit, not just the in-memory
+	// counter — attempts is bumped INSIDE publishFn but markPublished
+	// + commit happen after. Polling published_at directly removes
+	// the race that made this test flake under -count=1.
 	var (
 		attemptsCol int
 		lastError   string
 		published   *time.Time
 	)
-	if err := d.QueryRow(ctx,
-		`SELECT attempts, COALESCE(last_error, ''), published_at FROM outbox`).Scan(
-		&attemptsCol, &lastError, &published); err != nil {
-		t.Fatalf("query: %v", err)
-	}
+	waitFor(t, 2*time.Second, func() bool {
+		_ = d.QueryRow(ctx,
+			`SELECT attempts, COALESCE(last_error, ''), published_at FROM outbox`).Scan(
+			&attemptsCol, &lastError, &published)
+		return published != nil && atomic.LoadInt32(&attempts) >= 3
+	})
+
 	if attemptsCol < 2 {
 		t.Errorf("attempts = %d, want >=2 (transient failures should bump count)", attemptsCol)
 	}
