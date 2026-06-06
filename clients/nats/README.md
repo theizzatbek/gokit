@@ -370,6 +370,25 @@ client.EnsureStream(ctx, natsclient.StreamConfig{
 
 Для per-test изоляции используйте уникальные stream + subject имена per test.
 
+## Escape hatches — `Conn()` / `JetStream()`
+
+`Client.Conn()` и `Client.JetStream()` возвращают сырые `*nats.Conn` и `nats.JetStreamContext` — для advanced-операций, которые кит пока не оборачивает (raw subscriptions, custom request/reply, consumer-config tuning, stream snapshots, `AccountInfo`).
+
+**Это passthrough.** Кит **не** надевает свои observability- и resilience-слои поверх direct-вызовов:
+
+| Слой | Через `Publish` / `PublishViaCodec` / `PublishRaw` / `Subscribe` | Через `Conn()` / `JetStream()` напрямую |
+|---|---|---|
+| `*errs.Error` mapping | ✓ | ✗ — caller владеет error-mapping'ом |
+| Prometheus `nats_*` collector'ы | ✓ | ✗ — direct-вызовы не observ'ятся |
+| Breaker / default-timeout | ✓ | ✗ |
+| W3C TraceContext инжекция | ✓ | ✗ — caller вызывает `natsclient.InjectTraceContext` сам, если нужно |
+
+**Lifecycle.** Кит owns `Close` — caller'ы **MUST NOT** делать `c.Conn().Close()` / `c.Conn().Drain()` напрямую. Это bypass'ит идемпотентный `Client.Close` и оставляет внутреннее состояние kit'а out-of-sync. Закрытие — через `Client.Close` (или через `service.Close` если bundle'нут).
+
+**v1 contract.** Signature'ы `Conn()` и `JetStream()` остаются stable и кит **не планирует** начинать wrapping в существующих методах — "passthrough" это контракт, не имплементационная случайность. Если нужен behaviour, которого кит не expose'ит — лучше открыть issue / PR на новый typed method, чем строить hot-path-инфраструктуру на этих hatch'ах.
+
+`JetStream()` возвращает `nil` в core-only режиме (когда Connect был без jetstream-opt'ов). Nil-check перед использованием.
+
 ## Ограничения
 
 - **JetStream-first дизайн.** Subjects, не покрытые никаким stream'ом, авто-используют core NATS (best-effort). Если вам нужен исключительно core NATS, используйте сырой `nats.go` и пропустите эту обёртку.

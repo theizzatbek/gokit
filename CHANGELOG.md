@@ -81,6 +81,25 @@ This is the bootstrap entry; prior history lives in `git log`.
   `rt.TriggerJob(ctx, "x", cronmap.OverrideOK{})`.
 
 ### Documentation
+- `clients/nats.(*Client).Conn()` / `JetStream()` — escape-hatch
+  contract spelled out ahead of v1. The old doc-string warned
+  that errors don't get *errs.Error wrapping but stopped there;
+  the full passthrough list was tribal knowledge. The doc-string
+  + README now enumerate every layer the kit deliberately does
+  NOT apply to direct-handle calls: error-mapping, Prometheus
+  `nats_*` collectors, breaker / default-timeout, W3C
+  TraceContext injection — all bypassed when callers reach for
+  the raw conn instead of `Publish` / `PublishViaCodec` /
+  `PublishRaw` / `Subscribe`. Also spells out lifecycle: Close
+  on the underlying conn is kit-owned, callers MUST NOT call
+  `c.Conn().Close()` / `c.Conn().Drain()` directly (that
+  bypasses the idempotent `Client.Close` and desynchronises
+  internal state). `JetStream()` returns nil in core-only mode —
+  nil-check before use. v1 contract: signatures stable,
+  passthrough semantics stable; missing behaviours should land
+  as new typed methods, not as wrapping retrofitted onto these
+  hatches.
+
 - `clients/natsmap/natsgw` — README expanded with two missing
   sections ahead of v1: **Observability** (gateway carries no
   collectors / logger of its own — handler sits behind Fiber's
