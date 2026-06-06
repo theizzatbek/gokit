@@ -45,6 +45,15 @@ This is the bootstrap entry; prior history lives in `git log`.
   cluster / sentinel mode. The Lua sliding-window script is
   single-mode-only by design (all keys pin to one node); the early
   validation surfaces the constraint at construction time.
+- `fibermap/sse.Stream` now CAS-guards `Send` / `SendJSON` /
+  `Comment` against concurrent use. The doc-string has stated
+  "not safe for concurrent use" since the package shipped, but
+  there was no runtime detection — a second goroutine sneaking in
+  would either corrupt the wire frame (interleaved `event:` /
+  `data:` lines) or double-flush the bufio buffer. The CAS guard
+  fails loudly: the second caller panics with a guiding message
+  naming the offending method, pgx-style. Sequential reuse from
+  one goroutine (the canonical happy path) is unaffected.
 
 ### Added
 - `db/migrate/` — four additive helpers around the existing runner.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/valyala/fasthttp"
@@ -32,14 +33,36 @@ type HandlerFunc[T any] func(ctx context.Context, c *fibermap.Context[T], s *Str
 //
 // Not safe for concurrent use — pin one goroutine per Stream. Use a
 // channel + a single goroutine fan-in if you need multi-publisher
-// SSE.
+// SSE. Concurrent calls to Send / SendJSON / Comment are detected
+// at runtime via a CAS guard and panic the second caller with a
+// guiding message (pgx-style) rather than corrupting the wire frame
+// or doubly-flushing the buffer.
 type Stream struct {
 	w *bufio.Writer
 	// err records the first non-nil write/flush failure so subsequent
 	// Sends become no-ops without overwriting the diagnostic. Surfaced
 	// via the Send/Comment return value.
 	err error
+	// inUse guards Send / SendJSON / Comment from concurrent entry.
+	// Each method CAS-flips false→true at entry and back at exit; a
+	// failed CAS panics with a guiding message rather than racing on
+	// the underlying bufio.Writer.
+	inUse atomic.Bool
 }
+
+// enter / exit form the CAS guard used by Send / SendJSON / Comment
+// to make concurrent use fail loudly. Internal sendLocked /
+// commentLocked variants bypass the guard so SendJSON can call
+// Send-style logic without re-entering its own guard.
+func (s *Stream) enter(method string) {
+	if !s.inUse.CompareAndSwap(false, true) {
+		panic("fibermap/sse: concurrent " + method +
+			" on the same Stream — pin one goroutine per Stream " +
+			"or fan-in writes through a channel")
+	}
+}
+
+func (s *Stream) exit() { s.inUse.Store(false) }
 
 // Send writes one SSE event frame:
 //
@@ -51,6 +74,15 @@ type Stream struct {
 // lines following the SSE spec. Auto-flushes the underlying writer
 // so the client sees the event immediately.
 func (s *Stream) Send(event, data string) error {
+	s.enter("Send")
+	defer s.exit()
+	return s.sendLocked(event, data)
+}
+
+// sendLocked is the Send body without the concurrency guard. Used by
+// SendJSON so it can hold its own guard while delegating frame-write
+// logic without re-entering Send's CAS.
+func (s *Stream) sendLocked(event, data string) error {
 	if s.err != nil {
 		return s.err
 	}
@@ -91,6 +123,8 @@ func (s *Stream) Send(event, data string) error {
 // payload then forwards to Send with the encoded body. JSON encode
 // failures surface as the returned error (no frame is written).
 func (s *Stream) SendJSON(event string, payload any) error {
+	s.enter("SendJSON")
+	defer s.exit()
 	if s.err != nil {
 		return s.err
 	}
@@ -98,7 +132,7 @@ func (s *Stream) SendJSON(event string, payload any) error {
 	if err != nil {
 		return err
 	}
-	return s.Send(event, string(raw))
+	return s.sendLocked(event, string(raw))
 }
 
 // Comment writes an SSE comment frame (`: <text>`). Use for keep-
@@ -107,6 +141,8 @@ func (s *Stream) SendJSON(event string, payload any) error {
 // comment keeps the stream alive without delivering a real event
 // the client has to ignore.
 func (s *Stream) Comment(text string) error {
+	s.enter("Comment")
+	defer s.exit()
 	if s.err != nil {
 		return s.err
 	}
