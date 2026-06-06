@@ -347,9 +347,7 @@ row := svc.DB.ReadQueryRow(db.ReadFromPrimary(ctx),
 
 | Метод | Заметки |
 |---|---|
-| `(d) ReadPool() *pgxpool.Pool` | Первый read-pool для back-compat. `nil` когда replica нет. |
-| `(d) ReadPools() []ReadPoolInfo` | Все read-pool'ы с их именами (`standby` или `standby-N`). |
-| `(d) HasReadReplica() bool` | True если хотя бы один replica настроен. |
+| `(d) ReadPools() []ReadPoolInfo` | Все read-pool'ы с их именами (`standby` или `standby-N`). `len() == 0` когда replica не настроен. |
 
 ## Replication observability
 

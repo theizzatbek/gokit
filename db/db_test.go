@@ -270,9 +270,9 @@ func TestReadQueryRow_FallsBackToPrimary_WhenNoReplica(t *testing.T) {
 	}
 }
 
-func TestReadPool_NilWhenNoReplica(t *testing.T) {
+func TestReadPools_EmptyWhenNoReplica(t *testing.T) {
 	d := startTestDB(t)
-	if d.ReadPool() != nil {
-		t.Fatal("expected ReadPool() == nil with HasReadReplica=false")
+	if got := d.ReadPools(); len(got) != 0 {
+		t.Fatalf("expected ReadPools() empty with HasReadReplica=false, got %d entries", len(got))
 	}
 }

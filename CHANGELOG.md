@@ -8,6 +8,16 @@ This is the bootstrap entry; prior history lives in `git log`.
 
 ## [Unreleased]
 
+### Removed (breaking, pre-v1)
+- `db.(*DB).ReadPool() *pgxpool.Pool` and `db.(*DB).HasReadReplica() bool`
+  — single-pool back-compat accessors. Both predate the multi-replica
+  refactor; new code should use `(*DB).ReadPools()` (the full set with
+  names, health and lag) or `len(d.ReadPools()) > 0` for the boolean
+  check. Dropped ahead of v1 to keep the stable surface lean.
+  `Config.HasReadReplica` (env-driven knob that opens a standby pool
+  against the same host) stays — it is not back-compat, just an
+  alternative to `Config.ReadURLs` for the single-replica case.
+
 ### Added
 - `db/migrate/` — four additive helpers around the existing runner.
   Existing Up / UpTo signatures gain variadic `Option`s but stay
