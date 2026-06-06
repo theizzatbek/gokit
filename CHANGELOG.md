@@ -81,6 +81,23 @@ This is the bootstrap entry; prior history lives in `git log`.
   `rt.TriggerJob(ctx, "x", cronmap.OverrideOK{})`.
 
 ### Documentation
+- `clients/natsmap/natsgw` — README expanded with two missing
+  sections ahead of v1: **Observability** (gateway carries no
+  collectors / logger of its own — handler sits behind Fiber's
+  observability stack; HTTP-side metrics from
+  `service.WithFiberMetrics`, span coverage from `otelfiber`,
+  NATS-side `natsmap_publish_total{publisher,outcome}` + duration
+  histogram cover gateway publishes the same as direct in-process
+  ones; W3C TraceContext auto-injects into NATS headers via
+  `natsclient.publishBytes`) and **Когда НЕ использовать**
+  (critical-path low-latency from a Go service that can import
+  natsmap directly; at-least-once expectations without an outbox
+  in `WithCustomHandler`; multi-tenant ingestion where subject
+  allowlist alone can't gate cross-tenant publishes). Parent
+  `clients/natsmap/README.md` now cross-references the gateway as
+  well, so readers landing on the natsmap overview see the
+  HTTP-fronted option without grepping for it.
+
 - `clients/webhooks.WorkerConfig.Propagator` — clarified the
   contract ahead of v1 freeze. The field is the single source of
   truth for outbound tracing header injection: the worker calls

@@ -232,6 +232,23 @@ guarded.Post("/publish/:subject", natsgw.Handler(svc.NATSMap, ...))
 | Custom (e.g. `X-Tenant`) | Forward only if `WithHeaderForwarder("X-Tenant")` is set. |
 | `Authorization`, `Cookie`, etc. | **Никогда** не forward'ятся silently — explicit opt-in для каждого. |
 
+## Observability
+
+Natsgw намеренно **не** имеет собственных collector'ов и logger'а — handler сидит за Fiber-router'ом, у которого уже своя observability-обвязка. Что наблюдаемо out-of-the-box:
+
+- **Inbound HTTP-метрики** — `fibermap`-level metrics + `service.WithFiberMetrics` (request counter / histogram, status-distribution).
+- **OTel-span'ы на запросе** — `otelfiber` middleware (если включено через `service.WithOtel`) производит inbound CLIENT-span на каждый POST.
+- **NATS-side publish-метрики** — `natsmap.Runtime` сам инструментирован: `natsmap_publish_total{publisher,outcome}` + duration histogram. Gateway publish'ы выглядят в этих counter'ах ровно как direct-в-process publish'ы.
+- **TraceContext propagation** — если в kit'е включён OTel, `natsmap.PublishRaw` подмешивает текущий span context в NATS-headers (W3C TraceContext) автоматически. Downstream subscriber'ы continue chain, gateway между HTTP и NATS становится transparent звеном.
+
+Если нужны gateway-specific метрики (per-subject reject-counter, allowlist-miss rate) — собирайте их в `WithValidator` / `WithCustomHandler`-callback'ах с собственными prometheus-collector'ами.
+
+## Когда НЕ использовать
+
+- **Critical-path low-latency publish'ы** из Go-сервиса, который сам может import'нуть `natsmap`. HTTP-hop добавляет ~ms latency + один extra-points-of-failure (gateway down → publisher down). Используйте `natsmap.Publish` напрямую — gateway — это для сервисов, которые **не могут** или **не должны** linkать natsmap.
+- **Реальная at-least-once-семантика без outbox'а.** Если HTTP-clients получают 202 и ожидают durability — посади перед `natsmap.PublishRaw` outbox-write в `WithCustomHandler` (persist-then-publish-pattern в [Custom handler](#custom-handler)). Без него gateway — at-most-once.
+- **Authenticated multi-tenant ingestion с per-tenant subject-isolation.** Allowlist'ом single-list'а недостаточно — тенант A не должен иметь возможность publish'нуть на subject тенанта B. Wire policy-middleware (RequireRole + per-tenant subject prefix-check в `WithSubjectExtractor`) перед mount'ом или embed'ьте проверку tenant-scope'а в `WithValidator`.
+
 ## Ограничения
 
 - **No request-body transformation** — gateway forwards bytes verbatim. Subscribers decode same way they would on direct natsmap-path. JSON-payload'ы encoded one way → published one way → decoded one way.
