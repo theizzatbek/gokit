@@ -92,8 +92,8 @@ type rateLimitState struct {
 }
 
 type rateLimitBucket struct {
-	count      int
-	windowAt   time.Time
+	count    int
+	windowAt time.Time
 }
 
 func newRateLimitState() *rateLimitState {

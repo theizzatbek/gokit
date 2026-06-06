@@ -23,19 +23,19 @@ const defaultInterval = time.Second
 // and the closing methods return nil. Lets callers thread an
 // optional batcher through their code unconditionally.
 type Batcher[T any] struct {
-	handlerFn    func(context.Context, []T) error
-	interval     time.Duration
-	batchSize    int
-	maxPending   int
-	maxInFlight  int
-	maxRetries   int
-	retryBase    time.Duration
-	retryMax     time.Duration
-	contextFn    func() context.Context
-	onStart      func(ctx context.Context, size int)
-	onComplete   func(ctx context.Context, size int, err error, elapsed time.Duration)
-	logger       *slog.Logger
-	metrics      *metricsCollector
+	handlerFn   func(context.Context, []T) error
+	interval    time.Duration
+	batchSize   int
+	maxPending  int
+	maxInFlight int
+	maxRetries  int
+	retryBase   time.Duration
+	retryMax    time.Duration
+	contextFn   func() context.Context
+	onStart     func(ctx context.Context, size int)
+	onComplete  func(ctx context.Context, size int, err error, elapsed time.Duration)
+	logger      *slog.Logger
+	metrics     *metricsCollector
 
 	mu      sync.Mutex
 	pending []submission[T]
@@ -50,11 +50,11 @@ type Batcher[T any] struct {
 	// In-flight handler concurrency cap (semaphore).
 	dispatchSlots chan struct{}
 
-	flushCh     chan struct{}
-	doneCh      chan struct{}
-	stopOnce    sync.Once
-	wg          sync.WaitGroup
-	dispatchWG  sync.WaitGroup // running dispatch goroutines when maxInFlight > 1
+	flushCh    chan struct{}
+	doneCh     chan struct{}
+	stopOnce   sync.Once
+	wg         sync.WaitGroup
+	dispatchWG sync.WaitGroup // running dispatch goroutines when maxInFlight > 1
 }
 
 // submission pairs an item with its per-item ack callback. ack may
