@@ -209,11 +209,51 @@ func (c *Client) Close() {
 	c.conn = nil
 }
 
-// Conn returns the underlying *nats.Conn for advanced use. Errors via this
-// path are NOT funneled through *errs.Error — caller owns mapping.
+// Conn returns the underlying *nats.Conn for advanced use cases the
+// kit does not (yet) wrap — direct subscription, raw flush, custom
+// request/reply patterns. It is a passthrough; the kit does NOT
+// apply any of its observability or resilience layers to operations
+// routed through this handle:
+//
+//   - Errors flow through unchanged — they do NOT become *errs.Error,
+//     so [errs.HTTP] / Kind / Code branching DOES NOT apply. Caller
+//     owns the mapping.
+//   - The `nats_*` Prometheus collectors (publish/subscribe counters,
+//     duration histogram) do NOT observe direct-Conn calls.
+//   - Breaker / default-timeout / W3C TraceContext propagation are
+//     NOT layered on direct-Conn calls. If you bypass the kit's
+//     Publish / PublishViaCodec / PublishRaw, you bypass the whole
+//     observability + resilience stack.
+//
+// Lifecycle: the kit owns Close on this connection. Callers MUST NOT
+// call c.Conn().Close() or c.Conn().Drain() — those bypass the kit's
+// idempotent [Client.Close] and leave the kit's internal state out of
+// sync. Use [Client.Close] (or rely on service.Close to call it).
+//
+// v1 contract: the signature stays stable and the kit does NOT plan to
+// start wrapping direct-Conn calls under the existing method —
+// "passthrough" is the contract, not an implementation accident. If
+// you need a behaviour the kit doesn't expose yet, prefer reaching
+// out and adding a typed method rather than building on this
+// escape hatch.
 func (c *Client) Conn() *nats.Conn { return c.conn }
 
-// JetStream returns the underlying nats.JetStreamContext. Same caveat as Conn.
+// JetStream returns the underlying nats.JetStreamContext for advanced
+// JetStream operations the kit does not wrap yet (consumer config,
+// stream-snapshot, AccountInfo, …). Same caveats as [Client.Conn]:
+// passthrough — no *errs.Error mapping, no metrics, no breaker /
+// timeout / TraceContext propagation. Caller-owned error handling
+// and observability.
+//
+// Returns nil when the kit was constructed in core-only mode (no
+// jetstream Connect option). Nil-check before use.
+//
+// Lifecycle: the JetStreamContext piggybacks on the same *nats.Conn
+// that [Client.Conn] returns; the same "do NOT Close/Drain" rules
+// apply.
+//
+// v1 contract: same as [Client.Conn] — signature stable, no wrapping,
+// reach out before building hot-path infrastructure on this hatch.
 func (c *Client) JetStream() nats.JetStreamContext { return c.js }
 
 // Codec returns the codec configured at Connect (JSONCodec by default).
