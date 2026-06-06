@@ -68,6 +68,22 @@ This is the bootstrap entry; prior history lives in `git log`.
   `rt.TriggerJob(ctx, "x", cronmap.OverrideOK{})`.
 
 ### Added
+- `batch.Config.IsRetryable func(error) bool` — opt-in classifier
+  to break the retry budget early when HandlerFn returns a
+  permanent error. nil (default) uses a built-in that treats
+  `context.Canceled` and `context.DeadlineExceeded` as
+  non-retryable and everything else as retryable — the right
+  default for a batch pipeline whose dispatchCtx is the caller's
+  signal to stop working. Also fixes a pre-existing bug in the
+  retry loop: a `break` inside `select case <-dispatchCtx.Done()`
+  only exited the select, so a cancelled dispatch would still
+  call HandlerFn one more time before bailing. The loop now uses
+  a labeled break so cancellation exits the retry chain
+  immediately. Existing call sites are unaffected by the new
+  field — leave `IsRetryable` zero and behaviour matches the new
+  default (no retry on ctx-cancellation; full retry on every
+  other error).
+
 - `db/migrate/` — four additive helpers around the existing runner.
   Existing Up / UpTo signatures gain variadic `Option`s but stay
   back-compat (old call sites compile unchanged).

@@ -31,6 +31,7 @@ type Batcher[T any] struct {
 	maxRetries  int
 	retryBase   time.Duration
 	retryMax    time.Duration
+	isRetryable func(err error) bool
 	contextFn   func() context.Context
 	onStart     func(ctx context.Context, size int)
 	onComplete  func(ctx context.Context, size int, err error, elapsed time.Duration)
@@ -80,6 +81,11 @@ func New[T any](cfg Config[T]) (*Batcher[T], error) {
 		cfg.MaxInFlightHandlers = 1
 	}
 
+	isRetryable := cfg.IsRetryable
+	if isRetryable == nil {
+		isRetryable = defaultIsRetryable
+	}
+
 	b := &Batcher[T]{
 		handlerFn:     cfg.HandlerFn,
 		interval:      cfg.Interval,
@@ -89,6 +95,7 @@ func New[T any](cfg Config[T]) (*Batcher[T], error) {
 		maxRetries:    cfg.MaxRetries,
 		retryBase:     cfg.RetryBackoffBase,
 		retryMax:      cfg.RetryBackoffMax,
+		isRetryable:   isRetryable,
 		contextFn:     cfg.ContextFn,
 		onStart:       cfg.OnBatchStart,
 		onComplete:    cfg.OnBatchComplete,
@@ -256,19 +263,33 @@ func (b *Batcher[T]) dispatch(ctx context.Context, batch []submission[T]) error 
 
 	start := time.Now()
 	var err error
+retryLoop:
 	for attempt := 0; attempt <= b.maxRetries; attempt++ {
 		if attempt > 0 {
 			b.retriedAttempts.Add(1)
 			wait := b.retryDelay(attempt)
 			select {
 			case <-dispatchCtx.Done():
+				// Dispatch ctx cancelled mid-backoff: surface the
+				// cancellation and bail. Labeled break ensures we
+				// exit the for-loop entirely instead of falling
+				// through to another runHandlerSafely call (a bare
+				// `break` here would only leave the select).
 				err = dispatchCtx.Err()
-				break
+				break retryLoop
 			case <-time.After(wait):
 			}
 		}
 		err = b.runHandlerSafely(dispatchCtx, items)
 		if err == nil {
+			break
+		}
+		// Classifier breaks the retry budget early when the
+		// caller (or the default) considers err permanent. The
+		// default treats ctx.Canceled / ctx.DeadlineExceeded as
+		// non-retryable so a cancelled dispatch surfaces on the
+		// first failed attempt rather than burning the budget.
+		if !b.isRetryable(err) {
 			break
 		}
 	}
@@ -313,6 +334,19 @@ func (b *Batcher[T]) runHandlerSafely(ctx context.Context, items []T) (err error
 		}
 	}()
 	return b.handlerFn(ctx, items)
+}
+
+// defaultIsRetryable is the fallback classifier used when
+// Config.IsRetryable is nil. It treats ctx-cancellation
+// (context.Canceled / context.DeadlineExceeded) as permanent and
+// every other error as transient — the right default for a batch
+// pipeline whose dispatchCtx is the caller's signal to stop
+// working.
+func defaultIsRetryable(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return true
 }
 
 // retryDelay returns the exponential backoff delay before attempt N

@@ -72,6 +72,7 @@ batched-доставку без того, чтобы пользователи п
 | `MaxInFlightHandlers int` | `1` (sequential) | > 1 → Flush spawns dispatch goroutine; pool capped по этому числу. |
 | `MaxRetries int` | `0` (no retry) | Per-batch retry на HandlerFn err / panic. Ack — после final attempt. |
 | `RetryBackoffBase/Max time.Duration` | — | Exponential delay между retry attempts. |
+| `IsRetryable func(err) bool` | nil → default | Classifier для retry budget. Default: `context.Canceled` / `context.DeadlineExceeded` non-retryable (не сжигать ретраи на закрытом ctx), всё остальное — retryable. Override когда HandlerFn различает transient transport vs permanent application errors. |
 | `ContextFn func() context.Context` | nil | Per-dispatch ctx provider (tracing). Caller Flush(ctx) wins когда != Background. |
 | `OnBatchStart func(ctx, size int)` | nil | Panic-safe hook перед HandlerFn (БЕЗ retries). |
 | `OnBatchComplete func(ctx, size, err, elapsed)` | nil | Panic-safe hook после final attempt. |

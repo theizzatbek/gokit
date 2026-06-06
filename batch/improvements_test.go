@@ -239,6 +239,80 @@ func TestBatcher_RetryOnError_SucceedsEventually(t *testing.T) {
 	}
 }
 
+func TestBatcher_DefaultClassifier_CtxCanceled_NoRetries(t *testing.T) {
+	var calls atomic.Int32
+	done := make(chan error, 1)
+
+	b, _ := New(Config[int]{
+		HandlerFn: func(context.Context, []int) error {
+			calls.Add(1)
+			return context.Canceled
+		},
+		BatchSize:        1,
+		Interval:         time.Second,
+		MaxRetries:       5,
+		RetryBackoffBase: time.Millisecond,
+		RetryBackoffMax:  10 * time.Millisecond,
+	})
+	t.Cleanup(func() { _ = b.Close() })
+
+	b.Submit(1, func(e error) { done <- e })
+
+	select {
+	case got := <-done:
+		if !errors.Is(got, context.Canceled) {
+			t.Errorf("ack err = %v, want context.Canceled", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ack never fired")
+	}
+	// Default classifier must skip retries on ctx.Canceled — only
+	// the initial attempt should have fired.
+	if got := calls.Load(); got != 1 {
+		t.Errorf("calls = %d, want 1 (no retries on ctx.Canceled)", got)
+	}
+	if s := b.Stats(); s.RetriedAttempts != 0 {
+		t.Errorf("RetriedAttempts = %d, want 0", s.RetriedAttempts)
+	}
+}
+
+func TestBatcher_CustomClassifier_BreaksRetryEarly(t *testing.T) {
+	var calls atomic.Int32
+	done := make(chan error, 1)
+	permanent := errors.New("permanent")
+
+	b, _ := New(Config[int]{
+		HandlerFn: func(context.Context, []int) error {
+			calls.Add(1)
+			return permanent
+		},
+		BatchSize:        1,
+		Interval:         time.Second,
+		MaxRetries:       5,
+		RetryBackoffBase: time.Millisecond,
+		RetryBackoffMax:  10 * time.Millisecond,
+		IsRetryable: func(err error) bool {
+			// Caller marks this specific error as permanent.
+			return !errors.Is(err, permanent)
+		},
+	})
+	t.Cleanup(func() { _ = b.Close() })
+
+	b.Submit(1, func(e error) { done <- e })
+
+	select {
+	case got := <-done:
+		if !errors.Is(got, permanent) {
+			t.Errorf("ack err = %v, want permanent", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ack never fired")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("calls = %d, want 1 (custom classifier broke retry early)", got)
+	}
+}
+
 // ── E. Hooks ────────────────────────────────────────────────────────
 
 func TestBatcher_OnBatchStartComplete_Fire(t *testing.T) {

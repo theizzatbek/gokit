@@ -61,6 +61,19 @@ type Config[T any] struct {
 	RetryBackoffBase time.Duration
 	RetryBackoffMax  time.Duration
 
+	// IsRetryable classifies HandlerFn errors as retryable or not.
+	// Return false to break the retry loop early and surface the
+	// error to the ack callbacks immediately (skipping any unspent
+	// retry budget).
+	//
+	// nil (default) → the kit treats context.Canceled and
+	// context.DeadlineExceeded as non-retryable (no point burning
+	// the retry budget on a closed ctx) and every other error as
+	// retryable. Override when HandlerFn distinguishes transient
+	// transport errors from permanent application errors and you
+	// want to short-circuit retries on the permanent ones.
+	IsRetryable func(err error) bool
+
 	// ContextFn supplies the context used for each dispatch
 	// (HandlerFn ctx). When non-nil, it is called once per
 	// dispatch — useful for threading a tracer or audit metadata.
