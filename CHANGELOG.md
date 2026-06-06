@@ -18,6 +18,22 @@ This is the bootstrap entry; prior history lives in `git log`.
   against the same host) stays — it is not back-compat, just an
   alternative to `Config.ReadURLs` for the single-replica case.
 
+### Changed (breaking, pre-v1)
+- `clients/redis.(*Client).Redis() *redis.Client` now **panics** with
+  a guiding message under cluster / sentinel topologies instead of
+  silently returning `nil`. The old behaviour was an API trap: a
+  caller asking for the single-mode type under cluster/sentinel
+  would dereference nil far from the call site. The panic message
+  names the actual mode and points at `Client.Universal()` as the
+  cross-mode escape hatch. Nil-receiver behaviour is unchanged
+  (still returns nil).
+- `clients/ratelimit.NewRedis` now returns
+  `*errs.Error{Code: CodeInvalidConfig}` instead of panicking
+  through `rc.Redis()` when the passed `*redisclient.Client` runs in
+  cluster / sentinel mode. The Lua sliding-window script is
+  single-mode-only by design (all keys pin to one node); the early
+  validation surfaces the constraint at construction time.
+
 ### Added
 - `db/migrate/` — four additive helpers around the existing runner.
   Existing Up / UpTo signatures gain variadic `Option`s but stay

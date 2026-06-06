@@ -4,11 +4,13 @@ import (
 	"context"
 	"flag"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
@@ -143,6 +145,51 @@ func TestClient_NilReceiver_CloseSafe(t *testing.T) {
 	if r := c.Redis(); r != nil {
 		t.Errorf("nil-receiver Redis() = %v, want nil", r)
 	}
+}
+
+func TestClient_Redis_PanicsUnderCluster(t *testing.T) {
+	c := &Client{
+		universal: &redis.ClusterClient{},
+		mode:      ModeCluster,
+	}
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("Redis() under cluster mode did not panic")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic value is %T, want string", r)
+		}
+		if !strings.Contains(msg, "single-mode only") || !strings.Contains(msg, "mode=cluster") {
+			t.Errorf("panic message missing expected fragments: %q", msg)
+		}
+	}()
+	_ = c.Redis()
+}
+
+func TestClient_Redis_PanicsUnderSentinel(t *testing.T) {
+	c := &Client{
+		universal: redis.NewFailoverClient(&redis.FailoverOptions{
+			MasterName:    "mymaster",
+			SentinelAddrs: []string{"127.0.0.1:0"},
+		}),
+		mode: ModeSentinel,
+	}
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("Redis() under sentinel mode did not panic")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic value is %T, want string", r)
+		}
+		if !strings.Contains(msg, "mode=sentinel") {
+			t.Errorf("panic message missing 'mode=sentinel': %q", msg)
+		}
+	}()
+	_ = c.Redis()
 }
 
 func TestRedisRoundtrip(t *testing.T) {
