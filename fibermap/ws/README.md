@@ -106,8 +106,16 @@ fibermapws.Register(eng, "chat.connect",
 
 Если auth-middleware reject'ит request (return non-nil), upgrade не происходит — клиент получает middleware's error как обычный HTTP response.
 
+## Когда `fibermap/ws` vs `fibermap/wsnats`
+
+- **`fibermap/ws`** (этот пакет) — direct browser ↔ server custom protocol. Каждое соединение owns its own state on a single backend instance. Подходит для chat-room'ов на одном process'е, game-server'ов с tick-loop'ом per-conn, custom binary protocol'ов.
+- **`fibermap/wsnats`** ([README](../wsnats/README.md)) — bridge browser WebSocket'а к NATS pub/sub. Каждое соединение subscribes к NATS subject'ам; messages фан-аутся ко всем connected client'ам across all backend instances автоматически. Подходит для live dashboards, notifications, multi-tenant fan-out, chat rooms где state живёт в NATS subjects а не в backend memory.
+
+См. [`fibermap/wsnats/README.md`](../wsnats/README.md) для full comparison table.
+
 ## См. также
 
 - [`fibermap`](../README.md) — родительский router
+- [`fibermap/wsnats`](../wsnats/README.md) — WebSocket с NATS pub/sub bridge'ем
 - [`fibermap/sse`](../sse/README.md) — SSE equivalent (dep-free, только fiber + stdlib)
 - [gofiber/websocket](https://github.com/gofiber/websocket) — upstream upgrade library
