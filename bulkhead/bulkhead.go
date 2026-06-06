@@ -55,9 +55,9 @@ type bulkheadStatsWindow struct {
 }
 
 type bulkheadStatsEntry struct {
-	at      time.Time
-	dur     time.Duration
-	isWait  bool // true = queue wait sample, false = call latency
+	at     time.Time
+	dur    time.Duration
+	isWait bool // true = queue wait sample, false = call latency
 }
 
 // Stats is the point-in-time snapshot returned by [Bulkhead.Stats].

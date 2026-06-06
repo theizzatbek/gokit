@@ -26,13 +26,13 @@ type options struct {
 	breakerFailureFn    func(*http.Response, error) bool
 	bulkhead            *bulkhead.Bulkhead
 
-	retryClassifier     func(*http.Request, *http.Response, error) bool
-	retryStatusCodes    map[int]struct{}
-	retryNonIdempotent  bool
-	idempotencyKeyHdr   string
-	middleware          []func(http.RoundTripper) http.RoundTripper
-	beforeRequest       func(*http.Request)
-	afterResponse       func(*http.Request, *http.Response, error, time.Duration)
+	retryClassifier    func(*http.Request, *http.Response, error) bool
+	retryStatusCodes   map[int]struct{}
+	retryNonIdempotent bool
+	idempotencyKeyHdr  string
+	middleware         []func(http.RoundTripper) http.RoundTripper
+	beforeRequest      func(*http.Request)
+	afterResponse      func(*http.Request, *http.Response, error, time.Duration)
 }
 
 // WithLogger wires a slog.Logger used for retry-decision and retry-exhaustion

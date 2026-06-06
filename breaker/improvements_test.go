@@ -224,11 +224,11 @@ func TestBreaker_ForceClose_ClearsState(t *testing.T) {
 func TestBreaker_Stats_ReportsCounters(t *testing.T) {
 	clk := newClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	b, _ := New(Config{
-		Name:             "stats",
-		FailureThreshold: 5,
-		MinimumRequests:  5,
+		Name:              "stats",
+		FailureThreshold:  5,
+		MinimumRequests:   5,
 		HalfOpenMaxProbes: 1,
-		Now:              clk.Now,
+		Now:               clk.Now,
 	})
 	// Two successes, one failure — not enough to trip.
 	_ = b.Execute(func() error { return nil })

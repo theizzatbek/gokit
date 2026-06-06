@@ -48,11 +48,11 @@ type runConfig struct {
 	readinessCheckers []Checker
 	readinessOpts     []ReadinessOption
 
-	withReqLog        bool
-	reqLog            *slog.Logger
-	reqLogSkipPaths   []string
-	reqLogSlowThresh  time.Duration
-	noReqLog          bool
+	withReqLog       bool
+	reqLog           *slog.Logger
+	reqLogSkipPaths  []string
+	reqLogSlowThresh time.Duration
+	noReqLog         bool
 
 	noRequestID bool
 

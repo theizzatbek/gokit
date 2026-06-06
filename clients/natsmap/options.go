@@ -17,12 +17,12 @@ type options struct {
 	logger  *slog.Logger
 	metrics prometheus.Registerer
 
-	subscribeOpts        []natsclient.SubscribeOption
-	defaultPublishHdrs   map[string][]string
-	beforeDispatch       func(name, subject string)
-	afterDispatch        func(name, subject string, err error, elapsed time.Duration)
-	beforePublish        func(ctx context.Context, name, subject string, headers map[string][]string)
-	afterPublish         func(ctx context.Context, name, subject string, err error, elapsed time.Duration)
+	subscribeOpts      []natsclient.SubscribeOption
+	defaultPublishHdrs map[string][]string
+	beforeDispatch     func(name, subject string)
+	afterDispatch      func(name, subject string, err error, elapsed time.Duration)
+	beforePublish      func(ctx context.Context, name, subject string, headers map[string][]string)
+	afterPublish       func(ctx context.Context, name, subject string, err error, elapsed time.Duration)
 }
 
 // WithLogger sets the slog.Logger used for natsmap-level events

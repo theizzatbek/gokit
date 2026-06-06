@@ -207,7 +207,7 @@ func TestWithDefaultPublishHeaders_MergesIntoRuntimeSnapshot(t *testing.T) {
 func TestRuntime_MergePublishHeaders_LayeringOrder(t *testing.T) {
 	rt := &Runtime{
 		defaultPublishHdrs: map[string][]string{
-			"X-Common":  {"engine"},
+			"X-Common":   {"engine"},
 			"X-Override": {"engine-loses"},
 		},
 	}

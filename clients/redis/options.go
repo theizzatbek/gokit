@@ -16,8 +16,8 @@ type Option func(*options)
 type options struct {
 	logger          *slog.Logger
 	metrics         prometheus.Registerer
-	redisOptions    func(*redis.Options)        // single-mode mutator
-	clusterMutator  func(*redis.ClusterOptions) // cluster-mode mutator
+	redisOptions    func(*redis.Options)         // single-mode mutator
+	clusterMutator  func(*redis.ClusterOptions)  // cluster-mode mutator
 	sentinelMutator func(*redis.FailoverOptions) // sentinel-mode mutator
 
 	extraHooks     []redis.Hook
