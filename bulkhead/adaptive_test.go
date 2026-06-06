@@ -57,6 +57,123 @@ func TestAIMD_FloorAtOne(t *testing.T) {
 	}
 }
 
+// ── Vegas controller ────────────────────────────────────────────────
+
+func TestVegas_NoTrafficHoldsCapacity(t *testing.T) {
+	t.Parallel()
+	c := &VegasController{}
+	got := c.Next(Snapshot{Capacity: 20, Latency: LatencyStats{Count: 0}})
+	if got != 20 {
+		t.Errorf("no traffic: got %d, want 20", got)
+	}
+}
+
+func TestVegas_BaselineLearnedFromFirstTick_Grows(t *testing.T) {
+	t.Parallel()
+	// First tick: P50 = base by definition (no prior history), so
+	// queueSize ≈ 0 < Alpha → +1. The baseline gets learned from this
+	// very tick and the next tick at the same latency stays in the
+	// grow regime.
+	c := &VegasController{}
+	got := c.Next(Snapshot{
+		Capacity:  10,
+		Latency:   LatencyStats{P50: 20 * time.Millisecond, Count: 50},
+		ErrorRate: 0.02,
+	})
+	if got != 11 {
+		t.Errorf("first healthy tick: got %d, want 11 (cap+1)", got)
+	}
+}
+
+func TestVegas_LatencyExplosionShrinks(t *testing.T) {
+	t.Parallel()
+	c := &VegasController{}
+	// Prime the baseline at 10ms — one healthy tick.
+	c.Next(Snapshot{
+		Capacity: 20,
+		Latency:  LatencyStats{P50: 10 * time.Millisecond, Count: 100},
+	})
+	// Now P50 jumps to 100ms — 10× baseline → estimated = cap/10 = 2,
+	// queueSize = 18, well above default Beta=6 → -1.
+	got := c.Next(Snapshot{
+		Capacity: 20,
+		Latency:  LatencyStats{P50: 100 * time.Millisecond, Count: 100},
+	})
+	if got != 19 {
+		t.Errorf("latency explosion: got %d, want 19 (cap-1)", got)
+	}
+}
+
+func TestVegas_HoldsInSweetSpot(t *testing.T) {
+	t.Parallel()
+	c := &VegasController{Alpha: 2, Beta: 6}
+	// Prime baseline at 10ms.
+	c.Next(Snapshot{
+		Capacity: 10,
+		Latency:  LatencyStats{P50: 10 * time.Millisecond, Count: 50},
+	})
+	// P50 = 2× baseline → estimated = 5, queueSize = 5 — in (Alpha=2,
+	// Beta=6] → hold.
+	got := c.Next(Snapshot{
+		Capacity: 10,
+		Latency:  LatencyStats{P50: 20 * time.Millisecond, Count: 50},
+	})
+	if got != 10 {
+		t.Errorf("sweet spot: got %d, want 10 (hold)", got)
+	}
+}
+
+func TestVegas_ErrorSpikeMultiplicativeCut(t *testing.T) {
+	t.Parallel()
+	c := &VegasController{}
+	// Even if latency looks fine, error rate above threshold halves.
+	got := c.Next(Snapshot{
+		Capacity:  20,
+		Latency:   LatencyStats{P50: 10 * time.Millisecond, Count: 100},
+		ErrorRate: 0.5,
+	})
+	if got != 10 {
+		t.Errorf("error spike: got %d, want 10 (cap/2)", got)
+	}
+}
+
+func TestVegas_ErrorSpikeFloorAtOne(t *testing.T) {
+	t.Parallel()
+	c := &VegasController{}
+	got := c.Next(Snapshot{
+		Capacity:  1,
+		Latency:   LatencyStats{P50: 10 * time.Millisecond, Count: 10},
+		ErrorRate: 1.0,
+	})
+	if got != 1 {
+		t.Errorf("floor: got %d, want 1", got)
+	}
+}
+
+func TestVegas_BaselineMonotonicallyDescends(t *testing.T) {
+	t.Parallel()
+	c := &VegasController{}
+	// Prime at 20ms.
+	c.Next(Snapshot{
+		Capacity: 10,
+		Latency:  LatencyStats{P50: 20 * time.Millisecond, Count: 50},
+	})
+	// A 5ms sample lowers the baseline to 5ms.
+	c.Next(Snapshot{
+		Capacity: 10,
+		Latency:  LatencyStats{P50: 5 * time.Millisecond, Count: 50},
+	})
+	// Now a tick back at 20ms should look loaded relative to the
+	// 5ms baseline: estimated = 10*5/20 = 2, queueSize = 8 > Beta=6 → -1.
+	got := c.Next(Snapshot{
+		Capacity: 10,
+		Latency:  LatencyStats{P50: 20 * time.Millisecond, Count: 50},
+	})
+	if got != 9 {
+		t.Errorf("loaded vs lower baseline: got %d, want 9 (cap-1)", got)
+	}
+}
+
 func TestLatencyWindow_RecordsAndExpires(t *testing.T) {
 	t.Parallel()
 	w := newLatencyWindow(50 * time.Millisecond)

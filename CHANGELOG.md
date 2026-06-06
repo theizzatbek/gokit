@@ -68,6 +68,24 @@ This is the bootstrap entry; prior history lives in `git log`.
   `rt.TriggerJob(ctx, "x", cronmap.OverrideOK{})`.
 
 ### Added
+- `bulkhead.VegasController` — second built-in implementation of
+  the `Controller` extension point, joining `AIMDController`. A
+  TCP-Vegas-inspired control law that learns a baseline latency
+  (the monotone floor of observed P50s) and estimates queue length
+  from the ratio `currentP50 / baseline`. Grows capacity when the
+  estimate is below Alpha (default 2), shrinks when above Beta
+  (default 6), holds in between. Hard error spikes still trigger a
+  multiplicative cut (`cap/2`, floor 1) on top of the latency loop
+  — TCP Vegas itself does not handle loss-style signals, but in a
+  service-mesh context 5xx + cancellations carry the same distress
+  meaning. Better than AIMD when the downstream degrades
+  gradually (DB pool exhaustion, slow upstream) — latency rises
+  long before errors do; AIMD remains the right pick when the
+  downstream fails-fast and latency carries little signal. The
+  extension point now ships with two distinct laws rather than one
+  and a TODO; new algorithms (Gradient2, etc.) still slot in
+  behind `Controller.Next(Snapshot) int`.
+
 - `service.Service` gains typed `MustX` / `OptionalX` accessor
   pairs for every optional subsystem (`DB`, `Auth`, `NATS`,
   `Redis`, `NATSMap`, `APIMap`, `Hasher`, `Outbox`, `S3`,
