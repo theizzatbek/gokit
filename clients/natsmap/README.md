@@ -583,6 +583,7 @@ go test ./clients/natsmap/
 
 ## См. также
 
+- [`clients/natsmap/natsgw`](natsgw/README.md) — HTTP→NATS-gateway middleware поверх Runtime'а: edge-сервис POST'ит на `/publish/:subject`, kit republish'ит через `PublishRaw`. Полезно когда HTTP-only / polyglot-сервисы публикуют в шину, без import'а natsmap'а в каждый бинарник.
 - [`clients/nats`](../nats/README.md) — типизированная JetStream-обёртка, лежащая под natsmap'ом (Publisher[T], Subscribe[T], EnsureStream)
 - [`clients/apimap`](../apimap/README.md) — симметричный декларативный HTTP-слой (inbound/outbound аналог)
 - [`service`](../../service/README.md) — авто-подключает natsmap, когда `NATSMAP_SUBSCRIBERS_PATH` / `NATSMAP_PUBLISHERS_PATH` установлены
