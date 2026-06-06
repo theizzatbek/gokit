@@ -67,6 +67,24 @@ This is the bootstrap entry; prior history lives in `git log`.
   `rt.TriggerJob(ctx, "x")` with
   `rt.TriggerJob(ctx, "x", cronmap.OverrideOK{})`.
 
+### Fixed
+- `fibermap/wsnats.runBridge` now unblocks its WS read promptly on
+  cancellation. Previously, after the loop's per-connection ctx
+  was cancelled (subscription callback errored, parent ctx done,
+  OnMessage returned an error) the main goroutine stayed parked
+  inside `ws.ReadMessage` until the client happened to send a
+  frame — a silent client meant the read goroutine stayed alive
+  indefinitely and the subscription-unsubscribe chain never ran.
+  The bridge now spawns a small cleanup goroutine that calls
+  `ws.SetReadDeadline(time.Now())` the moment the loop ctx fires,
+  forcing an immediate timeout error on the in-flight read so the
+  main loop bubbles up cleanly. Also documents the kit's
+  concurrency contract explicitly in `doc.go` + README: reads are
+  owned by the kit's main goroutine and exclusively so; callers
+  in BridgeFn / OnMessage / OnFrame must NOT spawn their own
+  goroutines that read from the *websocket.Conn (writes were
+  already covered by an internal mutex).
+
 ### Added
 - `bulkhead.VegasController` — second built-in implementation of
   the `Controller` extension point, joining `AIMDController`. A
