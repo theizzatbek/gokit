@@ -1,6 +1,6 @@
 module github.com/theizzatbek/gokit
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/Masterminds/squirrel v1.5.4

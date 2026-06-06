@@ -51,7 +51,7 @@ func parseCompose(t *testing.T, src string) composeFile {
 func defaultFlags() dbClusterFlags {
 	return dbClusterFlags{
 		replicas:     1,
-		image:        "bitnami/postgresql:16",
+		image:        "bitnamilegacy/postgresql:16",
 		database:     "appdb",
 		username:     "app",
 		password:     "changeme",
