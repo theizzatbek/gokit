@@ -75,7 +75,9 @@ type Redis struct {
 
 // NewRedis returns a Redis-backed limiter. rc may be nil in dev / test
 // — every Allow then succeeds (open) and logs at Debug. Returns
-// *errs.Error{Code: [CodeInvalidConfig]} when cfg is malformed.
+// *errs.Error{Code: [CodeInvalidConfig]} when cfg is malformed or
+// when rc runs in cluster / sentinel mode (the Lua sliding-window
+// script is single-mode-only — it pins all keys to one node).
 func NewRedis(rc *redisclient.Client, cfg Config, opts ...Option) (*Redis, error) {
 	if cfg.KeyPrefix == "" {
 		return nil, xerrs.Validation(CodeInvalidConfig, "ratelimit: KeyPrefix is required")
@@ -91,6 +93,10 @@ func NewRedis(rc *redisclient.Client, cfg Config, opts ...Option) (*Redis, error
 		script: redis.NewScript(slidingWindowScript),
 	}
 	if rc != nil {
+		if mode := rc.Mode(); mode != redisclient.ModeSingle {
+			return nil, xerrs.Validation(CodeInvalidConfig,
+				"ratelimit: requires single-mode redisclient.Client; got mode="+mode.String())
+		}
 		r.rdb = rc.Redis()
 		r.logger = rc.Logger()
 	}

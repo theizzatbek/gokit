@@ -73,7 +73,7 @@ cli, err := redisclient.ConnectSentinel(ctx, redisclient.SentinelConfig{
 })
 ```
 
-API остаётся идентичным — `cli.Universal()` возвращает `redis.UniversalClient` (общий interface для всех трёх mode'ов). `cli.Redis()` доступен только в single-mode (возвращает nil в cluster/sentinel). `cli.Mode()` репортит текущий topology.
+API остаётся идентичным — `cli.Universal()` возвращает `redis.UniversalClient` (общий interface для всех трёх mode'ов). `cli.Redis()` доступен **только в single-mode** и **panic'ит** под cluster/sentinel — нужен явный `cli.Mode()` branch или сразу `cli.Universal()` в коде, который может крутиться под разными топологиями. `cli.Mode()` репортит текущий topology.
 
 Observability (hook, metrics, breaker, default-timeout) работает одинаково — go-redis маршрутизирует hook через каждый shard.
 

@@ -210,16 +210,25 @@ func (c *Client) Logger() *slog.Logger {
 }
 
 // Redis returns the underlying *redis.Client when the kit Client
-// runs in single-node mode (the default). Returns nil under cluster
-// / sentinel modes — use [Client.Universal] there.
+// runs in single-node mode (the default). Panics with a guiding
+// message under cluster / sentinel modes — use [Client.Universal]
+// there. Nil-receiver safe (returns nil).
+//
+// The panic is intentional: a caller asking for the single-mode
+// type under cluster/sentinel is a programmer error and silently
+// returning nil leaks the bug to a later nil-deref far from the
+// call site. Branch on [Client.Mode] (or use [Client.Universal])
+// in code that may run under multiple topologies.
 func (c *Client) Redis() *redis.Client {
 	if c == nil {
 		return nil
 	}
-	if single, ok := c.universal.(*redis.Client); ok {
-		return single
+	single, ok := c.universal.(*redis.Client)
+	if !ok {
+		panic("clients/redis: Redis() is single-mode only; got mode=" + c.mode.String() +
+			" — use Client.Universal() for cluster/sentinel topologies")
 	}
-	return nil
+	return single
 }
 
 // Universal returns the underlying redis.UniversalClient regardless
