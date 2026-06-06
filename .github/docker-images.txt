@@ -1,0 +1,16 @@
+# Docker images used by integration tests via testcontainers-go.
+# The `integration` job in .github/workflows/test.yml caches these
+# images as tar archives so CI doesn't re-pull ~900MB every run.
+#
+# Cache key in the workflow hashes this file's contents — bump or
+# edit any line to force a fresh pull. Comments and blank lines are
+# ignored by the loader script.
+#
+# Pin tags rather than `latest` where possible to keep CI deterministic.
+# Update the corresponding tests when bumping versions here.
+
+postgres:16-alpine
+nats:2-alpine
+redis:7-alpine
+bitnamilegacy/postgresql:16
+minio/minio:latest
