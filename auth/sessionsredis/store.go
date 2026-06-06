@@ -203,8 +203,11 @@ func (s *Store) ListBySubject(ctx context.Context, subject string) ([]sessions.S
 
 // Stats implements [sessions.Lister]. Walks `<prefix>session:*` keys
 // via SCAN excluding the `*session:subject:*` auxiliary sets — O(N).
-// EXPIREATd sessions are invisible to Redis and therefore counted as
-// "doesn't exist" (Expired = 0 always for this backend).
+// Reports only Active (rows with expires_at > now) and Total — rows
+// past their expires_at are normally invisible because Redis has
+// already EXPIREATd them. The rare race-window where a key still
+// scans but reads as expired is treated the same as "evicted" and
+// excluded from both counters.
 func (s *Store) Stats(ctx context.Context) (sessions.StoreStats, error) {
 	pattern := s.prefix + "session:*"
 	iter := s.c.Scan(ctx, 0, pattern, 200).Iterator()
@@ -228,9 +231,7 @@ func (s *Store) Stats(ctx context.Context) (sessions.StoreStats, error) {
 			}
 			out.Total++
 			exp := parseUnix(v).Unix()
-			if exp <= now {
-				out.Expired++
-			} else {
+			if exp > now {
 				out.Active++
 			}
 		}

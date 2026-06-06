@@ -374,8 +374,8 @@ func TestMemoryStore_Lister(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Active != 3 || stats.Expired != 1 || stats.Total != 4 {
-		t.Errorf("stats = %+v, want active=3 expired=1 total=4", stats)
+	if stats.Active != 3 || stats.Total != 4 {
+		t.Errorf("stats = %+v, want active=3 total=4", stats)
 	}
 	// Empty subject.
 	empty, _ := store.ListBySubject(ctx, "")

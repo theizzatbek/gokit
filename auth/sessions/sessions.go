@@ -58,20 +58,20 @@ type SessionStore interface {
 	DeleteForSubject(ctx context.Context, subject string) error
 }
 
-// StoreStats is the rollup returned by [Lister.Stats]. Buckets are
-// disjoint:
+// StoreStats is the rollup returned by [Lister.Stats]:
 //
-//	Active  = ExpiresAt > now
-//	Expired = ExpiresAt <= now
-//	Total   = Active + Expired
+//	Active = ExpiresAt > now AND still present in the store
+//	Total  = number of rows the store could enumerate
 //
-// Implementations whose backend auto-expires entries (e.g. Redis
-// EXPIREAT) report Expired = 0 always — the expired records are
-// invisible to the store.
+// Note that Total ≠ Active + (rows that have expired) in general:
+// auto-evicting backends (Redis EXPIREAT, in-memory stores with
+// background GC) drop expired rows before Stats sees them, so the
+// "how many expired rows exist?" question is unanswerable
+// cross-backend. Use [Lister.ListBySubject] to inspect per-user
+// session state if you need to act on expired rows.
 type StoreStats struct {
-	Active  int
-	Expired int
-	Total   int
+	Active int
+	Total  int
 }
 
 // Lister is the optional admin-side surface a SessionStore MAY
@@ -92,8 +92,8 @@ type Lister interface {
 	// Empty subject returns an empty slice without backend access.
 	ListBySubject(ctx context.Context, subject string) ([]Session, error)
 
-	// Stats returns the disjoint Active/Expired counts. Use for
-	// /admin or /metrics-pull endpoints.
+	// Stats returns the Active count + Total enumerable count. Use
+	// for /admin or /metrics-pull endpoints.
 	Stats(ctx context.Context) (StoreStats, error)
 }
 

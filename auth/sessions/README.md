@@ -149,7 +149,7 @@ type Lister interface {
 }
 ```
 
-`MemoryStore` и `sessionsredis.Store` оба реализуют Lister. `StoreStats{Active, Expired, Total}` — disjoint buckets. Используйте из admin-эндпоинтов для рендеринга "active sessions for user X" / "force-revoke this specific session" интерфейсов.
+`MemoryStore` и `sessionsredis.Store` оба реализуют Lister. `StoreStats{Active, Total}`: `Active` — сессии с `ExpiresAt > now` и всё ещё видимые store'у, `Total` — все enumerable rows. Поля `Expired` нет специально: auto-evicting backend'ы (Redis EXPIREAT, in-memory с background GC) удаляют истёкшие записи до того, как Stats их видит, поэтому "сколько expired" — не cross-backend вопрос. Если нужны индивидуальные истёкшие сессии — используйте `ListBySubject` и фильтруйте по `Session.ExpiresAt`. Используйте из admin-эндпоинтов для рендеринга "active sessions for user X" / "force-revoke this specific session" интерфейсов.
 
 ## Ограничения
 

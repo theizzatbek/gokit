@@ -29,6 +29,19 @@ This is the bootstrap entry; prior history lives in `git log`.
   `auth.SetPrincipalForTest[C](c, p)` with
   `authtest.SetPrincipal[C](c, p)` and import
   `github.com/theizzatbek/gokit/auth/authtest`.
+- `auth/sessions.StoreStats.Expired` removed from the public
+  rollup type. The field could only be honestly populated by
+  `MemoryStore`, which has no eviction; both production-grade
+  backends (auto-evicting `sessionsredis.Store` and any future
+  TTL-aware backend) lose expired rows before Stats sees them, so
+  the field was effectively always-zero or race-zone for anything
+  except the dev store. The cross-backend contract now is
+  `StoreStats{Active, Total}`: Active = rows with
+  `ExpiresAt > now` and still enumerable; Total = every
+  enumerable row. Callers that need to act on
+  expired-but-not-yet-evicted rows should reach for
+  `Lister.ListBySubject` and filter on `Session.ExpiresAt`
+  themselves. Update any `stats.Expired` reads to that pattern.
 
 ### Changed (breaking, pre-v1)
 - `clients/redis.(*Client).Redis() *redis.Client` now **panics** with
