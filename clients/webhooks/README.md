@@ -161,7 +161,12 @@ cfg.SignerFunc = func(body []byte, secret string, now time.Time) (string, error)
 cfg.Propagator = otel.GetTextMapPropagator()
 ```
 
-Injects W3C `traceparent` / `tracestate` headers на outbound webhook'и. Receiving сторона continues span chain (same shape as clients/nats publish).
+`WorkerConfig.Propagator` — **единственная** точка инъекции tracing-заголовков. Worker делает ровно `Propagator.Inject(ctx, req.Header)` один раз на attempt; всё что propagator пишет, попадает на провод verbatim.
+
+- **Default (`nil`)** — никаких tracing-заголовков. Kit не fall-back'ает на `otel.GetTextMapPropagator()` под капотом, не подмешивает свой `traceparent`, не читает global state.
+- **Рекомендация — OTel composite** (`otel.GetTextMapPropagator()` по умолчанию): W3C TraceContext (`traceparent` / `tracestate`) + W3C Baggage. Это shape, который receiver ожидает в kit-овских примерах и который продуцируют `otelhttp` и `clients/nats`.
+- **Кастомные propagator'ы (B3 / Jaeger / Datadog)** работают так же — kit просто передаёт байты, ничего не интерпретирует. Receiver-side compatibility — на стороне caller'a.
+- **v1 contract**: этот field — **единственная стабильная точка** контроля tracing-инъекции на Worker. Kit НЕ добавит side-channel поля (`WorkerConfig.B3Propagator`, `WorkerConfig.DatadogHeaders`, …) в v1 minor'ах. Для мульти-формата — собирайте `propagation.NewCompositeTextMapPropagator(p1, p2, …)` и передавайте composite сюда.
 
 ## Прочие knobs
 

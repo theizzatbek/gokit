@@ -149,9 +149,32 @@ type WorkerConfig struct {
 	OnAttempt OnAttemptFn
 	OnDLQ     OnDLQFn
 
-	// Propagator, when non-nil, injects W3C TraceContext onto
-	// outbound headers. Pass otel.GetTextMapPropagator() to enable;
-	// nil = disabled.
+	// Propagator, when non-nil, is the single source of truth for
+	// outbound tracing header injection. The worker calls
+	// Propagator.Inject(ctx, req.Header) once per delivery attempt
+	// — whatever headers the propagator emits land verbatim on the
+	// outbound HTTP request and reach the receiver as-is.
+	//
+	// nil (default) = no tracing headers injected. The kit does NOT
+	// fall back to a built-in propagator, does NOT silently use
+	// otel.GetTextMapPropagator(), and does NOT read any global
+	// state — the field is the contract.
+	//
+	// Stable wire format: pass otel.GetTextMapPropagator() (the OTel
+	// composite default — W3C TraceContext + W3C Baggage) and the
+	// receiver gets `traceparent` / `tracestate` / `baggage`
+	// headers, the same shape that otelhttp + clients/nats produce.
+	// That is the kit's recommendation and the format every kit
+	// example assumes. Custom propagators (B3, Jaeger, Datadog) work
+	// just as well — the kit does not interpret the output — but the
+	// receiver side becomes the caller's problem.
+	//
+	// v1 freezes this knob as the only tracing injection point on a
+	// Worker. The kit will NOT grow side-channel propagator fields
+	// (`WorkerConfig.B3Propagator`, `WorkerConfig.DatadogHeaders`,
+	// etc.) in v1 minors — a caller that needs multiple formats
+	// composes a `propagation.NewCompositeTextMapPropagator(...)`
+	// and passes the composite here.
 	Propagator propagation.TextMapPropagator
 }
 
