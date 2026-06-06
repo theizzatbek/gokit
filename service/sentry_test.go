@@ -11,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/auth/authtest"
 	"github.com/theizzatbek/gokit/sentrykit"
 )
 
@@ -289,7 +290,7 @@ func TestSentryUserScopeMiddleware_TagsHubWithPrincipalSubject(t *testing.T) {
 	app.Use(sentrykit.FiberMiddleware())
 	// Inject a principal as if auth.Bearer had run upstream.
 	app.Use(func(c *fiber.Ctx) error {
-		auth.SetPrincipalForTest[struct{}](c, &auth.Principal[struct{}]{Subject: "user-42"})
+		authtest.SetPrincipal[struct{}](c, &auth.Principal[struct{}]{Subject: "user-42"})
 		return c.Next()
 	})
 	app.Use(s.sentryUserScopeMiddleware())

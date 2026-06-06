@@ -17,6 +17,18 @@ This is the bootstrap entry; prior history lives in `git log`.
   `Config.HasReadReplica` (env-driven knob that opens a standby pool
   against the same host) stays — it is not back-compat, just an
   alternative to `Config.ReadURLs` for the single-replica case.
+- `auth.SetPrincipalForTest[C]` — moved out of the production
+  `auth` package into the sibling `auth/authtest` subpackage as
+  `authtest.SetPrincipal[C]`. Production code should never have been
+  able to call a `ForTest`-suffixed function from a regular import;
+  splitting it off makes accidental production use surface in greps
+  and code review. The Locals key was relocated to an internal
+  helper package (`auth/internal/principalkey`) so the sibling can
+  write to the same slot Bearer / API-key / session middleware reads
+  from, without exposing the key to external callers. Replace
+  `auth.SetPrincipalForTest[C](c, p)` with
+  `authtest.SetPrincipal[C](c, p)` and import
+  `github.com/theizzatbek/gokit/auth/authtest`.
 
 ### Changed (breaking, pre-v1)
 - `clients/redis.(*Client).Redis() *redis.Client` now **panics** with

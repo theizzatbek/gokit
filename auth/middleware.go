@@ -6,6 +6,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/theizzatbek/gokit/auth/internal/principalkey"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
@@ -20,7 +21,7 @@ const (
 const bearerRealm = "api"
 
 // Bearer returns a Fiber middleware that verifies the Authorization: Bearer
-// header. On success it stores a *Principal[C] in Locals under principalKey{}.
+// header. On success it stores a *Principal[C] in Locals under principalkey.Key{}.
 //
 // Required mode: missing token -> 401. Optional mode: missing token -> pass through.
 // In BOTH modes a present-but-invalid token is rejected with 401 - silently
@@ -62,7 +63,7 @@ func (a *Auth[C]) Bearer(mode BearerMode) fiber.Handler {
 			}
 		}
 		a.metrics.incBearerVerify("ok")
-		c.Locals(principalKey{}, claimsToPrincipal(claims, tok))
+		c.Locals(principalkey.Key{}, claimsToPrincipal(claims, tok))
 		return c.Next()
 	}
 }

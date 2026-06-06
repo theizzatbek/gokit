@@ -10,6 +10,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/theizzatbek/gokit/auth/internal/principalkey"
 	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
@@ -192,7 +193,7 @@ func WithAPIKeyOnFail(fn APIKeyAuthFailHook) APIKeyOption {
 //  3. Call `KeyStore.Lookup(ctx, hash)`.
 //  4. Check ExpiresAt / RevokedAt.
 //  5. Build a [Principal[C]] (with zero-value C for custom claims),
-//     store under the same `principalKey{}` slot Bearer uses, call
+//     store under the same `principalkey.Key{}` slot Bearer uses, call
 //     c.Next().
 //
 // 401 + WWW-Authenticate challenge on every reject path so
@@ -271,7 +272,7 @@ func (a *Auth[C]) APIKey(store KeyStore, opts ...APIKeyOption) fiber.Handler {
 			return apiKeyReject(c, expired)
 		}
 		principal := recordToPrincipal[C](rec)
-		c.Locals(principalKey{}, principal)
+		c.Locals(principalkey.Key{}, principal)
 		a.metrics.incAPIKeyAuth("success")
 		a.maybeSecurityInfo(c, "apikey_auth_success",
 			"subject", principal.Subject, "jti", principal.JTI)
