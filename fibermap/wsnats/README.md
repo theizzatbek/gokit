@@ -186,9 +186,11 @@ wsnats.Register(eng, "worker.feed", svc.NATS,
 
 ## Concurrency safety
 
-- **WS writes serialized** via mutex — multiple NATS subscriptions могут fire concurrently, но `WriteMessage` calls go through a single critical section.
+- **Reads owned by the kit's main goroutine — exclusively.** Только bridge сам вызывает `ws.ReadMessage`. Caller'ам `BridgeFn` / `OnMessage` / `OnFrame` запрещено запускать свои read-горутины поверх того же `*websocket.Conn` — gorilla/fasthttp WS conn'ы не support'ят несколько concurrent reader'ов и поведение становится undefined. Если нужно реагировать на каждый incoming frame, делайте это через `OnFrame` (он вызывается из main read goroutine), не через spawn своих goroutine'ов.
+- **WS writes serialized** via mutex — multiple NATS subscriptions могут fire concurrently, но `WriteMessage` calls go through a single critical section. Callbacks возвращают payload через `OnMessage` / `OnFrame` — не вызывайте `ws.WriteMessage` напрямую.
 - **Subscriptions unsubscribed on close** — kit defer'ит unsubscribe loop в финальном cleanup'е; нет leak'а subscription'ов даже на panic'ах в handler'ах (websocket.New recovers).
 - **Loop ctx cancellation** propagates to NATS message handlers — поздно прибывшая NATS msg на close'нутом WS не will try to write to dead conn.
+- **Reader unblocked on cancel** — кит запускает отдельную cleanup-goroutine, которая на любой cancel (subscription callback errored, parent ctx done) дёргает `ws.SetReadDeadline(time.Now())`. Без этого main read блокировал бы соединение до следующего frame от silent клиента; с этим main loop возвращается immediately, unsubscribe-цепочка выполняется детерминированно.
 
 ## См. также
 

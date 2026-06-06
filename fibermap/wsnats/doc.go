@@ -1,9 +1,32 @@
 // Package wsnats bridges browser WebSocket clients to NATS pub/sub.
 // Per-connection subscribes flow inbound NATS messages out to the WS
 // client; per-frame publishes flow outbound WS frames to a NATS
-// subject. The kit handles concurrency (writes to the WS conn are
-// serialised so multiple subscriptions can fire safely) and cleanup
-// (subscriptions unsubscribe when the WS closes).
+// subject.
+//
+// # Concurrency model
+//
+// The kit owns the WS connection's IO lifecycle end-to-end. Callers
+// supplying [BridgeFn], [Bridge.OnMessage], or [Bridge.OnFrame] must
+// NOT spawn their own goroutines that read or write on the
+// *websocket.Conn — both directions are kit-managed and the contract
+// is exclusive:
+//
+//   - One main goroutine reads frames from the WS conn (the loop
+//     started inside the handler). No other goroutine — kit-side or
+//     caller-side — may call ws.ReadMessage; a second reader produces
+//     undefined behaviour from gorilla/fasthttp websocket.
+//   - Writes can fire from arbitrary NATS subscription handlers; the
+//     kit serialises them through an internal mutex so the underlying
+//     conn (which is NOT goroutine-safe for writes) stays consistent.
+//     Callbacks should return their payload via [Bridge.OnMessage] /
+//     [Bridge.OnFrame] — never call ws.WriteMessage directly.
+//   - On any exit signal (ctx done, WS read error, callback error)
+//     the kit cancels its per-connection context, forces an immediate
+//     ws.ReadDeadline so the main loop's blocking read returns
+//     promptly, unsubscribes every NATS subscription, and closes the
+//     conn. Callers that need post-close logic should chain it via
+//     fibermap middleware (or [fibermap.Engine] hooks) — NOT a
+//     goroutine spawned from the bridge.
 //
 // The subpackage sits on top of [fibermap/ws] (the upgrade /
 // handshake machinery is identical) and [clients/nats] (for the

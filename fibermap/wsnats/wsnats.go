@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/gofiber/websocket/v2"
 	"github.com/nats-io/nats.go"
@@ -155,6 +156,26 @@ func runBridge(
 	// callback might race against the unsubscribe loop on close.
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// Reader-unblocker: ws.ReadMessage blocks until the next frame
+	// from the client. When loopCtx cancels (subscription callback
+	// errored, parent ctx done) we want the main goroutine to exit
+	// promptly even if the client is silent. Setting a past
+	// ReadDeadline forces an immediate timeout error on the
+	// in-flight read, which the main loop bubbles up cleanly. Wired
+	// once via a goroutine that exits the moment loopCtx fires —
+	// the cleanup chain (cancel → reader returns → subs unsubscribe
+	// → ws closes) becomes deterministic instead of waiting on
+	// client traffic.
+	readerDone := make(chan struct{})
+	go func() {
+		select {
+		case <-loopCtx.Done():
+			_ = ws.SetReadDeadline(time.Now())
+		case <-readerDone:
+		}
+	}()
+	defer close(readerDone)
 
 	subs := make([]*nats.Subscription, 0, len(b.Subscribe))
 	defer func() {
