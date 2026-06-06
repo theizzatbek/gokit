@@ -195,16 +195,31 @@ func (r *Runtime) ResumeJob(name string) error {
 	return nil
 }
 
+// OverrideOK is the explicit opt-in token required by
+// [Runtime.TriggerJob]. Pass `cronmap.OverrideOK{}` at every call
+// site. The empty-struct shape is zero-cost at runtime; the value
+// exists purely as a signature-level marker that the caller knows
+// they are bypassing the singleton (leader-election) lock and the
+// pause flag. Greppable on `OverrideOK` so an /admin endpoint that
+// forwards this call surfaces in audit without folklore knowledge
+// of what "TriggerJob" really means.
+type OverrideOK struct{}
+
 // TriggerJob fires the named job out-of-band synchronously on the
 // caller's goroutine. Skips the singleton lock + paused check by
 // design — operator-driven /admin actions should run regardless. The
 // retry loop, timeout, hooks, metrics, and Stats counters all fire
 // as on a normal tick.
 //
+// The third argument is an explicit [OverrideOK] token — see that
+// type's doc for the rationale. The token has no runtime state; it
+// is a code-review gate so a "I just want to fire this job manually"
+// path cannot land in production code without surfacing in greps.
+//
 // Returns NotFound when the name is unknown. Nil-receiver returns
 // NotFound. The runtime need NOT be Started — TriggerJob works on a
 // stopped runtime too (manual-only mode).
-func (r *Runtime) TriggerJob(ctx context.Context, name string) error {
+func (r *Runtime) TriggerJob(ctx context.Context, name string, _ OverrideOK) error {
 	if r == nil {
 		return xerrs.NotFoundf(CodeUnknownJob, "cronmap: unknown job %q", name)
 	}

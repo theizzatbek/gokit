@@ -136,7 +136,8 @@ func (r *Runtime) JobNames() []string
 // /admin endpoints
 func (r *Runtime) Stats() []JobStats                              // per-job snapshot
 func (r *Runtime) NextRun(name string) (time.Time, error)         // schedule.Next(now)
-func (r *Runtime) TriggerJob(ctx context.Context, name string) error  // manual run (bypass singleton + pause)
+func (r *Runtime) TriggerJob(ctx context.Context, name string, _ OverrideOK) error  // manual run (bypass singleton + pause)
+type OverrideOK struct{}                                                              // explicit gate for TriggerJob — greppable opt-in
 func (r *Runtime) PauseJob(name string) error                     // skip scheduled ticks
 func (r *Runtime) ResumeJob(name string) error                    // re-enable
 
@@ -195,8 +196,11 @@ for _, s := range rt.Stats() {
         s.Name, s.TotalRuns, s.FailureCount, s.NextRunAt)
 }
 
-// Operator triggers job out-of-band ("force-run now"):
-_ = rt.TriggerJob(ctx, "nightly-rollup") // bypasses singleton + pause
+// Operator triggers job out-of-band ("force-run now"). The
+// cronmap.OverrideOK{} token is a signature-level opt-in: a
+// caller that bypasses leader-election and the pause flag must
+// say so explicitly so the call surfaces in greps + reviews.
+_ = rt.TriggerJob(ctx, "nightly-rollup", cronmap.OverrideOK{})
 
 // Operator disables a job temporarily:
 _ = rt.PauseJob("nightly-rollup")

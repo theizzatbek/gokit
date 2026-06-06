@@ -35,7 +35,7 @@ func TestRuntime_RetrySucceedsOnNthAttempt(t *testing.T) {
 	}
 
 	// Force-fire so we don't wait for the cron tick.
-	if err := rt.TriggerJob(context.Background(), "rt"); err != nil {
+	if err := rt.TriggerJob(context.Background(), "rt", OverrideOK{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -69,7 +69,7 @@ func TestRuntime_RetryExhaustsAndReportsFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := rt.TriggerJob(context.Background(), "exhausted"); err != nil {
+	if err := rt.TriggerJob(context.Background(), "exhausted", OverrideOK{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,7 +109,7 @@ func TestRuntime_OnTickStartCompleteFire(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_ = rt.TriggerJob(context.Background(), "hk")
+	_ = rt.TriggerJob(context.Background(), "hk", OverrideOK{})
 
 	if startCalls.Load() != 1 {
 		t.Errorf("OnTickStart fires = %d, want 1", startCalls.Load())
@@ -137,7 +137,7 @@ func TestRuntime_HookPanicRecovered(t *testing.T) {
 		WithParser(secondPrecisionParser()),
 		WithOnTickStart(func(context.Context, string) { panic("hook boom") }),
 	)
-	_ = rt.TriggerJob(context.Background(), "pn")
+	_ = rt.TriggerJob(context.Background(), "pn", OverrideOK{})
 }
 
 // ── C. Stats ───────────────────────────────────────────────────────
@@ -157,8 +157,8 @@ func TestRuntime_Stats_ReportsCounters(t *testing.T) {
 	}
 
 	// Trigger twice.
-	_ = rt.TriggerJob(context.Background(), "st")
-	_ = rt.TriggerJob(context.Background(), "st")
+	_ = rt.TriggerJob(context.Background(), "st", OverrideOK{})
+	_ = rt.TriggerJob(context.Background(), "st", OverrideOK{})
 
 	stats := findStats(rt.Stats(), "st")
 	if stats.TotalRuns != 2 {
@@ -187,7 +187,7 @@ func TestRuntime_TriggerJob_RunsSync(t *testing.T) {
 		})
 	rt, _ := e.Build(WithParser(secondPrecisionParser()))
 
-	if err := rt.TriggerJob(context.Background(), "trg"); err != nil {
+	if err := rt.TriggerJob(context.Background(), "trg", OverrideOK{}); err != nil {
 		t.Fatal(err)
 	}
 	if !ran.Load() {
@@ -201,7 +201,7 @@ func TestRuntime_TriggerJob_UnknownName(t *testing.T) {
 		func(context.Context) error { return nil })
 	rt, _ := e.Build(WithParser(secondPrecisionParser()))
 
-	err := rt.TriggerJob(context.Background(), "ghost")
+	err := rt.TriggerJob(context.Background(), "ghost", OverrideOK{})
 	if err == nil {
 		t.Fatal("expected NotFound err")
 	}
