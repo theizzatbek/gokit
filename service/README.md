@@ -388,6 +388,25 @@ last-write-wins (код override'ит). `Servers` / `SecuritySchemes` /
 
 ## Common patterns
 
+### Type-safe доступ к опциональным подсистемам
+
+Каждое поле подсистемы (`DB`, `Auth`, `NATS`, `Redis`, `NATSMap`, `APIMap`, `Hasher`, `Outbox`, `S3`, `CronMap`, `RateLimiter`, `WebhooksWorker`, `WebhooksFanout`) остаётся `nil`, когда соответствующий env / option не передан — это значит каждый каллер должен помнить про nil-check. Чтобы не размазывать его по handler'ам, у каждой подсистемы есть пара аксессоров:
+
+```go
+// Hard-require: panic с понятным сообщением о том, какой Config
+// knob включил бы подсистему. Используйте в boot-логике / handler'ах,
+// где отсутствие подсистемы — программная ошибка.
+d := svc.MustDB()                   // *db.DB or panic
+a := svc.MustAuth()                 // *auth.Auth[C] or panic
+
+// Optional: explicit nil-check без подсчёта полей вручную.
+if d, ok := svc.OptionalDB(); ok {
+    _ = d.QueryRow(ctx, "SELECT 1")
+}
+```
+
+Поля Service остаются exported — старый код `svc.DB.Query(...)` компилится без изменений.
+
 ### Композирование собственного app-config'а
 
 ```go

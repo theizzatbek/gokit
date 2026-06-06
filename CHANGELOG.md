@@ -68,6 +68,16 @@ This is the bootstrap entry; prior history lives in `git log`.
   `rt.TriggerJob(ctx, "x", cronmap.OverrideOK{})`.
 
 ### Added
+- `service.Service` gains typed `MustX` / `OptionalX` accessor
+  pairs for every optional subsystem (`DB`, `Auth`, `NATS`,
+  `Redis`, `NATSMap`, `APIMap`, `Hasher`, `Outbox`, `S3`,
+  `CronMap`, `RateLimiter`, `WebhooksWorker`, `WebhooksFanout`).
+  `MustX` panics with a guiding message that names the Config
+  knob or option which would have wired the subsystem;
+  `OptionalX` returns `(subsystem, ok)` for ergonomic explicit
+  nil-checks. The original public fields stay exported — existing
+  call sites like `svc.DB.Query(...)` compile unchanged.
+
 - `batch.Config.IsRetryable func(error) bool` — opt-in classifier
   to break the retry budget early when HandlerFn returns a
   permanent error. nil (default) uses a built-in that treats
