@@ -19,6 +19,8 @@ type storeOpts struct {
 	onFamilyRevoke  FamilyRevokeHook
 	onSubjectRevoke SubjectRevokeHook
 	onIPRevoke      IPRevokeHook
+
+	statsCap int // 0 = unbounded; see WithStatsCap.
 }
 
 // ConsumeReusedHook fires INSIDE Consume on a refresh reuse-detection
@@ -82,4 +84,22 @@ func WithOnSubjectRevoke(fn SubjectRevokeHook) Option {
 // [IPRevokeHook]. Multiple calls — last wins.
 func WithOnIPRevoke(fn IPRevokeHook) Option {
 	return func(o *storeOpts) { o.onIPRevoke = fn }
+}
+
+// WithStatsCap bounds the number of keys [Store.Stats] is willing to
+// SCAN before returning [ErrStatsCapExceeded]. 0 (default) leaves
+// Stats unbounded — fine for diagnostic shells but a foot-gun in
+// long-running /admin endpoints when the keyspace grows unexpectedly.
+//
+// When the cap is hit, the partially accumulated counts are
+// discarded and the error returned with the configured cap embedded
+// in its message — callers should retry against a smaller subset
+// (e.g. [Store.ListBySubject]) or raise the cap intentionally.
+//
+// Negative values are clamped to 0.
+func WithStatsCap(n int) Option {
+	if n < 0 {
+		n = 0
+	}
+	return func(o *storeOpts) { o.statsCap = n }
 }

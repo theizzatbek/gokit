@@ -407,6 +407,16 @@ if d, ok := svc.OptionalDB(); ok {
 
 Поля Service остаются exported — старый код `svc.DB.Query(...)` компилится без изменений.
 
+### `NewSimple` — без type-параметров
+
+Когда вашему сервису не нужен ни типизированный fibermap-payload, ни custom JWT-claims, повторять `[struct{}, struct{}]` в `service.New[struct{}, struct{}]` шумно. `NewSimple` — однострочный шорткат:
+
+```go
+svc, err := service.NewSimple(ctx, cfg)   // эквивалентно service.New[struct{}, struct{}]
+```
+
+Возвращает `*Service[struct{}, struct{}]`. Для типизированного payload'а или JWT-claims — продолжайте использовать `New` напрямую.
+
 ### Композирование собственного app-config'а
 
 ```go

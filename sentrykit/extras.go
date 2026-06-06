@@ -255,10 +255,41 @@ var piiHeaderKeys = map[string]struct{}{
 	"set-cookie":    {},
 }
 
+// ScrubOption tunes [ScrubPII]. Variadic — the zero-option call site
+// `ScrubPII()` keeps its previous behaviour.
+type ScrubOption func(*scrubOpts)
+
+type scrubOpts struct {
+	extraHeaders map[string]struct{}
+}
+
+// WithExtraScrubHeaders extends the redaction set [ScrubPII] applies
+// to request headers. Header names are normalised to lowercase and
+// matched case-insensitively, same as the built-in set
+// (`Authorization`, `Cookie`, `X-API-Key`, `Set-Cookie`). Use for
+// app-specific secrets that ride in custom headers
+// (`X-Internal-Token`, `X-Vault-Lease`, …).
+//
+// Multiple calls accumulate.
+func WithExtraScrubHeaders(headers ...string) ScrubOption {
+	return func(o *scrubOpts) {
+		if o.extraHeaders == nil {
+			o.extraHeaders = make(map[string]struct{}, len(headers))
+		}
+		for _, h := range headers {
+			if h == "" {
+				continue
+			}
+			o.extraHeaders[strings.ToLower(h)] = struct{}{}
+		}
+	}
+}
+
 // ScrubPII returns a BeforeSend hook that:
 //
 //   - Replaces sensitive request header values (`Authorization`,
 //     `Cookie`, `X-API-Key`, `Set-Cookie`) with "[redacted]".
+//     Extend the redaction set with [WithExtraScrubHeaders].
 //   - Strips secret-like query parameters (`token`, `password`,
 //     `secret`, `api_key`, etc) from the request URL.
 //
@@ -270,13 +301,17 @@ var piiHeaderKeys = map[string]struct{}{
 // Server-side PII rules in the Sentry project remain the
 // authoritative redaction layer — this is in-process defence in
 // depth.
-func ScrubPII() func(*sentry.Event, *sentry.EventHint) *sentry.Event {
+func ScrubPII(opts ...ScrubOption) func(*sentry.Event, *sentry.EventHint) *sentry.Event {
+	var o scrubOpts
+	for _, fn := range opts {
+		fn(&o)
+	}
 	return func(e *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 		if e == nil {
 			return nil
 		}
 		if e.Request != nil {
-			scrubRequestHeaders(e.Request.Headers)
+			scrubRequestHeaders(e.Request.Headers, o.extraHeaders)
 			if e.Request.URL != "" {
 				e.Request.URL = scrubURL(e.Request.URL)
 			}
@@ -289,20 +324,26 @@ func ScrubPII() func(*sentry.Event, *sentry.EventHint) *sentry.Event {
 }
 
 // WithoutPII is the shortcut that installs [ScrubPII] as the
-// BeforeSend hook. Compose with explicit [WithBeforeSend] only when
-// you need to chain scrubbing with app-specific event mutation —
-// otherwise this option is the one-liner.
-func WithoutPII() Option {
-	return WithBeforeSend(ScrubPII())
+// BeforeSend hook. Forwards any [ScrubOption]s so callers can extend
+// the redaction set with the one-liner form too.
+func WithoutPII(opts ...ScrubOption) Option {
+	return WithBeforeSend(ScrubPII(opts...))
 }
 
-func scrubRequestHeaders(h map[string]string) {
+func scrubRequestHeaders(h map[string]string, extra map[string]struct{}) {
 	if h == nil {
 		return
 	}
 	for k := range h {
-		if _, ok := piiHeaderKeys[strings.ToLower(k)]; ok {
+		lower := strings.ToLower(k)
+		if _, ok := piiHeaderKeys[lower]; ok {
 			h[k] = "[redacted]"
+			continue
+		}
+		if extra != nil {
+			if _, ok := extra[lower]; ok {
+				h[k] = "[redacted]"
+			}
 		}
 	}
 }

@@ -6,6 +6,7 @@ package refreshredis
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -28,6 +29,8 @@ type Store struct {
 	onFamilyRevoke  FamilyRevokeHook
 	onSubjectRevoke SubjectRevokeHook
 	onIPRevoke      IPRevokeHook
+
+	opts storeOpts
 }
 
 // New wraps an existing *redis.Client. Trailing options enable metrics
@@ -45,6 +48,7 @@ func New(c *redis.Client, opts ...Option) *Store {
 		onFamilyRevoke:  o.onFamilyRevoke,
 		onSubjectRevoke: o.onSubjectRevoke,
 		onIPRevoke:      o.onIPRevoke,
+		opts:            o,
 	}
 	if o.metrics != nil {
 		s.metrics = newMetrics(o.metrics)
@@ -421,7 +425,11 @@ type StoreStats struct {
 // pipelined HMGET to compute the disjoint-bucket rollup. O(N) — for
 // admin / diagnostic use, not a hot path.
 //
-// Tip: pair with a Prometheus scrape that pulls Stats every 60s into
+// When [WithStatsCap] is configured, Stats returns
+// [ErrStatsCapExceeded] the moment the in-flight Total grows past the
+// cap; partial results are discarded so a caller that retries with a
+// smaller scope never reads partially-accumulated counts. Tip: pair
+// with a Prometheus scrape that pulls Stats every 60s into
 // `refreshredis_records{state}` Gauges if you need an alertable view.
 func (s *Store) Stats(ctx context.Context) (StoreStats, error) {
 	start := time.Now()
@@ -456,6 +464,9 @@ func (s *Store) Stats(ctx context.Context) (StoreStats, error) {
 			revoked, _ := vals[1].(string)
 			expStr, _ := vals[2].(string)
 			out.Total++
+			if s.opts.statsCap > 0 && out.Total > s.opts.statsCap {
+				return ErrStatsCapExceeded
+			}
 			exp := atoi64(expStr)
 			switch {
 			case revoked == "1":
@@ -492,12 +503,26 @@ func (s *Store) Stats(ctx context.Context) (StoreStats, error) {
 		return StoreStats{}, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "redis stats scan")
 	}
 	if err := flush(); err != nil {
+		if errors.Is(err, ErrStatsCapExceeded) {
+			s.metrics.inc("stats", "cap_exceeded")
+			return StoreStats{}, err
+		}
 		s.metrics.inc("stats", "error")
 		return StoreStats{}, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "redis stats hmget")
 	}
 	s.metrics.inc("stats", "ok")
 	return out, nil
 }
+
+// ErrStatsCapExceeded is returned by [Store.Stats] when the cap
+// configured via [WithStatsCap] is hit. Sentinel so callers can branch
+// (`errors.Is(err, refreshredis.ErrStatsCapExceeded)`) and choose
+// between widening the cap and re-running the query against a smaller
+// scope (e.g. ListBySubject).
+var ErrStatsCapExceeded = errs.Internal(
+	"refresh_stats_cap_exceeded",
+	"refreshredis: Stats SCAN cap exceeded; raise WithStatsCap or scope the query",
+)
 
 // hashToSession decodes a `refresh:<hash>` HGetAll into a SessionInfo
 // + computed State. `fields` is the verbatim map returned by go-redis.

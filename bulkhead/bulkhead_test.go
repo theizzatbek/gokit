@@ -312,3 +312,96 @@ func TestBulkhead_MaxConcurrentEnforced(t *testing.T) {
 		t.Errorf("peak in-flight = %d, want <= %d", peak.Load(), cap)
 	}
 }
+
+func TestBulkhead_OnAcquireFail_FiresOnFull(t *testing.T) {
+	t.Parallel()
+	var (
+		mu      sync.Mutex
+		reasons []string
+	)
+	b := newTestBulkhead(t, Config{
+		Name:          "fail-hook",
+		MaxConcurrent: 1,
+		MaxQueue:      0,
+		OnAcquireFail: func(reason string) {
+			mu.Lock()
+			reasons = append(reasons, reason)
+			mu.Unlock()
+		},
+	})
+
+	// Fill the single slot.
+	release, err := b.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("first Acquire: %v", err)
+	}
+	t.Cleanup(release)
+
+	// Second Acquire bounces — queue is 0.
+	if _, err := b.Acquire(context.Background()); !errors.Is(err, ErrBulkheadFull) {
+		t.Fatalf("second Acquire err = %v, want ErrBulkheadFull", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reasons) != 1 || reasons[0] != "full" {
+		t.Errorf("OnAcquireFail reasons = %v, want [full]", reasons)
+	}
+}
+
+func TestBulkhead_OnAcquireFail_FiresOnCtxCanceled(t *testing.T) {
+	t.Parallel()
+	var (
+		mu      sync.Mutex
+		reasons []string
+	)
+	b := newTestBulkhead(t, Config{
+		Name:          "fail-hook-ctx",
+		MaxConcurrent: 1,
+		MaxQueue:      1,
+		OnAcquireFail: func(reason string) {
+			mu.Lock()
+			reasons = append(reasons, reason)
+			mu.Unlock()
+		},
+	})
+
+	// Fill the slot so the next Acquire queues.
+	release, err := b.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("first Acquire: %v", err)
+	}
+	t.Cleanup(release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, e := b.Acquire(ctx); done <- e }()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("queued Acquire err = %v, want context.Canceled", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reasons) != 1 || reasons[0] != "ctx_canceled" {
+		t.Errorf("OnAcquireFail reasons = %v, want [ctx_canceled]", reasons)
+	}
+}
+
+func TestBulkhead_OnAcquireFail_PanicRecovered(t *testing.T) {
+	t.Parallel()
+	b := newTestBulkhead(t, Config{
+		Name:          "fail-hook-panic",
+		MaxConcurrent: 1,
+		MaxQueue:      0,
+		OnAcquireFail: func(string) { panic("boom") },
+	})
+	release, _ := b.Acquire(context.Background())
+	t.Cleanup(release)
+
+	// Second Acquire must still return ErrBulkheadFull (not the panic).
+	if _, err := b.Acquire(context.Background()); !errors.Is(err, ErrBulkheadFull) {
+		t.Errorf("err = %v, want ErrBulkheadFull (panic should be recovered)", err)
+	}
+}

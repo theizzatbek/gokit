@@ -180,6 +180,21 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 	return s, nil
 }
 
+// NewSimple is a zero-type-parameter shortcut around [New] for
+// callers that don't carry a custom per-request payload on the
+// fibermap engine and don't carry custom JWT claims. Equivalent to
+// `service.New[struct{}, struct{}](ctx, cfg, opts...)` — saves the
+// noisy `[struct{}, struct{}]` instantiation at the call site that
+// is otherwise required because Go has no type-inference path from
+// Config alone.
+//
+// Reach for [New] directly when you actually use the type
+// parameters: a typed context-builder payload (`fibermap.Context[T]`)
+// or a typed JWT claims struct (`auth.Principal[C].Claims`).
+func NewSimple(ctx context.Context, cfg Config, opts ...Option) (*Service[struct{}, struct{}], error) {
+	return New[struct{}, struct{}](ctx, cfg, opts...)
+}
+
 func (s *Service[T, C]) buildDB(ctx context.Context) error {
 	if s.cfg.DB.User == "" {
 		return nil

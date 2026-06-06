@@ -54,6 +54,21 @@ type Config struct {
 	// callback panics so a broken hook never blocks SetCapacity.
 	OnCapacityChange func(prev, next int)
 
+	// OnAcquireFail fires when an Acquire / Execute call is rejected.
+	// reason is one of "full", "ctx_canceled", "queue_timeout" — the
+	// same labels the `bulkhead_acquire_total{outcome=...}` counter
+	// uses. nil disables the hook.
+	//
+	// Use for log / page on rejection bursts without scraping
+	// Prometheus, or to feed a domain-level circuit (mark the
+	// upstream sick, switch to a fallback) from the same signal the
+	// metrics see. Symmetric to OnCapacityChange.
+	//
+	// Panic-safe — the kit recovers from callback panics and logs
+	// via Config.Logger; rejection still surfaces to the caller as
+	// the same error it would have without the hook.
+	OnAcquireFail func(reason string)
+
 	// StatsWindow is the rolling-window length used to populate
 	// [Stats.LatencyP50] / [Stats.LatencyP99] / [Stats.AvgWait].
 	// Default 10s when zero. The window is bounded so /healthz

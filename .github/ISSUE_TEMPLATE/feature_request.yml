@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a new feature, option, or extension point.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: search closed issues — many proposals have been declined
+        with reasoning that's still relevant. If your proposal is similar to one
+        of those, the most useful thing you can do is explain what's different.
+  - type: input
+    id: subpackage
+    attributes:
+      label: Subpackage
+      description: Where would this feature live? (e.g. `db`, `clients/redis`, `service`)
+      placeholder: clients/redis
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to accomplish that the current API makes hard?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behaviour
+      description: |
+        A sketch of what you'd like to call. Function signature, env var, YAML
+        shape — whatever form makes sense.
+      render: go
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        What else did you try? Why didn't it fit? Workarounds outside the kit
+        are fine to list — they help calibrate how important the kit-side
+        change really is.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: |
+        Is this additive, or does it require a breaking change? Pre-v1 we
+        accept breakage with justification; post-v1 the bar is much higher.

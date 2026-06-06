@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security disclosure
+    url: https://github.com/theizzatbek/gokit/blob/main/SECURITY.md
+    about: Please report vulnerabilities privately — do NOT file a public issue.
+  - name: Contributing guide
+    url: https://github.com/theizzatbek/gokit/blob/main/CONTRIBUTING.md
+    about: Build/test setup, PR conventions, commit-message style.

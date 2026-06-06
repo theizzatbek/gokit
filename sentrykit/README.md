@@ -157,6 +157,16 @@ sentrykit.WithBeforeSend(func(e *sentry.Event, h *sentry.EventHint) *sentry.Even
 })
 ```
 
+Расширить redaction-set для своих app-specific заголовков можно через `WithExtraScrubHeaders`:
+
+```go
+// case-insensitive matching, аккумулируется поверх built-in set
+sentrykit.WithoutPII(sentrykit.WithExtraScrubHeaders("X-Internal-Token", "X-Vault-Lease"))
+// или через ScrubPII напрямую:
+hook := sentrykit.ScrubPII(sentrykit.WithExtraScrubHeaders("X-Internal-Token"))
+sentrykit.Setup(ctx, dsn, sentrykit.WithBeforeSend(hook))
+```
+
 Defence in depth — Sentry project's server-side PII rules remain the authoritative redaction layer.
 
 ## /admin: Stats()

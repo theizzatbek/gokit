@@ -206,6 +206,23 @@ func (b *Bulkhead) fireCapacityChange(prev, next int) {
 	b.cfg.OnCapacityChange(prev, next)
 }
 
+// fireAcquireFail invokes the OnAcquireFail hook with panic recovery.
+// Called from acquireInternal on every reject path; reason mirrors
+// the outcome label fed to the Prometheus collector.
+func (b *Bulkhead) fireAcquireFail(reason string) {
+	if b.cfg.OnAcquireFail == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil && b.cfg.Logger != nil {
+			b.cfg.Logger.Warn("bulkhead: OnAcquireFail panic recovered",
+				"name", b.cfg.Name,
+				"reason", reason)
+		}
+	}()
+	b.cfg.OnAcquireFail(reason)
+}
+
 // Close stops the adaptive controller goroutine (if any) and is
 // idempotent. Static bulkheads (no [WithAdaptive]) do not need to be
 // Closed — Close on them is a no-op.
@@ -265,6 +282,7 @@ func (b *Bulkhead) acquireInternal(ctx context.Context) (func(bool), error) {
 	if b.waiting >= b.maxQueue {
 		b.mu.Unlock()
 		b.collector.observe(outcomeFull, 0)
+		b.fireAcquireFail(outcomeFull)
 		return nil, ErrBulkheadFull
 	}
 	b.waiting++
@@ -287,11 +305,13 @@ func (b *Bulkhead) acquireInternal(ctx context.Context) (func(bool), error) {
 	if cancelled {
 		b.mu.Unlock()
 		b.collector.observe(outcomeCtxCanceled, time.Since(start))
+		b.fireAcquireFail(outcomeCtxCanceled)
 		return nil, ctx.Err()
 	}
 	if timedOut {
 		b.mu.Unlock()
 		b.collector.observe(outcomeQueueTimeout, time.Since(start))
+		b.fireAcquireFail(outcomeQueueTimeout)
 		return nil, ErrQueueTimeout
 	}
 	b.inflight++
