@@ -24,14 +24,17 @@ replication, suitable for local dev of multi-replica routing code:
     DB_READ_URLS=postgres://app:changeme@localhost:5433/appdb \
     ./your-service
 
-The image (bitnami/postgresql:16 by default) carries env-driven
+The image (bitnamilegacy/postgresql:16 by default) carries env-driven
 streaming-replication wiring, so no pg_basebackup or recovery.conf
 script is needed — pinch from the [Bitnami PostgreSQL image docs]
-(https://hub.docker.com/r/bitnami/postgresql) for variable reference.
+(https://hub.docker.com/r/bitnamilegacy/postgresql) for variable
+reference. The "bitnamilegacy" namespace is the community fallback
+after Bitnami removed their free public images from the upstream
+"bitnami/" namespace in late 2025.
 
 Flags:
   --replicas        number of standby nodes (default 1, min 1)
-  --image           docker image (default bitnami/postgresql:16)
+  --image           docker image (default bitnamilegacy/postgresql:16)
   --db              application database name (default appdb)
   --user            application user (default app)
   --password        application password (default changeme; CHANGE for any persistent setup)
@@ -65,7 +68,7 @@ func runGenDBCluster(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("gen db-cluster", flag.ContinueOnError)
 	f := dbClusterFlags{}
 	fs.IntVar(&f.replicas, "replicas", 1, "number of standby nodes (min 1)")
-	fs.StringVar(&f.image, "image", "bitnami/postgresql:16", "docker image (must support POSTGRESQL_REPLICATION_MODE)")
+	fs.StringVar(&f.image, "image", "bitnamilegacy/postgresql:16", "docker image (must support POSTGRESQL_REPLICATION_MODE)")
 	fs.StringVar(&f.database, "db", "appdb", "application database name")
 	fs.StringVar(&f.username, "user", "app", "application user")
 	fs.StringVar(&f.password, "password", "changeme", "application password")
