@@ -90,6 +90,40 @@ jobs:
           key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-build-
 
+      # Cache Docker images consumed by testcontainers-go. ~900MB of
+      # tars (Bitnami Postgres alone is ~600MB) — pulling fresh on
+      # every CI run costs 60-100s on a cold runner. Cache key hashes
+      # .github/docker-images.txt so editing the manifest forces a
+      # fresh pull. restore-keys allows partial reuse when only one
+      # tag in the manifest changes.
+      - name: Cache Docker images
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/docker-images
+          key: ${{ runner.os }}-docker-images-${{ hashFiles('.github/docker-images.txt') }}
+          restore-keys: ${{ runner.os }}-docker-images-
+
+      - name: Load cached Docker images
+        run: |
+          if [ -d ~/docker-images ]; then
+            for tar in ~/docker-images/*.tar; do
+              [ -f "$tar" ] && docker load -i "$tar"
+            done
+          fi
+
+      - name: Pull missing Docker images
+        run: |
+          mkdir -p ~/docker-images
+          while IFS= read -r image; do
+            case "$image" in ''|\#*) continue ;; esac
+            if ! docker image inspect "$image" > /dev/null 2>&1; then
+              docker pull "$image"
+              safe=$(echo "$image" | tr '/:' '__')
+              docker save "$image" -o ~/docker-images/${safe}.tar
+            fi
+          done < .github/docker-images.txt
+
       # No -race here: combining the race detector with the full
       # testcontainers stack tripled wall time without catching new
       # bugs in practice (race-prone code lives in the kit core,
