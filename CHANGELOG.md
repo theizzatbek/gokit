@@ -81,6 +81,22 @@ This is the bootstrap entry; prior history lives in `git log`.
   `rt.TriggerJob(ctx, "x", cronmap.OverrideOK{})`.
 
 ### Documentation
+- `sentrykit` — CPU profiling status re-confirmed for v1 freeze.
+  Re-checked `getsentry/sentry-go` upstream on 2026-06: v0.46.2
+  is still the latest tagged release (`go list -m -versions`
+  shows no newer), the changelog of the most recent 5 releases
+  mentions no profiling API, and the long-standing tracking
+  issue ([sentry-go#630](https://github.com/getsentry/sentry-go/issues/630))
+  is closed without an API ever landing. Deferral is therefore
+  not a "kit didn't finish wiring it" gap — it is "the upstream
+  SDK doesn't expose the knob to wire." Kit will add hooks the
+  moment `ClientOptions` grows a `ProfilesSampleRate` (or
+  successor) — additive change, not breaking. README updated to
+  spell this out, point at the upstream issue, and suggest the
+  three sidecar paths (Pyroscope, Grafana Phlare over OTLP,
+  `net/http/pprof` on an internal port) that work alongside the
+  kit's `WithSentry` in the meantime.
+
 - `clients/nats.(*Client).Conn()` / `JetStream()` — escape-hatch
   contract spelled out ahead of v1. The old doc-string warned
   that errors don't get *errs.Error wrapping but stopped there;

@@ -348,10 +348,18 @@ global-hub.
   работающей goroutine'ы — не stack, на котором был произведён
   cause. Проводка `runtime.Frame`-extractor'а в `errs.Cause` — это
   future follow-up, если нужно.
-- **Нет CPU-профилирования.** `sentry-go` v0.46.2 не выставляет
-  стабильную profiling-client опцию. Приземлится в follow-up'е, как
-  только SDK shipping'ит `ProfilesSampleRate` (или преемник) в своих
-  `ClientOptions`.
+- **Нет CPU-профилирования.** `sentry-go` всё ещё **v0.46.2** на 2026-06 —
+  это последняя теггированная версия (см. `go list -m -versions
+  github.com/getsentry/sentry-go`), и она не выставляет стабильную
+  profiling-client опцию (`ProfilesSampleRate` или преемника)
+  в `ClientOptions`. Upstream-issue про Go profiling
+  ([getsentry/sentry-go#630](https://github.com/getsentry/sentry-go/issues/630))
+  закрыт без shipping'а API. Деferral подтверждён для v1; kit добавит
+  hook'ы, как только SDK shipping'ит `ClientOptions`-поле — это
+  additive change, не breaking. Для continuous profiling в Go в
+  междувременье — отдельный sidecar (Pyroscope, Grafana Phlare через
+  OTLP, или `net/http/pprof` за internal-portом); ни одно не shipping'ится
+  кит'ом, но всё работает рядом с kit'овским `WithSentry`.
 - **Нет авто-детекции release.** `WithRelease` должна передаваться
   явно (или env `SENTRY_RELEASE`). Follow-up подключит значение из
   `service.Service.NodeName` / `service.version` resource-attr.
