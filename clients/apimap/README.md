@@ -146,7 +146,7 @@ func WithDefaultCall(Call) Option           // engine-wide Call merged before к
 
 // Engine-level per-client overrides
 func (e *Engine) RegisterClientOptions(clientName string, opts ...httpc.Option)
-func (e *Engine) RegisterTransport(clientName string, rt http.RoundTripper)   // mock mode
+func (e *Engine) RegisterTransport(clientName string, rt http.RoundTripper)   // mock mode — see note below
 func (e *Engine) SetClientDefaultCall(clientName string, c Call)
 
 // Runtime calls

@@ -1,0 +1,61 @@
+name: Bug report
+description: Report unexpected behaviour, panics, regressions, or doc inaccuracies.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing! A few quick fields up front make triage faster — the
+        more you can pre-fill, the less back-and-forth on the thread.
+  - type: input
+    id: subpackage
+    attributes:
+      label: Subpackage
+      description: Which `gokit/...` subpackage is affected? (e.g. `db`, `fibermap`, `clients/nats`, `service`)
+      placeholder: clients/nats
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: gokit version / commit
+      description: The tag or commit SHA you're running.
+      placeholder: v0.x.y or abc1234
+    validations:
+      required: true
+  - type: input
+    id: go_version
+    attributes:
+      label: Go version
+      description: `go version` output.
+      placeholder: go1.26.4 darwin/arm64
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: One or two sentences on what you saw and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: |
+        Minimal code or a `go test` invocation that reproduces it. A self-contained
+        snippet beats a link to a private repo.
+      render: go
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / stack trace
+      description: Panic stack, log lines, metric values — anything that pinpoints the failure.
+      render: shell
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else worth flagging — deployment shape, replica counts, related issues.

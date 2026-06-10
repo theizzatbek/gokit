@@ -28,7 +28,7 @@ authObj, _ := auth.New[MyClaims](auth.Config{
 | Метод | Возвращает | Заметки |
 |---|---|---|
 | `ListBySubject(ctx, subject) ([]SessionInfo, error)` | sessions ordered `issued_at DESC` | Backed by `refresh:subject:{subject}` set + pipelined `HGETALL`. Член set'а с уже EXPIREATd хешем silently пропускается. |
-| `Stats(ctx) (StoreStats, error)` | `{Active, Consumed, Revoked, Expired, Total}` | O(N) — `SCAN refresh:*` (исключая aux-сеты) + pipelined `HMGET`. Для admin / diagnostic, не hot path. EXPIREATd токены НЕ видны (Redis их уже выгрузил). |
+| `Stats(ctx) (StoreStats, error)` | `{Active, Consumed, Revoked, Expired, Total}` | O(N) — `SCAN refresh:*` (исключая aux-сеты) + pipelined `HMGET`. Для admin / diagnostic, не hot path. EXPIREATd токены НЕ видны (Redis их уже выгрузил). Bound через `WithStatsCap(N)`: при превышении возвращается `ErrStatsCapExceeded` (sentinel — `errors.Is(err, refreshredis.ErrStatsCapExceeded)`), partial counts отбрасываются. |
 | `RevokeByIP(ctx, ip) (int64, error)` | число revoked tokens | Backed by вспомогательным set'ом `refresh:ip:{ip}`, заполняемым при Issue'е (когда `r.IP != ""`). Старые токены до этого фичи не индексированы — для retroactive sweep пройдитесь Stats/ListBySubject. |
 
 `SessionInfo` — admin projection без `token_hash`. `ConsumedAt`/`RevokedAt` — sentinel: nil-zero = "консьюмнут / revoked флаг выставлен" (Redis-store хранит только булевы флаги, не точные timestamps). Поле `State` — `"active" | "consumed" | "revoked" | "expired"`.

@@ -239,3 +239,43 @@ func (b *threadSafeBuffer) Write(p []byte) (int, error) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func TestScrubPII_WithExtraScrubHeaders_RedactsCustom(t *testing.T) {
+	scrub := ScrubPII(WithExtraScrubHeaders("X-Internal-Token", "X-Vault-Lease"))
+	e := &sentry.Event{
+		Request: &sentry.Request{
+			Headers: map[string]string{
+				"Authorization":    "Bearer x",
+				"X-Internal-Token": "secret1",
+				"X-Vault-Lease":    "secret2",
+				"X-Public":         "ok",
+			},
+		},
+	}
+	out := scrub(e, nil)
+	if out.Request.Headers["X-Internal-Token"] != "[redacted]" {
+		t.Errorf("X-Internal-Token = %q, want [redacted]", out.Request.Headers["X-Internal-Token"])
+	}
+	if out.Request.Headers["X-Vault-Lease"] != "[redacted]" {
+		t.Errorf("X-Vault-Lease = %q, want [redacted]", out.Request.Headers["X-Vault-Lease"])
+	}
+	if out.Request.Headers["Authorization"] != "[redacted]" {
+		t.Error("Authorization should still be redacted by the default set")
+	}
+	if out.Request.Headers["X-Public"] != "ok" {
+		t.Errorf("X-Public = %q, want unchanged 'ok'", out.Request.Headers["X-Public"])
+	}
+}
+
+func TestScrubPII_WithExtraScrubHeaders_CaseInsensitive(t *testing.T) {
+	scrub := ScrubPII(WithExtraScrubHeaders("X-INTERNAL-TOKEN"))
+	e := &sentry.Event{
+		Request: &sentry.Request{
+			Headers: map[string]string{"x-internal-token": "secret"},
+		},
+	}
+	out := scrub(e, nil)
+	if out.Request.Headers["x-internal-token"] != "[redacted]" {
+		t.Errorf("got %q, want [redacted]", out.Request.Headers["x-internal-token"])
+	}
+}

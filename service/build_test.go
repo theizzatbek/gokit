@@ -285,3 +285,16 @@ func TestApplyDBAppNameDefault_NoNodeNameDoesNothing(t *testing.T) {
 		t.Fatalf("AppName = %q, want empty", cfg.DB.AppName)
 	}
 }
+
+func TestNewSimple_ZeroTypeShortcut_BuildsService(t *testing.T) {
+	svc, err := NewSimple(context.Background(), Config{})
+	if err != nil {
+		t.Fatalf("NewSimple(): %v", err)
+	}
+	t.Cleanup(svc.Close)
+	if svc.Engine == nil {
+		t.Error("NewSimple: Engine is nil — must be built (same as New)")
+	}
+	// Compile-time check that the returned type instantiates struct{}/struct{}.
+	var _ *Service[struct{}, struct{}] = svc
+}

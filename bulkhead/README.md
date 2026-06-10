@@ -134,6 +134,20 @@ Config{
 
 Fires AFTER `SetCapacity` (manual или adaptive tick) applies a non-trivial change. No-op SetCapacity (same value) suppresses the callback. Panic-safe.
 
+### `OnAcquireFail` hook
+
+```go
+Config{
+    OnAcquireFail: func(reason string) {
+        // reason ∈ {"full", "ctx_canceled", "queue_timeout"} — same
+        // labels as bulkhead_acquire_total{outcome=...}
+        log.Warn("bulkhead rejection", "name", cfg.Name, "reason", reason)
+    },
+}
+```
+
+Fires на каждом reject path Acquire/Execute (полный bulkhead, ctx cancel в очереди, queue timeout). Symmetric to `OnCapacityChange`. Pair with `bulkhead_acquire_total{outcome=…}` метрикой когда хотите доменный сигнал (mark upstream sick, switch to fallback) из того же события что и метрики. Panic-safe.
+
 ### Enhanced `Stats()`
 
 `Stats()` теперь включает rolling latency + wait aggregates над `Config.StatsWindow` (default 10s):
