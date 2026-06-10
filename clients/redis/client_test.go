@@ -169,12 +169,16 @@ func TestClient_Redis_PanicsUnderCluster(t *testing.T) {
 }
 
 func TestClient_Redis_PanicsUnderSentinel(t *testing.T) {
+	// Use a zero-value *redis.Client (not NewFailoverClient) so the
+	// assertion holds exactly the property under test: even when
+	// universal HAS the *redis.Client type (which the real
+	// FailoverClient does), Redis() must still panic because the
+	// kit Client.mode says sentinel. Zero-value also avoids spawning
+	// a background sentinel-discovery goroutine that leaks dial-loop
+	// noise into the rest of the suite.
 	c := &Client{
-		universal: redis.NewFailoverClient(&redis.FailoverOptions{
-			MasterName:    "mymaster",
-			SentinelAddrs: []string{"127.0.0.1:0"},
-		}),
-		mode: ModeSentinel,
+		universal: &redis.Client{},
+		mode:      ModeSentinel,
 	}
 	defer func() {
 		r := recover()

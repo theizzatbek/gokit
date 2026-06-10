@@ -223,12 +223,16 @@ func (c *Client) Redis() *redis.Client {
 	if c == nil {
 		return nil
 	}
-	single, ok := c.universal.(*redis.Client)
-	if !ok {
+	// Mode is the source of truth here, not the dynamic type of
+	// c.universal. Sentinel-mode failover via redis.NewFailoverClient
+	// returns a *redis.Client (sentinel-backed pool under the hood) —
+	// a type assertion alone would silently accept it and leak the
+	// bug. Only ClusterClient is a distinct type.
+	if c.mode != ModeSingle {
 		panic("clients/redis: Redis() is single-mode only; got mode=" + c.mode.String() +
 			" — use Client.Universal() for cluster/sentinel topologies")
 	}
-	return single
+	return c.universal.(*redis.Client)
 }
 
 // Universal returns the underlying redis.UniversalClient regardless
