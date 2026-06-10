@@ -6,16 +6,18 @@ on:
   pull_request:
 
 # Pipeline:
-#   static            gofmt + vet + warm module/build cache  (~15s)
-#   ├─ unit-race      go test -race -short ./...             (~25s, hot cache)
-#   └─ integration    go test ./...                          (~60s, hot cache)
+#   static                gofmt + vet + warm module/build cache (~15s)
+#   ├─ unit-race-matrix   3 parallel shards (a/b/c) by alphabetical
+#   │                     go list slice; go test -race -short <slice>
+#   │                                                  (~1:30/shard, hot)
+#   └─ integration        go test ./...                (~60s, hot cache)
 #
-# unit-race + integration declare `needs: static` so they reuse the
-# module download + compiled-test cache that static populated. Without
-# the dependency every parallel job would re-download modules from
-# scratch (`actions/setup-go cache: true` only restores from a previous
-# WORKFLOW RUN; parallel jobs within one run can't see each other's
-# uploads).
+# unit-race-matrix + integration declare `needs: static` so they reuse
+# the module download + compiled-test cache that static populated.
+# Without the dependency every parallel job would re-download modules
+# from scratch (`actions/setup-go cache: true` only restores from a
+# previous WORKFLOW RUN; parallel jobs within one run can't see each
+# other's uploads).
 jobs:
   static:
     runs-on: ubuntu-latest
@@ -49,9 +51,13 @@ jobs:
       # ~/.cache/go-build.
       - run: go vet ./...
 
-  unit-race:
+  unit-race-matrix:
     needs: static
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [a, b, c]
     steps:
       - uses: actions/checkout@v4
 
@@ -70,7 +76,27 @@ jobs:
       # -short skips every package whose tests need Docker
       # (testcontainers). The race detector only runs against pure
       # unit code, which is where most concurrency bugs live anyway.
-      - run: go test -race -short ./...
+      #
+      # 3-way alphabetical split: `go list ./...` produces packages
+      # in import-path lexicographic order; we chunk into three near-
+      # equal slices by matrix.shard. Auto-balances by package count;
+      # new packages auto-distribute. The full-suite version (no
+      # split) was ~4m wall — race-checked compile dominates. Each
+      # shard now runs ~1/3 of that on a parallel runner (~1:30 hot
+      # cache).
+      - name: Test shard
+        run: |
+          all=$(go list ./...)
+          total=$(echo "$all" | wc -l)
+          per=$(( (total + 2) / 3 ))
+          case "${{ matrix.shard }}" in
+            a) my=$(echo "$all" | sed -n "1,${per}p") ;;
+            b) my=$(echo "$all" | sed -n "$((per+1)),$((2*per))p") ;;
+            c) my=$(echo "$all" | sed -n "$((2*per+1)),\$p") ;;
+          esac
+          echo "Shard ${{ matrix.shard }}: $(echo "$my" | wc -l) packages"
+          echo "$my"
+          go test -race -short $my
 
   integration:
     needs: static
