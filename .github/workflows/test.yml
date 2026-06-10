@@ -6,16 +6,28 @@ on:
   pull_request:
 
 # Pipeline:
-#   static            gofmt + vet + warm module/build cache  (~15s)
-#   ├─ unit-race      go test -race -short ./...             (~25s, hot cache)
-#   └─ integration    go test ./...                          (~60s, hot cache)
+#   static                gofmt + vet + warm module/build cache  (~15s)
+#   ├─ unit-race          go test -race -short ./...             (~25s, hot)
+#   └─ integration-matrix 4 parallel shards by container family:
+#         pg              postgres + bitnamilegacy/postgresql
+#         redis           redis
+#         nats            nats
+#         bundle          postgres + nats + minio (service smoke, s3,
+#                          inboxnats/outboxnats cross-container)
 #
-# unit-race + integration declare `needs: static` so they reuse the
-# module download + compiled-test cache that static populated. Without
-# the dependency every parallel job would re-download modules from
-# scratch (`actions/setup-go cache: true` only restores from a previous
-# WORKFLOW RUN; parallel jobs within one run can't see each other's
-# uploads).
+# unit-race + integration-matrix declare `needs: static` so they reuse
+# the module download + compiled-test cache that static populated.
+# Without the dependency every parallel job would re-download modules
+# from scratch (`actions/setup-go cache: true` only restores from a
+# previous WORKFLOW RUN; parallel jobs within one run can't see each
+# other's uploads).
+#
+# Each integration-matrix shard pulls ONLY the docker images it needs:
+# explicit per-shard `images` list, per-shard cache key keyed on
+# (shard name + manifest hash). Manifest .github/docker-images.txt
+# stays as the central versioning source (touching it busts every
+# shard's image cache). See docs/superpowers/specs/2026-06-10-ci-matrix-split-design.md
+# for the package classification.
 jobs:
   static:
     runs-on: ubuntu-latest
@@ -72,9 +84,34 @@ jobs:
       # unit code, which is where most concurrency bugs live anyway.
       - run: go test -race -short ./...
 
-  integration:
+  integration-matrix:
     needs: static
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: pg
+            images: postgres:16-alpine bitnamilegacy/postgresql:16
+            packages: >-
+              ./db ./db/sqb/... ./db/lock/... ./db/migrate/... ./db/jobs/...
+              ./db/outbox ./db/inbox ./db/testdb/...
+              ./auth/refreshpg/... ./auth/apikeypg/...
+              ./audit/auditpg/... ./clients/webhooks/storepg/...
+          - shard: redis
+            images: redis:7-alpine
+            packages: >-
+              ./clients/redis/... ./clients/cache/... ./clients/ratelimit/...
+              ./auth/refreshredis/... ./auth/sessionsredis/...
+          - shard: nats
+            images: nats:2-alpine
+            packages: >-
+              ./clients/nats/... ./clients/natsmap ./clients/natsmap/natsgw/...
+          - shard: bundle
+            images: postgres:16-alpine nats:2-alpine minio/minio:latest
+            packages: >-
+              ./service/... ./clients/s3/...
+              ./db/inbox/inboxnats/... ./db/outbox/outboxnats/...
     steps:
       - uses: actions/checkout@v4
 
@@ -90,19 +127,17 @@ jobs:
           key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-build-
 
-      # Cache Docker images consumed by testcontainers-go. ~900MB of
-      # tars (Bitnami Postgres alone is ~600MB) — pulling fresh on
-      # every CI run costs 60-100s on a cold runner. Cache key hashes
-      # .github/docker-images.txt so editing the manifest forces a
-      # fresh pull. restore-keys allows partial reuse when only one
-      # tag in the manifest changes.
+      # Per-shard Docker image cache. Manifest .github/docker-images.txt
+      # remains the central versioning source (touching it busts every
+      # shard's cache). Each shard caches only its `matrix.images`
+      # subset as tar archives.
       - name: Cache Docker images
         id: docker-cache
         uses: actions/cache@v4
         with:
           path: ~/docker-images
-          key: ${{ runner.os }}-docker-images-${{ hashFiles('.github/docker-images.txt') }}
-          restore-keys: ${{ runner.os }}-docker-images-
+          key: ${{ runner.os }}-docker-images-${{ matrix.shard }}-${{ hashFiles('.github/docker-images.txt') }}
+          restore-keys: ${{ runner.os }}-docker-images-${{ matrix.shard }}-
 
       - name: Load cached Docker images
         run: |
@@ -112,20 +147,19 @@ jobs:
             done
           fi
 
-      - name: Pull missing Docker images
+      - name: Pull missing Docker images (shard subset)
         run: |
           mkdir -p ~/docker-images
-          while IFS= read -r image; do
-            case "$image" in ''|\#*) continue ;; esac
+          for image in ${{ matrix.images }}; do
             if ! docker image inspect "$image" > /dev/null 2>&1; then
               docker pull "$image"
               safe=$(echo "$image" | tr '/:' '__')
               docker save "$image" -o ~/docker-images/${safe}.tar
             fi
-          done < .github/docker-images.txt
+          done
 
       # No -race here: combining the race detector with the full
       # testcontainers stack tripled wall time without catching new
       # bugs in practice (race-prone code lives in the kit core,
       # covered by the unit-race job above).
-      - run: go test ./...
+      - run: go test ${{ matrix.packages }}

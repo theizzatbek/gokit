@@ -1,10 +1,14 @@
 # Docker images used by integration tests via testcontainers-go.
-# The `integration` job in .github/workflows/test.yml caches these
-# images as tar archives so CI doesn't re-pull ~900MB every run.
+# Central versioning manifest. Each `integration-matrix` shard in
+# .github/workflows/test.yml caches and pulls a SUBSET of these
+# images — the shard's `matrix.images` literal names which ones.
 #
-# Cache key in the workflow hashes this file's contents — bump or
-# edit any line to force a fresh pull. Comments and blank lines are
-# ignored by the loader script.
+# This file plays two roles in the workflow:
+#   1. Cache-key hashing — every shard's docker-image cache key
+#      includes this file's hash, so editing any line busts every
+#      shard's image cache. Bump a tag here to force a fresh pull.
+#   2. Documentation — the full list of images the integration suite
+#      can touch, for ops review and security scanning.
 #
 # Pin tags rather than `latest` where possible to keep CI deterministic.
 # Update the corresponding tests when bumping versions here.
