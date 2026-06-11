@@ -38,18 +38,78 @@ wiring (Engine + Errors + optional Logger), `service/full/` —
   caller-shape — какие subsystems чаще включаются вместе, какие
   редко. Возможно lite/full недостаточно, нужен третий tier.
 
-### Discovery sweep — что ещё всплыло как «нелогично»
+### Discovery sweep — findings (2026-06-11)
 
-Никто не делал post-v1 per-file code-review. Скорее всего там
-накопились мелкие inconsistency: имена методов, порядок аргументов,
-typed errors vs sentinel, etc. До per-file sweep'а конкретики тут
-нет — это placeholder напоминание провести review до того как v2
-content-list закроется.
+Manual review через `grep -E "// (TODO|FIXME|Deprecated):"` +
+`grep -E "back-compat|legacy|for now"` по `*.go` + чтение
+наиболее «жирных» config-структур. Поднялось семь конкретных
+back-compat defaults / wrapper'ов, явно помеченных авторами для
+revisit'а на следующем major'е:
 
-- **Источник:** [`docs/v1-readiness.md`](v1-readiness.md) § «Что НЕ
-  в audit'е», bullet про `/code-review ultra`.
-- **Triage:** `pending decision` — итог sweep'а определит, что-то
-  попадёт в v2, что-то в v1.x.
+#### batch.Config.MaxPending default 0 (= unbounded)
+[`batch/config.go:40-42`](../batch/config.go) — комментарий
+«= unbounded (back-compat — but watch for unbounded growth on
+slow HandlerFn + fast Submit rates)». Silent unbounded memory
+default — footgun. v2: defensive default (например, `BatchSize × 10`
+или фикс `1000`), opt-in 0 для тех кто реально хочет «бесконечно».
+- **Triage:** `v2-only` — change of default semantics ломает callers,
+  которые молча росли на default'е (а такие, по определению, есть).
+
+#### batch.Config.MaxInFlightHandlers default 1 (= sequential)
+[`batch/config.go:44-48`](../batch/config.go) — «Default 1
+(sequential — back-compat)». Современный batched dispatcher
+ожидает parallel по умолчанию. v2: `0` → автодетект по
+`runtime.NumCPU()` либо `2` как разумный safe baseline. Sequential
+оставить как явный `=1`.
+- **Triage:** `v2-only` — поведение существующих pipeline'ов
+  изменится (ordering, throughput).
+
+#### cronmap.Job.MaxRetries default 0 (= no retry)
+[`cronmap/spec.go:28-34`](../cronmap/spec.go) — «MaxRetries (0 =
+no retry — back-compat)». Cron job'ы по типу всегда хотят
+retries на transient ошибках; silent no-retry default = тихие
+проваленные cron'ы. v2: дефолт `3` (с `RetryBackoff` дефолтом
+`30s`), `-1` явное «no retries».
+- **Triage:** `v2-only` — изменение поведения существующих cron
+  job'ов; downstream метрики `cron_attempts_total` поедут вверх.
+
+#### fibermap.RequestLogger — collapse с RequestLoggerWithOptions
+[`fibermap/reqlog.go:18, 39-58`](../fibermap/reqlog.go) — два
+конструктора для одного middleware: `RequestLogger(logger,
+skipPaths ...)` (back-compat) и `RequestLoggerWithOptions(logger,
+opts ...RequestLoggerOption)`. Первый внутри вызывает второй.
+v2: один constructor `RequestLogger(logger, opts ...Option)`,
+`skipPaths ...string` уходит → `WithReqLogSkipPaths(paths ...)`.
+- **Triage:** `v2-only` — signature change на call-sites.
+
+#### db.readPoolEntry "standby" label под single-replica
+[`db/db.go:27-32`](../db/db.go) — single-replica entry name'ится
+`"standby"`, multi-replica — `"standby-1"`/`"standby-2"`/….
+Асимметрия в метрике-labels: каллеры с alerting'ом на
+`pool="standby"` ломаются при добавлении второго replica. v2:
+всегда `"standby-1"` (даже single-replica), и в downstream
+alerting'е есть один format.
+- **Triage:** `v2-only` — Prometheus label change = breaking
+  per [`docs/versioning.md`](versioning.md) § Metric names and
+  label values.
+
+#### service.resolvePath wraps resolvePathInDir
+[`service/paths.go`](../service/paths.go) — `resolvePath` —
+back-compat wrapper над `resolvePathInDir` с пустым
+`configsDir`. Два конструктора для одного behavior'а.
+v2: один экспортированный helper с `ConfigsDir` явно (либо
+nil → CWD), wrapper удалить.
+- **Triage:** `v2-only` — но это internal helper (lowercase), так
+  что breaking только для kit'ового внутреннего кода. Низкий impact.
+
+#### clients/cache.For[T] panics on config error
+[`clients/cache/cache.go:212-224`](../clients/cache/cache.go) —
+convenience constructor `For[T](rc, keyPrefix) *Redis[T]` молча
+`panic(err)` если validation'а cfg фейлится. Kit-convention'ом
+production-функции возвращают `*errs.Error`. v2: либо переименовать
+в `MustFor[T]` (явный panic-suffix), либо вернуть error parallel
+к `New[T]`.
+- **Triage:** `v2-only` — signature change.
 
 ---
 
@@ -181,6 +241,52 @@ in-memory покрывают use-cases? Если PG нужен — что в Sta
 - **Источник:** v1 audit-discussion про
   `auth/sessions.StoreStats.Expired` (закрыто).
 - **Triage:** `pending decision` — additive backend, `v1.x MINOR`.
+
+### breaker.OpenIntervalMultiplier default
+
+[`breaker/config.go:68-76`](../breaker/config.go) — `Default 1.0`
+= constant `OpenInterval` без экспоненциального роста. Безопасный
+дефолт, но смысл feature теряется (надо явно ставить `Multiplier
+> 1`). Стоит ли в v2 дефолтить в `2.0` (классический exponential
+backoff) или оставить consciously-off? Решение зависит от
+типичного use-case киrt'а: short-trip breaker'ы хороши с
+constant'ом, long-recovery — с exponential.
+
+- **Источник:** discovery sweep 2026-06-11.
+- **Triage:** `pending decision` — итог либо в v2 (default change
+  = MAJOR per metric/behaviour rules в versioning.md), либо
+  остаётся как есть.
+
+### clients/nats default ack classifier
+
+[`clients/nats/subscriber.go:381-395`](../clients/nats/subscriber.go) —
+`defaultClassifier` хардкодит контракт `nil→Ack`, `ErrPoison→Term`,
+всё остальное → `Nak`. Сейчас уже configurable через `Option`,
+вопрос — нужно ли в v2 более sophisticated default (например,
+автоматическая Term на `context.Canceled` чтобы не Nack'ать
+shutdown'ы), или kept-as-is плюс документирование когда писать
+свой Classifier.
+
+- **Источник:** discovery sweep 2026-06-11.
+- **Triage:** `pending decision` — если меняем default, это
+  `v2-only` (behaviour change по docs/versioning.md § Behavioural
+  changes that aren't signature changes).
+
+### auth.APIKeyFactory — declarative header overrides
+
+[`auth/apikey.go:398-409`](../auth/apikey.go) — author явно решил
+оставить header/query overrides программными, не YAML-декларативными
+(«declarative tends to invite inconsistent header names across
+routes»). Аргумент валидный, но если consumer'ы кит'а реально
+хотят per-route header'ы (например, `X-Internal-API-Key` для
+internal endpoints vs `Authorization: Bearer` для public), это
+ограничение становится больно. v2 candidate если давление
+появится.
+
+- **Источник:** discovery sweep 2026-06-11.
+- **Triage:** `pending decision` — пока нет real-world давления,
+  default keeps. Если давление появится → `v1.x MINOR` (additive
+  Option) или `v2-only` если меняем YAML-schema.
 
 ---
 
