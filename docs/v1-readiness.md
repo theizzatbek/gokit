@@ -1,14 +1,16 @@
 # v1 Readiness Audit
 
+> **Historical.** Tagged `v1.0.0-rc1` on 2026-06-11. This file is now
+> a frozen record of the pre-v1 audit-close work; further v1-prep
+> tracking lives in CHANGELOG + git log. Bake-test in `examples/`
+> for ≥ 1 week is the bridge to final `v1.0.0`.
+
 Снимок: 2026-06-10, post-merge sweep перед `v1.0.0-rc1`. Исходный аудит
 (2026-06-06 на `main @ 29e1838`) флагировал двенадцать P0/P1 items и
 бак-овых P2-мелочей; с тех пор все P0 и P1 закрыты отдельными
 feature-branch'ами и смерджены в main, а P2 консолидирован в
 `feat/v1-p2-bucket` одной волной. Этот файл — снимок «что закрыто чем»
 для аудита и для финального rc1-tag'а.
-
-**Остаток до `v1.0.0-rc1`** — в § [Что осталось](#что-осталось-до-v100-rc1)
-ниже; это housekeeping, не код.
 
 ---
 
