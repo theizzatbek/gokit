@@ -8,6 +8,19 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 
 ## [Unreleased]
 
+## [v1.0.0] - 2026-06-11
+
+First stable major. Promoted from `v1.0.0-rc1` on the same day —
+the planned ≥ 1-week bake in `examples/` was waived; race regressions
+(if any slipped through the CI-restructure) will surface via the
+nightly `race.yml` workflow and be addressed in `v1.0.x` patch
+releases. The contract from here forward is documented in
+[`docs/versioning.md`](docs/versioning.md): every change against
+this tag is classified MAJOR / MINOR / PATCH per the rules there.
+
+For the full pre-v1 audit-close list (`P0` / `P1` / `P2` items and
+their closing commits), see [`docs/v1-readiness.md`](docs/v1-readiness.md).
+
 ## [v1.0.0-rc1] - 2026-06-11
 
 Release candidate for the first stable major. Everything in this
@@ -15,9 +28,11 @@ section was previously tracked under `[Unreleased]` and tagged as
 "pre-v1" — those qualifiers are now the contract: the listed
 breaking changes are the final pre-v1.0 surface, and from this
 tag onward semver applies per [`docs/versioning.md`](docs/versioning.md).
-Bake-test in `examples/` for ≥ 1 week before tagging final
-`v1.0.0`. See [`docs/v1-readiness.md`](docs/v1-readiness.md) for
-the full P0/P1/P2 audit-close list that fed this candidate.
+See [`docs/v1-readiness.md`](docs/v1-readiness.md) for the full
+P0/P1/P2 audit-close list that fed this candidate.
+
+Promoted to `v1.0.0` later the same day with no further changes;
+see the `[v1.0.0]` section above.
 
 ### Removed (breaking, pre-v1)
 - `db.(*DB).ReadPool() *pgxpool.Pool` and `db.(*DB).HasReadReplica() bool`

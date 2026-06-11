@@ -9,7 +9,7 @@ audit, schedulers, file uploads, webhook'и.
 `main.go` к сервису production-shape — либо постепенно (`fibermap` сам по
 себе), либо одним вызовом через `service.New`.
 
-**Статус:** `v1.0.0-rc1` — release candidate. API заморожен под bake-тест в `examples/`; финальный `v1.0.0` следует semver-обещаниям из [`docs/versioning.md`](docs/versioning.md). Полный аудит pre-v1 закрытия — в [`docs/v1-readiness.md`](docs/v1-readiness.md).
+**Статус:** `v1.0.0` — stable. Semver-обещания (что считается breaking / MINOR / PATCH, политика по min Go version, coexistence с будущими major'ами) — в [`docs/versioning.md`](docs/versioning.md). Pre-v1 audit-close список — в [`docs/v1-readiness.md`](docs/v1-readiness.md).
 
 ## Что в коробке
 

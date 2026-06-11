@@ -6,9 +6,9 @@ communicates the magnitude of changes against the previous one. This
 file fixes **what counts as a breaking change** so the meaning is
 unambiguous.
 
-> **Current status:** kit is at `0.x`. Every minor bump may include
-> breaking changes (this is what `0.x` means under semver). The rules
-> below describe how the kit will behave starting at `v1.0.0`.
+> **Current status:** `v1.0.0` tagged 2026-06-11. The rules below
+> are the active contract — every release from this point forward
+> follows them.
 
 ## TL;DR
 
@@ -199,6 +199,28 @@ upgrade-pain on the rest of the API.
 Cluster small breakings into a planned MAJOR release with a written
 migration guide. Don't fire MAJOR for every `MAJOR`-classified
 change; batch them.
+
+## Coexistence with future MAJOR versions
+
+When a `v2` is cut (per § "When to bump MAJOR"), it lives at the
+import path `github.com/theizzatbek/gokit/v2` per Go's standard
+module-versioning convention. The kit's commitment to the previous
+MAJOR line on a v2 cut:
+
+- `v1.x.y` continues to receive **patch releases for security fixes
+  and serious bugs for ≥ 12 months** after the first `v2.0.0` tag.
+  Feature work does not backport to `v1` — bug-fix-only window.
+- Both major lines coexist in `go.mod` files (different import
+  paths via Go's module-version path suffix), so consumers can
+  pin per-package and migrate package-by-package rather than big-
+  bang.
+- The migration guide for `v2` will live alongside the `v2`
+  CHANGELOG and call out every `v1`-removed symbol with its `v2`
+  replacement.
+
+This is closer to the OTel/Prometheus model than to a hard freeze-
+and-cut. The 12-month security window is the contract; `v1` is not
+abandoned the moment `v2` lands.
 
 ## See also
 
