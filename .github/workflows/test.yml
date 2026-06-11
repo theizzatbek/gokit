@@ -7,9 +7,7 @@ on:
 
 # Pipeline:
 #   static                gofmt + vet + warm module/build cache (~15s)
-#   ├─ unit-race-matrix   3 parallel shards (a/b/c) by alphabetical
-#   │                     go list slice; go test -race -short <slice>
-#   │                                                  (~1:30/shard, hot)
+#   ├─ unit                go test -short ./...                 (~30-60s)
 #   └─ integration-matrix 4 parallel shards by container family:
 #         pg              postgres + bitnamilegacy/postgresql
 #         redis           redis
@@ -17,12 +15,21 @@ on:
 #         bundle          postgres + nats + minio (service smoke, s3,
 #                          inboxnats/outboxnats cross-container)
 #
-# unit-race-matrix + integration-matrix declare `needs: static` so they
-# reuse the module download + compiled-test cache that static populated.
-# Without the dependency every parallel job would re-download modules
-# from scratch (`actions/setup-go cache: true` only restores from a
-# previous WORKFLOW RUN; parallel jobs within one run can't see each
-# other's uploads).
+# unit + integration-matrix declare `needs: static` so they reuse the
+# module download + compiled-test cache that static populated. Without
+# the dependency every parallel job would re-download modules from
+# scratch (`actions/setup-go cache: true` only restores from a previous
+# WORKFLOW RUN; parallel jobs within one run can't see each other's
+# uploads).
+#
+# `-race` is NOT run in this PR-gating workflow. The empirical wall
+# time of `go test -race -short ./...` was ~4m; 3-way matrix-splitting
+# brought it down to ~3:30 max because race-detector compile dominates
+# shared-deps compilation and doesn't parallelize across runners.
+# Gating every PR on that wait was not worth the cost given how rarely
+# race regressions slip in. Race detection moved to .github/workflows/
+# race.yml — runs on push to main, on a nightly cron, and on manual
+# workflow_dispatch.
 #
 # Each integration-matrix shard pulls ONLY the docker images it needs:
 # explicit per-shard `images` list, per-shard cache key keyed on
@@ -59,17 +66,13 @@ jobs:
 
       # vet downloads the module graph + compiles every package — same
       # work the downstream jobs need. Doing it here once means
-      # unit-race-matrix + integration-matrix boot with a hot
-      # $GOPATH/pkg/mod and ~/.cache/go-build.
+      # unit + integration-matrix boot with a hot $GOPATH/pkg/mod and
+      # ~/.cache/go-build.
       - run: go vet ./...
 
-  unit-race-matrix:
+  unit:
     needs: static
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [a, b, c]
     steps:
       - uses: actions/checkout@v4
 
@@ -78,46 +81,19 @@ jobs:
           go-version: '1.26.4'
           cache: true
 
-      # Per-shard go-build cache. Each shard race-compiles only its
-      # own slice of packages, and only the kit's deps + that slice's
-      # test binaries live in its cache. The previous shared-key
-      # version had every shard writing to the same cache key —
-      # actions/cache@v4 saves only the first one to finish, so the
-      # next run restored a cache that held only ~1/3 of the race
-      # binaries, forcing the other two shards to recompile from
-      # scratch. Per-shard key + chained restore-keys (own shard
-      # first, then any go-build cache so cold runs warm from
-      # `static`'s vet cache) eliminates the contention.
       - name: Cache compiled tests
         uses: actions/cache@v4
         with:
           path: ~/.cache/go-build
-          key: ${{ runner.os }}-go-build-unit-race-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-build-unit-race-${{ matrix.shard }}-
-            ${{ runner.os }}-go-build-
+          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-build-
 
-      # -short skips every package whose tests need Docker
-      # (testcontainers). The race detector only runs against pure
-      # unit code, which is where most concurrency bugs live anyway.
-      #
-      # 3-way alphabetical split: `go list ./...` produces packages
-      # in import-path lexicographic order; we chunk into three near-
-      # equal slices by matrix.shard. Auto-balances by package count;
-      # new packages auto-distribute.
-      - name: Test shard
-        run: |
-          all=$(go list ./...)
-          total=$(echo "$all" | wc -l)
-          per=$(( (total + 2) / 3 ))
-          case "${{ matrix.shard }}" in
-            a) my=$(echo "$all" | sed -n "1,${per}p") ;;
-            b) my=$(echo "$all" | sed -n "$((per+1)),$((2*per))p") ;;
-            c) my=$(echo "$all" | sed -n "$((2*per+1)),\$p") ;;
-          esac
-          echo "Shard ${{ matrix.shard }}: $(echo "$my" | wc -l) packages"
-          echo "$my"
-          go test -race -short $my
+      # -short skips every package whose tests need Docker (testcontainers).
+      # The race detector is NOT run here — see .github/workflows/race.yml
+      # for the dedicated race sweep on push-to-main + nightly cron +
+      # manual dispatch. PR-gating runs the no-race compile/test pass for
+      # fast feedback (~30-60s vs ~4m with race).
+      - run: go test -short ./...
 
   integration-matrix:
     needs: static

@@ -1,0 +1,57 @@
+name: race
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * *'  # 03:00 UTC daily
+  workflow_dispatch:
+
+# Race-checked unit-test sweep, separated from the per-PR test.yml
+# workflow so PR feedback stays fast (~30-60s). PR's `unit` job runs
+# `go test -short ./...` without -race; this workflow runs the full
+# race sweep.
+#
+# Wall time: ~4m. Most of that is race-detector compilation of shared
+# deps, which doesn't parallelize across runners — matrix-splitting
+# saved very little (3:30 max across 3 shards vs 4m single).
+#
+# Trigger model:
+#   - push to main         catches race regressions on every merge
+#   - schedule: nightly    catches drift if `-race` is silently broken
+#                          (e.g. ignored failures in noisy nightly logs)
+#                          and provides a heartbeat that the sweep still
+#                          builds against current Go toolchain
+#   - workflow_dispatch    manual kick on any branch — useful before
+#                          merging a PR touching goroutine-heavy code
+#                          (db pool, breaker, bulkhead, fibermap/sse,
+#                          fibermap/wsnats, clients/nats, db/jobs,
+#                          db/outbox, db/inbox, cronmap)
+#
+# Failure surfaces in the Actions tab. Use repo notification settings
+# (Watch → Custom → Actions) to route this to email / Slack when a
+# nightly fails.
+
+jobs:
+  unit-race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      # Dedicated cache namespace: race-compiled binaries differ from
+      # the plain build artifacts the test.yml workflow caches under
+      # `${{ runner.os }}-go-build-...`. Sharing would either OOM the
+      # cache or thrash between race and non-race rebuilds.
+      - name: Cache compiled tests
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-go-build-race-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-build-race-
+
+      - run: go test -race -short ./...
