@@ -1,9 +1,10 @@
 # v1 Readiness Audit
 
-> **Historical.** Tagged `v1.0.0-rc1` on 2026-06-11. This file is now
-> a frozen record of the pre-v1 audit-close work; further v1-prep
-> tracking lives in CHANGELOG + git log. Bake-test in `examples/`
-> for ≥ 1 week is the bridge to final `v1.0.0`.
+> **Historical.** Tagged `v1.0.0-rc1` and promoted to `v1.0.0` on
+> 2026-06-11 (no bake-week delay; race-regression coverage falls back
+> to the nightly `race.yml` workflow). This file is now a frozen record
+> of the pre-v1 audit-close work; further v1-prep tracking lives in
+> CHANGELOG + git log.
 
 Снимок: 2026-06-10, post-merge sweep перед `v1.0.0-rc1`. Исходный аудит
 (2026-06-06 на `main @ 29e1838`) флагировал двенадцать P0/P1 items и
