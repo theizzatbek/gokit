@@ -1,12 +1,23 @@
 # Changelog
 
 All notable changes to fibermap. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
-0.x — every minor bump may include breaking changes until a 1.0 tag.
-
-This is the bootstrap entry; prior history lives in `git log`.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). From
+`v1.0.0-rc1` onward, the kit follows the semver promises documented
+in [`docs/versioning.md`](docs/versioning.md). Pre-v1 history is
+archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 
 ## [Unreleased]
+
+## [v1.0.0-rc1] - 2026-06-11
+
+Release candidate for the first stable major. Everything in this
+section was previously tracked under `[Unreleased]` and tagged as
+"pre-v1" — those qualifiers are now the contract: the listed
+breaking changes are the final pre-v1.0 surface, and from this
+tag onward semver applies per [`docs/versioning.md`](docs/versioning.md).
+Bake-test in `examples/` for ≥ 1 week before tagging final
+`v1.0.0`. See [`docs/v1-readiness.md`](docs/v1-readiness.md) for
+the full P0/P1/P2 audit-close list that fed this candidate.
 
 ### Removed (breaking, pre-v1)
 - `db.(*DB).ReadPool() *pgxpool.Pool` and `db.(*DB).HasReadReplica() bool`
