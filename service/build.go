@@ -239,13 +239,25 @@ func (s *Service[T, C]) buildAuth() error {
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation, CodeAuthInvalidKey, "service: auth key invalid")
 	}
+	apiKeyPepper, err := decodeAPIKeyHashSecret(s.cfg.Auth.APIKeyHashSecret)
+	if err != nil {
+		return err
+	}
 	store := refreshpg.New(s.DB)
+	authOpts := []auth.Option{
+		auth.WithRefreshStore(store),
+		auth.WithLogger(s.logger),
+		auth.WithMetrics(s.metrics),
+	}
+	if len(apiKeyPepper) > 0 {
+		authOpts = append(authOpts, auth.WithAPIKeyHashSecret(apiKeyPepper))
+	}
 	a, err := auth.New[C](auth.Config{
 		Issuer:     s.cfg.Auth.Issuer,
 		Keys:       keySet,
 		AccessTTL:  s.cfg.Auth.AccessTTL,
 		RefreshTTL: s.cfg.Auth.RefreshTTL,
-	}, auth.WithRefreshStore(store), auth.WithLogger(s.logger), auth.WithMetrics(s.metrics))
+	}, authOpts...)
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindInternal, CodeAuthInvalidKey, "service: auth.New failed")
 	}

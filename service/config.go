@@ -83,6 +83,25 @@ type AuthConfig struct {
 	Issuer        string        `env:"ISSUER"      envDefault:"gokit"`
 	AccessTTL     time.Duration `env:"ACCESS_TTL"  envDefault:"15m"`
 	RefreshTTL    time.Duration `env:"REFRESH_TTL" envDefault:"720h"` // 30d
+
+	// APIKeyHashSecret is the HMAC pepper auth.APIKey middleware
+	// uses to derive `keyHash` from a plain key before calling
+	// KeyStore.Lookup. Required only when the service wires API-key
+	// auth (auth/fibermount.MountAPIKeyFactory or a manual
+	// auth.APIKey middleware install); safe to omit for pure-JWT
+	// services.
+	//
+	// Encoding: standard or URL-safe base64 (padded or raw — every
+	// flavour accepted). Decoded bytes MUST be ≥ 32 bytes (HMAC-
+	// SHA256 best practice). service.New fails with
+	// *errs.Error{Code: CodeAuthInvalidAPIKeyHashSecret} when the
+	// env / config string fails to decode or the decoded length is
+	// short.
+	//
+	// Threaded through to auth.New via auth.WithAPIKeyHashSecret;
+	// callers building auth.Auth[C] by hand can use that Option
+	// directly with raw decoded bytes.
+	APIKeyHashSecret string `env:"APIKEY_HASH_SECRET"`
 }
 
 // NATSConfig — URL is the opt-in trigger.

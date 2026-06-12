@@ -8,6 +8,29 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 
 ## [Unreleased]
 
+### Added
+- `auth.WithAPIKeyHashSecret([]byte) Option` — Option-form for
+  supplying the APIKey middleware's HMAC pepper, parallel to the
+  existing `Config.APIKeyHashSecret` field. Both paths feed the
+  same `Auth.apiKeyHashSecret` slot at construction time; the
+  Option WINS over the Config field when both are set, so a
+  caller threading the secret through `service.WithAuthOptions`
+  can always trump a stale env value if needed. Empty / nil
+  Option defers to Config. Surfaced by the first integrator
+  (LicenseKit, P1-9 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md)).
+- `service.AuthConfig.APIKeyHashSecret string` + env
+  `AUTH_APIKEY_HASH_SECRET`. The env value is base64-decoded
+  (every Go stdlib flavour accepted: std / URL-safe, padded / raw)
+  and must yield ≥ 32 bytes after decode. `service.New` returns
+  `*errs.Error{Code: CodeAuthInvalidAPIKeyHashSecret}` on a bad
+  or too-short value — surfacing a misconfig at boot instead of
+  at the first API-key request via the old runtime
+  `CodeAPIKeyMissingSecret` panic. The decoded bytes thread to
+  `auth.New` via `auth.WithAPIKeyHashSecret(...)`. Pure-JWT
+  services without API-key middleware can leave the field unset.
+  Surfaced by LicenseKit P0-2.
+
 ### Documentation
 - `service/README.md` — new "Production deployment checklist"
   subsection right after Quickstart. MUST / SHOULD / OPTIONAL
