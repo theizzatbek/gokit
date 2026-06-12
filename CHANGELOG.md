@@ -9,6 +9,22 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Added
+- `fibermap.ErrsvalBindError[T any]` — the recommended
+  `SetBindErrorHandler` value for services using the kit's typed
+  `*errs.Error` contract for HTTP failure modes. Maps every
+  `bind.Body / Query / Params / Header` parse / validate failure
+  (and `RegisterHandlerWithInput`'s composed failures) into the
+  kit's standard `{code, message, details[]}` wire shape with a
+  source-aware code (`invalid_body` / `invalid_query` /
+  `invalid_params` / `invalid_header`; `invalid_request` for
+  anything else). Per-field `details[]` come from
+  `errsval.FromValidator` walking the `validator.ValidationErrors`
+  chain that the v1.0.1 P0-1 fix preserves via `errors.Join`. Wire
+  once on engine setup: `eng.SetBindErrorHandler(fibermap.ErrsvalBindError[AppCtx])`.
+  Kit `defaultBindError` stays the simple `{"error": err.Error()}`
+  baseline so the `fibermap` package itself doesn't force the
+  errs convention. Surfaced by the first integrator (LicenseKit,
+  P1-4 in [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md)).
 - `auth.WithAPIKeyHashSecret([]byte) Option` — Option-form for
   supplying the APIKey middleware's HMAC pepper, parallel to the
   existing `Config.APIKeyHashSecret` field. Both paths feed the
