@@ -241,6 +241,16 @@ d, err := db.Connect(ctx, cfg,
 
 `WithConnInit` — общий hook, вызывается один раз на свежее pgx-соединение **до** того, как оно попадает в пул. Несколько `WithConnInit` накапливаются по порядку регистрации. Используйте для `SET application_name`, `SET search_path`, prewarming prepared-statement кэша или `SET ROLE` для tenant-изоляции.
 
+### Кит-внутренние per-connection hook'и
+
+Перед каждым user-supplied `WithConnInit` кит запускает свои hook'и на свежем соединении (см. `db/conn_init.go::composeAfterConnect`):
+
+1. **UUID codec** — `pgx.TypeMap().RegisterDefaultPgType([16]byte{}, "uuid")`. Без этого raw `[16]byte` не маппится на Postgres-овский `uuid` (OID 2950) и каллер получает `unable to encode 0x.. into binary format for uuid (OID 2950): cannot find encode plan`. Hook добавлен в `v1.0.1`; сейчас `[16]byte` идёт в query-args и `Scan(&[16]byte{})` напрямую — без `pgtype.UUID{Bytes: b, Valid: true}` обёртки.
+2. **`SET statement_timeout`** — если задан `WithDefaultStatementTimeout(d)`.
+3. **Каждый `WithConnInit`** в порядке регистрации.
+
+Caller'ы могут override'нуть UUID-mapping или зарегистрировать дополнительные Go-type → pg-type default'ы в собственных `WithConnInit` — они выполняются после кит-внутренних, last write wins.
+
 ### Healthcheck (для `/healthz`)
 
 ```go
