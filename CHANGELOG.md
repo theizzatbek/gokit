@@ -8,6 +8,30 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 
 ## [Unreleased]
 
+### Documentation
+- `service/README.md` — new "Production deployment checklist"
+  subsection right after Quickstart. MUST / SHOULD / OPTIONAL
+  grouping covers the v1.0.1-fixed behaviours (typed error wire
+  shape, env-driven Sentry/OTel auto-enable), the eternal-by-design
+  semantics (`WithValidator` replace-not-extend, `WithBodyLimit`
+  vs caller `WithFiberConfig` interaction), and the v1.1.0 roadmap
+  fillers (CORS env, `ErrsvalBindError`). Surfaced by LicenseKit
+  D-1 in [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md).
+- `docs/common-gotchas.md` — new compact reference of 15
+  trip-wires with Status column showing which kit version
+  eliminates each (4 closed in `v1.0.1`, 8 pending in `v1.1.0`,
+  3 eternal). Cross-links to the LicenseKit followup doc and to
+  `docs/versioning.md`. Surfaced by LicenseKit D-2.
+- `README.md` + `fibermap/README.md` — Quickstart now demonstrates
+  `fibermap.RegisterHandlerWithBody` immediately after the raw
+  `RegisterHandler` example, with a `validate:` tag on the input
+  struct, `WithResponse` schema attach and a pointer at the
+  sibling `RegisterHandlerWith{Query,Params,Headers,Input}`
+  helpers. The typed surface was always the kit's recommended
+  shape for real endpoints but the Quickstart was steering
+  readers at the raw `*fibermap.Context[T]` first. Surfaced by
+  LicenseKit D-3.
+
 ### Changed
 - `service.New` — Sentry and OTel now auto-enable from environment
   variables when the caller did not opt-in via `WithSentry` /

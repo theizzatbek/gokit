@@ -59,6 +59,28 @@ func main() {
 
 Вот и всё. Бандл `Run` даёт вам `/healthz`, `/metrics`, request-id, структурированные access-логи и panic-recovery бесплатно. Используйте `fibermap.Default[T]()` вместо `New[T]()`, чтобы также встроить ops-бандл в сам engine (авто-применяется даже в тестах через `Mount`).
 
+### Recommended next step — типизированные handlers
+
+`fibermap.RegisterHandler` выше принимает raw `*fibermap.Context[T]` и оставляет body/query/params/headers parsing на handler. Для большинства реальных endpoint'ов используйте типизированные регистры — они parsят + валидируют входной struct, авто-attach'ат схему для OpenAPI и сводят boilerplate handler'а к одной строке `req` argument:
+
+```go
+type CreateTaskReq struct {
+    Title    string   `json:"title"    validate:"required,min=1,max=200"`
+    Tags     []string `json:"tags"`
+    Priority int      `json:"priority" validate:"oneof=1 2 3"`
+}
+
+fibermap.RegisterHandlerWithBody(eng, "tasks.create",
+    func(c *fibermap.Context[AppCtx], req CreateTaskReq) error {
+        // req уже распарсен и провалидирован — никаких c.BodyParser, никаких errsval.
+        return c.Status(201).JSON(...)
+    },
+    fibermap.WithResponse(201, Task{}),
+)
+```
+
+Sibling-хелперы — `RegisterHandlerWith{Query,Params,Headers}` — для single-source binding. Для комбинированных кейсов (body + path-param, etc.) — `RegisterHandlerWithInput` (см. ниже § «Комбинированные binder'ы»). Все четыре + Input принимают `eng.validator` через `SetValidator` и роутят bind/validation failures через `Engine.BindErrorFunc` (default 400 JSON; override через `SetBindErrorHandler`).
+
 ## Конфигурация
 
 ### Сборка engine'а

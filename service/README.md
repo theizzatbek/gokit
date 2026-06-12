@@ -76,6 +76,37 @@ func main() {
 }
 ```
 
+## Production deployment checklist
+
+Quickstart выше — минимум, чтобы запустить kit и получить запрос-ответ. Для production есть короткий must/should/optional список. Свернуть в один глаз перед PR'ом, который попадает в prod.
+
+### MUST
+
+1. **`*errs.Error`-wire-shape поверх HTTP.** С v1.0.1 `service.New` всегда установит `fibermap.ErrorHandler(logger)` — независимо от того, передали ли `WithBodyLimit` или нет. Раньше handler ставился только под non-zero body-limit; сервисы без явного `WithBodyLimit` получали fiber-дефолтный `500 plain-text` на каждом `errs.NotFound(...)`. Сейчас работает по умолчанию. Ничего делать не надо — но это checklist знать: если видите `text/plain` 500 в проде вместо `{"code":"...","message":"..."}` — не тот billing, проверьте версию кита.
+2. **Body limit для прод-API.** Передайте `WithBodyLimit(N)` под ожидаемый шаблон трафика. Без явного значения — fiber-дефолт 4MiB. Превышение возвращает 413 без обращения к handler'у.
+3. **Migrations.** Если сервис владеет SQL-schema, `WithMigrations(fs.FS)` запустит вашу `db/migrations/` папку под `db/migrate` API ДО boot-завершения `service.New`. Без него ваш `INSERT INTO users` в первом handler'е будет валиться на `relation "users" does not exist`.
+4. **Routes.yaml.** Если используете declarative routing (`fibermap`), убедитесь что `routes.yaml` либо лежит в CWD рядом с бинарём (default), либо путь явно задан через `cfg.Routes.Path` / `ROUTES_PATH` env. Боли при ошибке: `service.Run` фейлится сразу с `CodeRoutesYAMLNotFound`.
+
+### SHOULD
+
+5. **Observability — Sentry / OTel.** С v1.0.1 кит env-aware: `SENTRY_DSN` или `OTEL_EXPORTER_OTLP_ENDPOINT` в env поднимут соответствующую subsystem с дефолтными опциями (см. § «Env-driven auto-enable для Sentry / OTel»). Для tuning (sample rate, environment tag, custom resource attrs) — явный `WithSentry` / `WithOtel` всё равно нужен; env подхватит только пустые слоты.
+6. **CORS.** Для браузерных клиентов — `WithCORS("https://app.example.com")` или `WithCORSConfig(cors.Config{...})`. Без CORS preflight'ы летят в 404 и ваш SPA молча отлуплен. Auto-env-mode (`CORS_ORIGINS` env) — в roadmap'е к v1.1.0, до тех пор — явно.
+7. **Healthcheck / readiness paths.** Default'ы (`/healthz`, `/readyz`) совпадают с типовыми K8s probes. Если backend меняет ports/paths под reverse-proxy — `WithHealthCheckPath` / `WithReadinessPath` поправят URL'ы (но прод-deployment YAML тоже надо подправить).
+8. **Refresh-store garbage collection.** Если используете `auth/refreshpg` (DB-backed refresh tokens), `WithRefreshGC(24*time.Hour)` отрежет старые записи периодически. Без него таблица `auth_refresh_tokens` растёт навсегда.
+
+### OPTIONAL (но удобно)
+
+9. **`service.Boot` / `BootSeed`.** Замена ручному `signal.NotifyContext` + `log.Fatal` + exit-code handling boilerplate. См. § `service.Boot` ниже. Roadmap to v1.1.0 расширяет до `BootSeed` для seed-CLI режима.
+10. **`SetBindErrorHandler`.** v1.0.0 default'ный bind-error handler пишет `{"error":"..."}` plain-text сообщение, что ломает downstream-парсинг ошибок и не возвращает per-field `Details[]`. Roadmap to v1.1.0 — `fibermap.ErrsvalBindError[T]` готовый helper. Сейчас (v1.0.x) — каждый сервис пишет ~50 lines glue-кода (см. [LicenseKit followup P1-4](../docs/v1-followup-licensekit.md)).
+11. **`/preflight` endpoint.** `WithPreflight()` мониторит конфигурацию + connectivity к субсистемам и возвращает JSON-репорт под `/preflight`. Полезно в стейджинге, не в проде (light-info-leak — какие subsystems сконфигурированы).
+
+### Совсем не obvious gotchas
+
+- **`WithValidator(v)` полностью заменяет default validator** — если регистрируете один custom тэг, придётся также вручную восстановить `validator.WithRequiredStructEnabled()` поведение. Roadmap to v1.1.0 — `WithExtraValidators(map[string]validator.Func)` который не trashит default.
+- **API-key middleware silent panic при пустом `APIKeyHashSecret`.** На v1.0.0 → v1.0.x — `service.AuthConfig` не передавал поле в `auth.New`. Сейчас (post-v1.1.0 P0-2 fix) — `AUTH_APIKEY_HASH_SECRET=<base64>` env подхватывается, или передавайте `service.WithAuth(auth.WithAPIKeyHashSecret([]byte(...)))`.
+
+См. также [`docs/common-gotchas.md`](../docs/common-gotchas.md) — компактный список «прицельных трип-вайров»  с указанием версии, в которой каждый фиксился (или где статус «не фиксится, eternal»).
+
 ## `service.Boot` — main()-boilerplate reducer
 
 Quickstart выше хэндкрафтит `signal.NotifyContext`, `log.Fatal`, exit-code
