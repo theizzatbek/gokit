@@ -247,7 +247,28 @@ middleware:
 
 Подключите через `auth/fibermount.MountAPIKeyFactory(eng, authObj, store)`.
 
-Хеширование: каждый ключ — это `HMAC-SHA256(plain, APIKeyHashSecret)`. Хеш — это lookup-key — DB-dump alone не раскрывает сырые ключи без kit-секрета. Ротация `APIKeyHashSecret` инвалидирует каждый сохранённый хеш; относитесь как к долгоживущему signing-key. Используйте `auth.HashAPIKey(plain, secret)` на mint-time, так что таблица и verify-путь шарят одну хеш-функцию.
+Хеширование: каждый ключ — это `HMAC-SHA256(plain, APIKeyHashSecret)`. Хеш — это lookup-key — DB-dump alone не раскрывает сырые ключи без kit-секрета. Ротация `APIKeyHashSecret` инвалидирует каждый сохранённый хеш; относитесь как к долгоживущему signing-key.
+
+С v1.1.0 минтить ключи рекомендуется через `auth.GenerateAPIKey(pepper) (plain, hash, prefix, err)` — это standard-recipe который возвращает тройку готовую к показу/хранению:
+
+```go
+plain, hash, prefix, err := auth.GenerateAPIKey(cfg.APIKeyHashSecret)
+if err != nil { return err }                       // pepper < 32 bytes → CodeKeygenBadPepper
+
+err = store.Insert(ctx, apikeypg.InsertParams{
+    Hash:   hash,    // store
+    Prefix: prefix,  // safe to show in admin UI
+    /* Subject / Scopes / ExpiresAt etc */
+})
+if err != nil { return err }
+
+// Hand plain to the human ONCE. They can't recover it later.
+return c.Status(201).JSON(map[string]string{"key": plain})
+```
+
+Формат: `plain = "ak_<28-char base64-RawURL>"` (31 chars total), `prefix = plain[:8]` ("ak_xxxxx") — safe для admin UI без раскрытия остатка ключа, `hash = HMAC-SHA256(plain, pepper)` (32 bytes) — для DB. Mint-side хеш совпадает с verify-side (`auth.HashAPIKey`) — kit гарантирует консистентность через `TestGenerateAPIKey_HashMatchesHashAPIKey`.
+
+Под капотом `GenerateAPIKey` вызывает `auth.HashAPIKey(plain, secret)` — `HashAPIKey` остаётся exported для callers, которые хешируют user-supplied ключи (например, migration script'ы которые принимают plain-keys и сами решают как их формировать).
 
 Стабильные error Codes: `api_key_missing`, `api_key_invalid` (existence side-channel подавлен — unknown-ключи возвращают ту же форму, что и missing), `api_key_expired`, `api_key_revoked`.
 

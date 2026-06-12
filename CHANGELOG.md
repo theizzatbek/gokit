@@ -9,6 +9,22 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Added
+- `auth.GenerateAPIKey(pepper []byte) (plain, hash []byte, prefix string, err error)`
+  — kit-standard recipe for minting fresh API keys. Returns the
+  triple every service was reinventing: `plain` (`ak_<28-char
+  base64-RawURL>`, 31 chars total — show to user once at issue
+  time and drop), `hash` (HMAC-SHA256(plain, pepper) — store in
+  the [KeyStore]), and `prefix` (first 8 chars of plain — safe to
+  surface in admin UIs without revealing the rest). pepper MUST
+  equal `auth.Config.APIKeyHashSecret` (or the
+  `auth.WithAPIKeyHashSecret` override) so the issued plain
+  resolves against the same HMAC chain at verify time. Errors:
+  `*errs.Error{Code: CodeKeygenBadPepper}` on pepper < 32 bytes,
+  `*errs.Error{Code: CodeKeygenEntropy}` on system PRNG failure.
+  New `auth.APIKeyPrefix` constant ("ak_") exposes the canonical
+  marker for callers that need to parse the prefix back out.
+  Surfaced by the first integrator (LicenseKit, P1-10 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md)).
 - `gokit/ids` — new public top-level package for prefixed ULIDs.
   `ids.New("user_")` mints a time-sortable `user_<26-char Crockford-
   Base32>` string; `ids.Parse(prefix, s)` validates the prefix and
