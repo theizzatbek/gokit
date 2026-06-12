@@ -9,6 +9,33 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Added
+- `service.BootOption`, `service.WithSubcommand(name, fn)`,
+  `service.BootSeed(name, fn)` — subcommand routing for the
+  existing `service.Boot` main()-reducer. When the first CLI
+  argument matches a registered subcommand name, `Boot` dispatches
+  to that handler instead of the default `fn`. Subcommand fns
+  share the same `func(ctx context.Context) error` signature as
+  the default and receive the same signal-aware ctx, so SIGINT /
+  SIGTERM during a long-running seed / migrate operation
+  propagates cleanly. Unknown args fall through to the default fn.
+  Last-write-wins on duplicate-name registration.
+
+  `BootSeed` is a named alias for `WithSubcommand` under the
+  common "seed mode" case — `BootSeed("seed", fn)` reads better
+  in main.go than `WithSubcommand("seed", fn)`. Identical
+  semantics; use `WithSubcommand` directly for non-seed names
+  (`migrate`, `inspect`, `schema-dump`, etc).
+
+  The kit deliberately does NOT pre-construct a Service for
+  subcommand fns — Boot can't carry type parameters, and CLI
+  paths typically want different option sets (`WithoutCron`,
+  `WithoutOpenAPI`, but `WithMigrations`) than the production run
+  path. Each subcommand fn owns its own `service.New` invocation.
+
+  Surfaced by the first integrator (LicenseKit, P2-14 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md))
+  who was rebuilding the `cmd/licensekitctl seed | migrate`
+  subcommand-dispatch boilerplate in every kit-based service.
 - `service.WithExtraValidators(map[string]validator.Func) Option`
   — registers tag-name → validator.Func pairs ON the kit-default
   `*validator.Validate` instance that `service.New` builds when
