@@ -201,6 +201,12 @@ func (e *Engine[T]) SetContextErrorHandler(h ContextErrorFunc) { e.ctxError = h 
 //	eng.SetValidator(validator.New(validator.WithRequiredStructEnabled()))
 func (e *Engine[T]) SetValidator(v bind.Validator) { e.validator = v }
 
+// Validator returns the [bind.Validator] currently installed via
+// [Engine.SetValidator]. Useful for service-level introspection (e.g.
+// type-asserting to *validator.Validate to register extra tags after
+// the kit wires the default). Returns nil when no validator was set.
+func (e *Engine[T]) Validator() bind.Validator { return e.validator }
+
 // SetBindErrorHandler customises how parse / validate failures
 // inside [RegisterBody] / [RegisterQuery] / [RegisterParams] /
 // [RegisterHeaders] are turned into responses. Default returns

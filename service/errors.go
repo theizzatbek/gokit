@@ -6,6 +6,7 @@ const (
 	CodeAuthNeedsDB                 = "service_auth_needs_db"
 	CodeAuthInvalidKey              = "service_auth_invalid_key"
 	CodeAuthInvalidAPIKeyHashSecret = "service_auth_invalid_apikey_hash_secret"
+	CodeExtraValidatorRegister      = "service_extra_validator_register"
 	CodeDBConnectFailed     = "service_db_connect_failed"
 	CodeAPIMapLoadFailed    = "service_apimap_load_failed"
 	CodeNATSConnectFailed   = "service_nats_connect_failed"
