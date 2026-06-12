@@ -18,7 +18,7 @@ readers upgrading from older releases can map their pain to a fix.
 | 6 | Default `defaultBindError` writes `{"error":"<full message>"}` plain-text, not `{code, message, details[]}` | **Fixed in v1.1.0** — `fibermap.ErrsvalBindError[T]` is the recommended `SetBindErrorHandler` value; kit default unchanged so the `fibermap` package itself stays errs-convention-free |
 | 7 | `WithValidator(v)` replaces kit's default validator instead of extending | **Pending v1.1.0** — P2-12 adds `WithExtraValidators(map[string]validator.Func)` |
 | 8 | `CORS_ORIGINS=https://a.com,https://b.com` in env → no CORS wired without an explicit `WithCORS` call | **Pending v1.1.0** — P2-11 auto-applies CORS when env present and `WithCORS*` not passed |
-| 9 | Every service rewrites the same AES-256-GCM Seal/Open helper for at-rest secret storage | **Pending v1.1.0** — P1-5 promotes `clients/webhooks/storepg/crypto.go` to public `gokit/crypto` package |
+| 9 | Every service rewrites the same AES-256-GCM Seal/Open helper for at-rest secret storage | **Fixed in v1.1.0** — `gokit/crypto.MasterKey` (single-key) + `crypto.Keychain` (kid-routed rotation) are public; `clients/webhooks/storepg`'s private helper is now a thin wrapper |
 | 10 | Every service rewrites the same `NewID(prefix)` / `ParseID(prefix, s)` prefixed-ULID utility | **Pending v1.1.0** — P1-6 ships `gokit/ids` public package |
 | 11 | Every service writes ~30 lines of `kitctl seed` subcommand-dispatch boilerplate | **Pending v1.1.0** — P2-14 ships `service.Boot` + `BootSeed` |
 | 12 | `audit` events still need manual `logger.Log(ctx, event)` calls in every privileged handler | **Pending v1.1.0** — P2-15 ships `fibermap.WithAudit(...)` `HandlerOption` |

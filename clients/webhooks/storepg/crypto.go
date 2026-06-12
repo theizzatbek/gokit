@@ -1,75 +1,80 @@
 package storepg
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"fmt"
+	"errors"
 
 	"github.com/theizzatbek/gokit/clients/webhooks"
+	gocrypto "github.com/theizzatbek/gokit/crypto"
 	"github.com/theizzatbek/gokit/errs"
 )
 
-// cryptoVersion is the leading byte in every sealed blob. v1 = 0x01.
-// On a future ciphersuite change, increment to 0x02 and add a
-// branch in open(); seal() always writes the latest version.
-const cryptoVersion byte = 0x01
-
-// crypto wraps an AES-256-GCM AEAD initialised from a 32-byte key.
-// One instance is shared across all store operations (AEAD is
-// goroutine-safe).
+// crypto is a thin private wrapper over [gokit/crypto.MasterKey].
+//
+// The wrapper exists for two reasons:
+//
+//   - The webhooks store has shipped its own [webhooks.CodeStorepgNoKey] /
+//     [webhooks.CodeStorepgDecryptFailed] codes since v0.x; downstream
+//     alerting rules pattern-match on those strings. Re-tagging the
+//     underlying [gocrypto.CodeKeyLength] / [gocrypto.CodeCiphertext]
+//     here preserves the wire contract.
+//   - The store calls `c.seal(...)` / `c.open(...)` against a private
+//     type from many files; keeping the symbol stable avoids touching
+//     half the package for what is otherwise an internal refactor.
+//
+// New consumers should reach for [gokit/crypto.MasterKey] directly —
+// this wrapper exists for internal kit symmetry only.
 type crypto struct {
-	aead cipher.AEAD
+	mk *gocrypto.MasterKey
 }
 
 func newCrypto(key []byte) (*crypto, error) {
-	if len(key) != 32 {
-		return nil, errs.Validation(webhooks.CodeStorepgNoKey,
-			fmt.Sprintf("webhooks: secret key must be 32 bytes, got %d", len(key)))
-	}
-	block, err := aes.NewCipher(key)
+	mk, err := gocrypto.NewMasterKey(key)
 	if err != nil {
-		return nil, errs.Wrap(err, errs.KindInternal, webhooks.CodeStorepgNoKey,
-			"webhooks: aes cipher init")
+		return nil, translateCryptoErr(err)
 	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, errs.Wrap(err, errs.KindInternal, webhooks.CodeStorepgNoKey,
-			"webhooks: gcm init")
-	}
-	return &crypto{aead: aead}, nil
+	return &crypto{mk: mk}, nil
 }
 
-// seal returns [version(1)][nonce(12)][ciphertext+tag(N)].
+// seal delegates to [gocrypto.MasterKey.Seal], re-tagging any error
+// with the webhooks-specific Code so downstream alerting keeps
+// working.
 func (c *crypto) seal(plaintext []byte) ([]byte, error) {
-	nonce := make([]byte, c.aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, errs.Wrap(err, errs.KindInternal, webhooks.CodeStorepgDecryptFailed,
-			"webhooks: nonce read")
+	sealed, err := c.mk.Seal(plaintext)
+	if err != nil {
+		return nil, translateCryptoErr(err)
 	}
-	ct := c.aead.Seal(nil, nonce, plaintext, nil)
-	out := make([]byte, 0, 1+len(nonce)+len(ct))
-	out = append(out, cryptoVersion)
-	out = append(out, nonce...)
-	out = append(out, ct...)
-	return out, nil
+	return sealed, nil
 }
 
+// open delegates to [gocrypto.MasterKey.Open] with the same code-
+// translation contract as seal.
 func (c *crypto) open(sealed []byte) ([]byte, error) {
-	if len(sealed) < 1+c.aead.NonceSize() {
-		return nil, errs.Internal(webhooks.CodeStorepgDecryptFailed,
-			"webhooks: sealed too short")
-	}
-	if sealed[0] != cryptoVersion {
-		return nil, errs.Internalf(webhooks.CodeStorepgDecryptFailed,
-			"webhooks: unknown crypto version 0x%02x", sealed[0])
-	}
-	nonce := sealed[1 : 1+c.aead.NonceSize()]
-	ct := sealed[1+c.aead.NonceSize():]
-	pt, err := c.aead.Open(nil, nonce, ct, nil)
+	pt, err := c.mk.Open(sealed)
 	if err != nil {
-		return nil, errs.Wrap(err, errs.KindInternal, webhooks.CodeStorepgDecryptFailed,
-			"webhooks: gcm open")
+		return nil, translateCryptoErr(err)
 	}
 	return pt, nil
+}
+
+// translateCryptoErr re-tags a [gokit/crypto] *errs.Error with the
+// webhooks store's pre-v1.0 code constants so existing alerting rules
+// continue to match. Construction-time codes
+// ([gocrypto.CodeKeyLength], [gocrypto.CodeKeyBase64]) map to
+// [webhooks.CodeStorepgNoKey]; runtime codes
+// ([gocrypto.CodeCiphertext], [gocrypto.CodeSealNonce]) map to
+// [webhooks.CodeStorepgDecryptFailed]. Non-errs errors pass through
+// unchanged.
+func translateCryptoErr(err error) error {
+	var e *errs.Error
+	if !errors.As(err, &e) {
+		return err
+	}
+	switch e.Code {
+	case gocrypto.CodeKeyLength, gocrypto.CodeKeyBase64, gocrypto.CodeKeychainEmpty, gocrypto.CodeKeychainNoActive:
+		return errs.Wrap(err, e.Kind, webhooks.CodeStorepgNoKey, e.Message)
+	case gocrypto.CodeCiphertext, gocrypto.CodeSealNonce:
+		return errs.Wrap(err, e.Kind, webhooks.CodeStorepgDecryptFailed, e.Message)
+	default:
+		return err
+	}
 }
