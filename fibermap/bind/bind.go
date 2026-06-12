@@ -46,7 +46,6 @@ package bind
 
 import (
 	"errors"
-	"fmt"
 )
 
 // Validator is the minimal contract a request validator must satisfy.
@@ -113,11 +112,11 @@ var ErrValidateHeader = errors.New("bind: validate header")
 func Body[T any](c BodyParser, v Validator) (T, error) {
 	var body T
 	if err := c.BodyParser(&body); err != nil {
-		return body, fmt.Errorf("%w: %v", ErrParseBody, err)
+		return body, errors.Join(ErrParseBody, err)
 	}
 	if v != nil {
 		if err := v.Struct(&body); err != nil {
-			return body, fmt.Errorf("%w: %v", ErrValidateBody, err)
+			return body, errors.Join(ErrValidateBody, err)
 		}
 	}
 	return body, nil
@@ -131,11 +130,11 @@ func Body[T any](c BodyParser, v Validator) (T, error) {
 func Query[T any](c QueryParser, v Validator) (T, error) {
 	var q T
 	if err := c.QueryParser(&q); err != nil {
-		return q, fmt.Errorf("%w: %v", ErrParseQuery, err)
+		return q, errors.Join(ErrParseQuery, err)
 	}
 	if v != nil {
 		if err := v.Struct(&q); err != nil {
-			return q, fmt.Errorf("%w: %v", ErrValidateQuery, err)
+			return q, errors.Join(ErrValidateQuery, err)
 		}
 	}
 	return q, nil
@@ -149,11 +148,11 @@ func Query[T any](c QueryParser, v Validator) (T, error) {
 func Params[T any](c ParamsParser, v Validator) (T, error) {
 	var p T
 	if err := c.ParamsParser(&p); err != nil {
-		return p, fmt.Errorf("%w: %v", ErrParseParams, err)
+		return p, errors.Join(ErrParseParams, err)
 	}
 	if v != nil {
 		if err := v.Struct(&p); err != nil {
-			return p, fmt.Errorf("%w: %v", ErrValidateParams, err)
+			return p, errors.Join(ErrValidateParams, err)
 		}
 	}
 	return p, nil
@@ -171,11 +170,11 @@ func Params[T any](c ParamsParser, v Validator) (T, error) {
 func Header[T any](c ReqHeaderParser, v Validator) (T, error) {
 	var h T
 	if err := c.ReqHeaderParser(&h); err != nil {
-		return h, fmt.Errorf("%w: %v", ErrParseHeader, err)
+		return h, errors.Join(ErrParseHeader, err)
 	}
 	if v != nil {
 		if err := v.Struct(&h); err != nil {
-			return h, fmt.Errorf("%w: %v", ErrValidateHeader, err)
+			return h, errors.Join(ErrValidateHeader, err)
 		}
 	}
 	return h, nil
