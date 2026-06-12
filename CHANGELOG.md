@@ -9,6 +9,20 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Fixed
+- `db.Connect` — raw `[16]byte` query arguments now encode to Postgres
+  `uuid` columns (OID 2950) without a `pgtype.UUID{Bytes: b, Valid: true}`
+  wrap, and scan back into `[16]byte` destinations symmetrically.
+  Pre-fix, pgx5 returned `unable to encode 0x.. into binary format
+  for uuid (OID 2950): cannot find encode plan` and every kit
+  consumer rewrote a private `uuidArg(b)` helper. pgx's `UUIDCodec`
+  already handles `[16]byte` natively in both directions; the kit
+  hole was the per-connection `TypeMap`'s missing default-pg-type
+  registration. `db/conn_init.go::composeAfterConnect` now installs
+  the `[16]byte` → `uuid` default-mapping unconditionally on every
+  fresh connection, before the per-conn `statement_timeout` setter
+  and any caller-supplied `WithConnInit` hooks. Surfaced by the
+  first integrator (LicenseKit, P1-8 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md)).
 - `fibermap/bind.{Body,Query,Params,Header}` — preserve the wrapped
   inner error's type, not just its string. The previous wrap was
   `fmt.Errorf("%w: %v", ErrValidateBody, err)`: `%w` chained the
