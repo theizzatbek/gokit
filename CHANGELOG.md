@@ -8,6 +8,29 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 
 ## [Unreleased]
 
+### Changed
+- `service.New` — Sentry and OTel now auto-enable from environment
+  variables when the caller did not opt-in via `WithSentry` /
+  `WithOtel`. New behaviour:
+  - `SENTRY_DSN` (non-empty) → wires Sentry with default
+    `SentryOptions{}` if `WithSentry` was not called.
+  - `OTEL_EXPORTER_OTLP_ENDPOINT` or
+    `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (non-empty) → wires OTel
+    with default `OtelOptions{}` if `WithOtel` was not called.
+    Service name resolves in order: `OTEL_SERVICE_NAME` (W3C
+    standard) → `cfg.Service.ServerGroup` → `cfg.Service.NodeName`
+    → skip when none of the three is set.
+  - `OTEL_SDK_DISABLED=true` (W3C-standard kill switch) skips OTel
+    auto-enable regardless of endpoint env.
+  Caller-supplied `WithSentry` / `WithOtel` always wins — the env
+  lookup only fires when the corresponding option slot is still
+  empty. Existing services that already wire both options
+  programmatically see no behaviour change. Surfaced by the first
+  integrator (LicenseKit, P2-13 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md))
+  who was rewriting the same `os.Getenv("SENTRY_DSN")` boilerplate
+  in every service.
+
 ### Fixed
 - `db.Connect` — raw `[16]byte` query arguments now encode to Postgres
   `uuid` columns (OID 2950) without a `pgtype.UUID{Bytes: b, Valid: true}`

@@ -44,6 +44,12 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 	for _, fn := range opts {
 		fn(o)
 	}
+	// Env-driven auto-enable for Sentry / OTel. Runs AFTER the
+	// caller-options loop so an explicit WithSentry / WithOtel
+	// always wins; only fills slots that the caller left empty.
+	// See env_defaults.go for the trigger envs + service-name
+	// resolution order.
+	applyEnvDefaults(o, cfg)
 
 	logger := o.logger
 	ownedLogger := logger == nil

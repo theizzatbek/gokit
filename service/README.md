@@ -316,6 +316,20 @@ last-write-wins (код override'ит). `Servers` / `SecuritySchemes` /
 
 ## Опции
 
+### Env-driven auto-enable для Sentry / OTel
+
+С v1.0.1 `service.New` смотрит на стандартные env vars **после** того как применил caller's `With*` опции. Если что-то из observability subsystem'ов не подключено программно, но env vars присутствуют — оно подключается автоматически:
+
+| Env | Триггерит | Service.name source order |
+|---|---|---|
+| `SENTRY_DSN` (non-empty) | `WithSentry(dsn, SentryOptions{})` если `o.sentryDSN == ""` | — |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` либо `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (non-empty) | `WithOtel(name, OtelOptions{})` если `o.otelServiceName == ""` | 1. `OTEL_SERVICE_NAME` 2. `cfg.Service.ServerGroup` 3. `cfg.Service.NodeName` 4. пропуск |
+| `OTEL_SDK_DISABLED=true` | **kill switch** — OTel auto-enable skip'ается независимо от endpoint env | — |
+
+Caller-supplied `WithSentry` / `WithOtel` всегда побеждает: env подхватывается только когда соответствующее поле остаётся пустым. Если `cfg.Service.ServerGroup` и `NodeName` оба пустые, и `OTEL_SERVICE_NAME` не задан, OTel auto-enable пропускается (нет sensible default'а для service.name).
+
+Sentry/OTel options (`sentrykit.Option...`, `otelkit.Option...`) при auto-enable остаются дефолтными — для tuning используйте `WithSentry`/`WithOtel` явно даже если DSN/endpoint берёте из env.
+
 | Опция | Заметки |
 |---|---|
 | `WithOpenAPI(opts ...openapi.Option)` | Включает OpenAPI mounting. Без args Info/Servers/SecuritySchemes/MiddlewareSecurity приходят из top-level блока `openapi:` в `routes.yaml`. Передавайте `openapi.WithInfo(...)` / `WithServer(...)` / `WithSecurity(...)` / `WithDefaultResponse(...)`, чтобы override'нуть или augment. Авто-монтируется даже без этого вызова, когда YAML-блок присутствует. |
