@@ -9,6 +9,23 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Fixed
+- `fibermap/bind.{Body,Query,Params,Header}` — preserve the wrapped
+  inner error's type, not just its string. The previous wrap was
+  `fmt.Errorf("%w: %v", ErrValidateBody, err)`: `%w` chained the
+  sentinel, `%v` stringified the underlying error, so downstream
+  `errors.As(err, &concreteType)` could never recover the real type.
+  Most painfully this broke `errsval.FromValidator` — it could not
+  reach `validator.ValidationErrors`, and the whole point of
+  `errsval` (per-field `Details[]` in the wire body) was unreachable
+  from any bind-wrapped error. Switched to `errors.Join(sentinel,
+  err)` so both `errors.Is` (existing contract — still works) AND
+  `errors.As` (the bug) succeed. Surfaced by the first integrator
+  (LicenseKit, P0-1 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md)).
+  Note that `err.Error()` now joins the sentinel and inner message
+  with a newline instead of `": "` — callers logging the bare
+  string see a two-line trace; structured callers using
+  `errsval.FromValidator` get the correct per-field `Details[]`.
 - `service.Run` — `fibermap.ErrorHandler` is now installed
   unconditionally instead of being gated by `WithBodyLimit(>0)`.
   Pre-fix, a caller that wired `service.New` without an explicit

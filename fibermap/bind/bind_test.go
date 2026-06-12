@@ -273,3 +273,101 @@ func TestHeader_NilValidator_Skips(t *testing.T) {
 		t.Errorf("Authorization = %q", h.Authorization)
 	}
 }
+
+// typedValidationErr is a custom error type returned by fakeValidator
+// in the *_PreservesInnerType tests below. Using a kit-local type lets
+// the tests stay self-contained while exercising the same `errors.As`
+// path that go-playground/validator/v10's ValidationErrors needs in
+// real callers (errsval.FromValidator depends on it).
+type typedValidationErr struct{ Field string }
+
+func (e *typedValidationErr) Error() string { return "validation failed on " + e.Field }
+
+// errParseSentinel is a typed error returned by the fakeCtx parsers in
+// the *_ParseErrorPreservesInnerType tests below. Same rationale as
+// typedValidationErr — exercising errors.As through the bind wrapper.
+type errParseSentinel struct{ Reason string }
+
+func (e *errParseSentinel) Error() string { return "parse failed: " + e.Reason }
+
+// TestBody_ValidationErrorPreservesInnerType regression-guards the
+// fix for LicenseKit P0-1: the bind wrap must keep the inner error
+// type addressable via errors.As, not just stringified into a sentinel
+// wrap. Without errors.Join (or fmt.Errorf("%w: %w", ...)) the inner
+// type is lost and errsval.FromValidator can't recover Details[].
+func TestBody_ValidationErrorPreservesInnerType(t *testing.T) {
+	inner := &typedValidationErr{Field: "title"}
+	c := fakeCtx{body: []byte(`{"title":""}`)}
+	_, err := bind.Body[createReq](c, fakeValidator{err: inner})
+	if !errors.Is(err, bind.ErrValidateBody) {
+		t.Fatalf("errors.Is(err, ErrValidateBody) = false; sentinel chain broken")
+	}
+	var got *typedValidationErr
+	if !errors.As(err, &got) {
+		t.Fatalf("errors.As(err, &typedValidationErr) = false; inner error type lost")
+	}
+	if got.Field != "title" {
+		t.Errorf("got.Field = %q, want title", got.Field)
+	}
+}
+
+func TestBody_ParseErrorPreservesInnerType(t *testing.T) {
+	inner := &errParseSentinel{Reason: "bad json"}
+	c := fakeCtx{err: inner}
+	_, err := bind.Body[createReq](c, fakeValidator{})
+	if !errors.Is(err, bind.ErrParseBody) {
+		t.Fatalf("errors.Is(err, ErrParseBody) = false; sentinel chain broken")
+	}
+	var got *errParseSentinel
+	if !errors.As(err, &got) {
+		t.Fatalf("errors.As(err, &errParseSentinel) = false; inner error type lost")
+	}
+}
+
+func TestQuery_ValidationErrorPreservesInnerType(t *testing.T) {
+	inner := &typedValidationErr{Field: "limit"}
+	c := fakeCtx{query: url.Values{"limit": {"0"}}}
+	_, err := bind.Query[listQuery](c, fakeValidator{err: inner})
+	if !errors.Is(err, bind.ErrValidateQuery) {
+		t.Fatalf("errors.Is(err, ErrValidateQuery) = false")
+	}
+	var got *typedValidationErr
+	if !errors.As(err, &got) {
+		t.Fatalf("errors.As(err, &typedValidationErr) = false")
+	}
+	if got.Field != "limit" {
+		t.Errorf("got.Field = %q, want limit", got.Field)
+	}
+}
+
+func TestParams_ValidationErrorPreservesInnerType(t *testing.T) {
+	inner := &typedValidationErr{Field: "id"}
+	c := fakeCtx{params: map[string]string{"id": ""}}
+	_, err := bind.Params[idParams](c, fakeValidator{err: inner})
+	if !errors.Is(err, bind.ErrValidateParams) {
+		t.Fatalf("errors.Is(err, ErrValidateParams) = false")
+	}
+	var got *typedValidationErr
+	if !errors.As(err, &got) {
+		t.Fatalf("errors.As(err, &typedValidationErr) = false")
+	}
+	if got.Field != "id" {
+		t.Errorf("got.Field = %q, want id", got.Field)
+	}
+}
+
+func TestHeader_ValidationErrorPreservesInnerType(t *testing.T) {
+	inner := &typedValidationErr{Field: "Authorization"}
+	c := fakeCtx{headers: map[string]string{"Authorization": ""}}
+	_, err := bind.Header[authHeader](c, fakeValidator{err: inner})
+	if !errors.Is(err, bind.ErrValidateHeader) {
+		t.Fatalf("errors.Is(err, ErrValidateHeader) = false")
+	}
+	var got *typedValidationErr
+	if !errors.As(err, &got) {
+		t.Fatalf("errors.As(err, &typedValidationErr) = false")
+	}
+	if got.Field != "Authorization" {
+		t.Errorf("got.Field = %q, want Authorization", got.Field)
+	}
+}
