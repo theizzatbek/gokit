@@ -19,9 +19,9 @@ func TestSealOpen_Roundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	if sealed[0] != cryptoVersion {
-		t.Fatalf("version byte = %d, want %d", sealed[0], cryptoVersion)
-	}
+	// Wire-format version-byte invariant lives in the gokit/crypto
+	// package's own tests now (the wrapper delegates straight through);
+	// the round-trip assertion below is what this package owns.
 	opened, err := c.open(sealed)
 	if err != nil {
 		t.Fatalf("open: %v", err)

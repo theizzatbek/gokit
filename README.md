@@ -86,6 +86,12 @@ audit, schedulers, file uploads, webhook'и.
 | [`bulkhead/`](bulkhead/README.md) | Concurrency cap с bounded queue + опциональный adaptive controller (AIMD). |
 | [`batch/`](batch/README.md) | Batched-handler dispatcher для bulk sink-операций. |
 
+### Криптография
+
+| Пакет | Что делает |
+|---|---|
+| [`crypto/`](crypto/README.md) | AES-256-GCM at-rest sealing. `MasterKey` для single-key случая; `Keychain` (kid-routed) для rotation. Version-tagged blob format с cross-type isolation. |
+
 ### Observability
 
 | Пакет | Что делает |

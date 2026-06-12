@@ -9,6 +9,28 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Added
+- `gokit/crypto` — new public top-level package for at-rest sealing.
+  Two surfaces: `crypto.MasterKey` (single AES-256-GCM key, wire
+  format `[version=0x01] [nonce(12)] [ct+tag]`) and `crypto.Keychain`
+  (kid-routed multi-key sealing for rotation; wire format
+  `[version=0x02] [kid(1)] [nonce(12)] [ct+tag]`). Constructors
+  accept raw 32-byte keys or base64-encoded strings (every Go stdlib
+  flavour: std/url, padded/raw). All failure modes return
+  `*errs.Error` with stable codes (`CodeKeyLength` / `CodeKeyBase64`
+  / `CodeKeychainEmpty` / `CodeKeychainNoActive` / `CodeSealNonce`
+  / `CodeCiphertext`). `CodeCiphertext` collapses every Open failure
+  (short blob, unknown version, unknown kid, AEAD tag mismatch) into
+  a single code so callers don't leak the specific failure cause to
+  upstream consumers.
+
+  `clients/webhooks/storepg`'s private `crypto` helper is rewritten
+  as a thin wrapper over `gokit/crypto.MasterKey` that re-tags the
+  underlying error codes as `webhooks.CodeStorepgNoKey` /
+  `webhooks.CodeStorepgDecryptFailed` so existing alerting rules
+  keep matching. New consumers should reach for `gokit/crypto`
+  directly. Surfaced by the first integrator (LicenseKit, P1-5 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md))
+  who was rewriting AES-GCM Seal/Open inline in every service.
 - `fibermap.ErrsvalBindError[T any]` — the recommended
   `SetBindErrorHandler` value for services using the kit's typed
   `*errs.Error` contract for HTTP failure modes. Maps every
