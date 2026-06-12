@@ -223,6 +223,24 @@ func main() {
 }
 ```
 
+Для реальных endpoint'ов используйте типизированные регистры — они парсят body/query/params, валидируют через `eng.SetValidator`, авто-attach'ат схему для OpenAPI и сводят boilerplate к одной строке `req` argument:
+
+```go
+type CreateTaskReq struct {
+    Title string `json:"title" validate:"required,min=1,max=200"`
+}
+
+fibermap.RegisterHandlerWithBody(eng, "tasks.create",
+    func(c *fibermap.Context[AppCtx], req CreateTaskReq) error {
+        // req уже распарсен и провалидирован.
+        return c.Status(201).JSON(...)
+    },
+    fibermap.WithResponse(201, Task{}),
+)
+```
+
+Sibling-хелперы — `RegisterHandlerWith{Query,Params,Headers}`. Комбинированные кейсы (body+param и т.д.) — `RegisterHandlerWithInput`. См. [`fibermap/README.md`](fibermap/README.md) § «Типизированный body-bound хендлер» и «Комбинированные binder'ы».
+
 ## Quickstart — service.New (полный bundle)
 
 ```go
