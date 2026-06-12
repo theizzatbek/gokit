@@ -114,12 +114,7 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 	if s.opts.natsgwEnable {
 		out = append(out, s.mountNATSMapGateway())
 	}
-	if s.opts.bodyLimit > 0 {
-		out = append(out, fibermap.WithFiberConfig(fiber.Config{
-			BodyLimit:    s.opts.bodyLimit,
-			ErrorHandler: fibermap.ErrorHandler(s.logger),
-		}))
-	}
+	out = append(out, fibermap.WithFiberConfig(s.buildFiberConfig()))
 	// Route /metrics through the unified service registry when the
 	// configured Registerer is also a Gatherer (the default
 	// prometheus.NewRegistry() satisfies both). Otherwise leave the
@@ -152,6 +147,25 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 	}
 	out = append(out, s.opts.runOpts...)
 	return out
+}
+
+// buildFiberConfig assembles the fiber.Config used by every
+// service.Run, regardless of caller-passed options. The
+// ErrorHandler is wired unconditionally so callers returning
+// *errs.Error from handlers always get typed `{code, message,
+// details[]}` JSON — even when [WithBodyLimit] is not set.
+// (Pre-v1.0.1 the ErrorHandler install was gated by bodyLimit > 0,
+// which silently produced fiber's default plaintext 500 on every
+// kit-style error when the operator skipped WithBodyLimit.)
+//
+// BodyLimit defaults to fiber's own default (4 MiB) — only override
+// when [WithBodyLimit] supplied a positive value.
+func (s *Service[T, C]) buildFiberConfig() fiber.Config {
+	cfg := fiber.Config{ErrorHandler: fibermap.ErrorHandler(s.logger)}
+	if s.opts.bodyLimit > 0 {
+		cfg.BodyLimit = s.opts.bodyLimit
+	}
+	return cfg
 }
 
 // readinessCheckers assembles the live subsystem checker set in
