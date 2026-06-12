@@ -9,6 +9,31 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Added
+- `gokit/ids` — new public top-level package for prefixed ULIDs.
+  `ids.New("user_")` mints a time-sortable `user_<26-char Crockford-
+  Base32>` string; `ids.Parse(prefix, s)` validates the prefix and
+  the 26-char ULID suffix, returning the raw `[16]byte` ready to
+  INSERT into a Postgres `uuid` column (uses the v1.0.1 P1-8
+  `[16]byte ↔ uuid` codec automatically); `ids.Format(prefix, raw)`
+  is the inverse for callers holding bytes scanned from a uuid
+  column. `New` is goroutine-safe — a package-level mutex serialises
+  access to the monotonic-entropy source so concurrent same-ms
+  calls produce strictly increasing IDs per the ULID spec.
+
+  Declarative DTO validation via `ids.RegisterValidator(*validator.Validate)`
+  wires the `validate:"id_prefix=prod_"` struct tag — fields failing
+  the tag flow through `fibermap.ErrsvalBindError` as per-field
+  `Details[]` in the 400 response without any extra wiring. The
+  `ids.Tag(prefix)` helper assembles the tag string programmatically
+  for code-generated DTOs.
+
+  Stable error codes: `CodeBadPrefix` / `CodeBadSuffix`. Sentinel
+  errors `ErrBadPrefix` / `ErrBadSuffix` exist for `errors.Is` but
+  most callers should match on `e.Code` (semver-stable).
+
+  Surfaced by the first integrator (LicenseKit, P1-6 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md)).
+  Closes the per-service `internal/domain/ids.go` reinvention loop.
 - `gokit/crypto` — new public top-level package for at-rest sealing.
   Two surfaces: `crypto.MasterKey` (single AES-256-GCM key, wire
   format `[version=0x01] [nonce(12)] [ct+tag]`) and `crypto.Keychain`

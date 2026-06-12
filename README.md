@@ -92,6 +92,12 @@ audit, schedulers, file uploads, webhook'и.
 |---|---|
 | [`crypto/`](crypto/README.md) | AES-256-GCM at-rest sealing. `MasterKey` для single-key случая; `Keychain` (kid-routed) для rotation. Version-tagged blob format с cross-type isolation. |
 
+### Идентификаторы
+
+| Пакет | Что делает |
+|---|---|
+| [`ids/`](ids/README.md) | Prefixed ULIDs (`user_01H…`). `New`/`Parse`/`Format` + `validate:"id_prefix=prod_"` struct tag. 16-byte raw — совместимо с pgx `uuid` column через kit's auto-codec. |
+
 ### Observability
 
 | Пакет | Что делает |
