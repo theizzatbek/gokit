@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -55,6 +56,7 @@ type options struct {
 	runOpts                    []fibermap.RunOption
 	skipConnectRetry           bool
 	validator                  bind.Validator // nil → default validator.New(validator.WithRequiredStructEnabled())
+	extraValidators            map[string]validator.Func // tag-name → func; registered on the kit-default validator when WithValidator was NOT passed
 	refreshGCInterval          time.Duration  // 0 = disabled (default); > 0 = period between refresh-store GarbageCollect runs
 	otelServiceName            string         // non-empty triggers OpenTelemetry setup at service.New time
 	otelOpts                   []otelkit.Option
@@ -128,7 +130,52 @@ func WithLogger(l *slog.Logger) Option { return func(o *options) { o.logger = l 
 // The argument type is bind.Validator (any type satisfying
 // `Struct(any) error`) so custom non-validator/v10 implementations work
 // too. Pass nil to keep the default.
+//
+// For the common "kit defaults + one custom tag" case, prefer
+// [WithExtraValidators] — it registers tags ON the kit-default
+// validator instead of swapping the whole instance.
 func WithValidator(v bind.Validator) Option { return func(o *options) { o.validator = v } }
+
+// WithExtraValidators registers additional tag-name → validator.Func
+// pairs on the kit-default *validator.Validate that [service.New]
+// builds when [WithValidator] was NOT passed. Solves the common
+// "kit defaults + one custom tag" case: registering a `safe_url`,
+// `username`, or `slug_chars` tag without having to reconstruct the
+// kit-default validator from scratch.
+//
+//	svc, _ := service.New[AppCtx, Claims](ctx, cfg,
+//	    service.WithExtraValidators(map[string]validator.Func{
+//	        "slug_chars": isSafeSlug,
+//	        "safe_url":   isSafeURL,
+//	    }))
+//
+// Multiple WithExtraValidators calls accumulate into a single map;
+// later calls overwrite earlier registrations on the same tag name
+// (last-write-wins). Empty / nil maps are no-ops.
+//
+// Interaction with [WithValidator]
+//
+// WithExtraValidators is meaningful only when WithValidator was NOT
+// passed. When both are present, the caller's WithValidator instance
+// is used verbatim — the extras are silently ignored, because the
+// kit refuses to mutate a caller-supplied validator (it might be
+// shared with other call paths in the caller's process and the kit
+// can't know what tags are safe to add). If you need both a custom
+// validator AND extra tags, register them on your validator
+// instance directly before calling WithValidator.
+func WithExtraValidators(rules map[string]validator.Func) Option {
+	return func(o *options) {
+		if len(rules) == 0 {
+			return
+		}
+		if o.extraValidators == nil {
+			o.extraValidators = make(map[string]validator.Func, len(rules))
+		}
+		for tag, fn := range rules {
+			o.extraValidators[tag] = fn
+		}
+	}
+}
 
 // WithMetrics overrides the default prometheus.NewRegistry().
 func WithMetrics(reg prometheus.Registerer) Option {

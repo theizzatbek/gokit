@@ -9,6 +9,30 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Added
+- `service.WithExtraValidators(map[string]validator.Func) Option`
+  — registers tag-name → validator.Func pairs ON the kit-default
+  `*validator.Validate` instance that `service.New` builds when
+  `WithValidator` was NOT passed. Solves the "kit defaults + one
+  custom tag" case without forcing callers to reconstruct
+  `validator.New(validator.WithRequiredStructEnabled())` from
+  scratch. Multiple `WithExtraValidators` calls accumulate into a
+  single map; later calls overwrite same-tag registrations
+  (last-write-wins). Empty / nil maps are no-ops. When both
+  `WithValidator` and `WithExtraValidators` are passed, the
+  caller-supplied validator is used verbatim and extras are
+  silently ignored — the kit refuses to mutate a caller-shared
+  instance.
+
+  Also adds `service.CodeExtraValidatorRegister` for defensive
+  wrap of validator.RegisterValidation errors at boot, and a new
+  read-only `fibermap.Engine.Validator() bind.Validator` accessor
+  so service-level tests can introspect the wired validator
+  (mirrors the existing `SetValidator`).
+
+  Surfaced by the first integrator (LicenseKit, P2-12 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md))
+  who needed a `slug_chars` validator that's safe across all DB
+  backends.
 - `service.ServiceConfig.CORSOrigins string` + env `CORS_ORIGINS`.
   Comma-separated list of allowed origins. When non-empty AND no
   `WithCORS` / `WithCORSConfig` option was passed by the caller,

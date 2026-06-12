@@ -443,10 +443,21 @@ func (s *Service[T, C]) buildNATSMap(ctx context.Context) error {
 func (s *Service[T, C]) buildEngine() error {
 	s.Engine = fibermap.Default[T]()
 	if s.opts.validator != nil {
+		// Caller-supplied validator wins verbatim. WithExtraValidators
+		// extras are intentionally ignored — the kit won't mutate a
+		// validator instance the caller might share with other code
+		// paths. See WithExtraValidators docs for the rationale.
 		s.Engine.SetValidator(s.opts.validator)
-	} else {
-		s.Engine.SetValidator(validator.New(validator.WithRequiredStructEnabled()))
+		return nil
 	}
+	v := validator.New(validator.WithRequiredStructEnabled())
+	for tag, fn := range s.opts.extraValidators {
+		if err := v.RegisterValidation(tag, fn); err != nil {
+			return xerrs.Wrap(err, xerrs.KindValidation, CodeExtraValidatorRegister,
+				fmt.Sprintf("service: WithExtraValidators register %q", tag))
+		}
+	}
+	s.Engine.SetValidator(v)
 	return nil
 }
 
