@@ -73,6 +73,21 @@ type ServiceConfig struct {
 	// dev-only inspectors — non-"dev" values disable mounting
 	// even when the option was passed.
 	Env string `env:"ENV"`
+
+	// CORSOrigins, when non-empty AND no [WithCORS] / [WithCORSConfig]
+	// option was passed by the caller, triggers env-driven CORS
+	// auto-enable inside [New]. Comma-separated list of allowed
+	// origins; same shape WithCORS takes as its variadic. Caller-
+	// supplied WithCORS always wins.
+	//
+	// AllowCredentials matches the WithCORS contract: enabled when
+	// every entry is explicit; auto-disabled when "*" appears (CORS
+	// spec rejects `Access-Control-Allow-Origin: *` with credentials).
+	//
+	// For full control (custom headers, MaxAge, AllowOriginsFunc),
+	// use [WithCORSConfig] explicitly — env auto-enable only covers
+	// the kit-defaulted shape.
+	CORSOrigins string `env:"CORS_ORIGINS"` // csv
 }
 
 // AuthConfig — JWT signing material + TTLs. PrivateKeyPEM is the

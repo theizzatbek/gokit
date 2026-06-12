@@ -31,6 +31,93 @@ func TestApplyEnvDefaults_NoEnv_NoCallerOpts_LeavesAllEmpty(t *testing.T) {
 	if o.otelServiceName != "" {
 		t.Errorf("otelServiceName = %q, want empty", o.otelServiceName)
 	}
+	if o.corsWired {
+		t.Error("corsWired = true, want false (no CORS_ORIGINS env, no caller opt)")
+	}
+}
+
+// --- CORS auto-enable (v1.1.0 P2-11) ---
+
+func TestApplyEnvDefaults_CORSOriginsConfig_AutoEnable(t *testing.T) {
+	cfg := Config{}
+	cfg.Service.CORSOrigins = "https://app.example.com,https://admin.example.com"
+
+	o := &options{}
+	applyEnvDefaults(o, cfg)
+
+	if !o.corsWired {
+		t.Error("corsWired = false, want true (env CORS_ORIGINS supplied two origins)")
+	}
+	if len(o.fiberMiddleware) != 1 {
+		t.Errorf("fiberMiddleware len = %d, want 1 (cors.New appended)", len(o.fiberMiddleware))
+	}
+}
+
+func TestApplyEnvDefaults_CORSOrigins_TrimsWhitespace_DropsBlanks(t *testing.T) {
+	cfg := Config{}
+	// Mix of spaces around entries and empty entries — should normalise.
+	cfg.Service.CORSOrigins = " https://a.com , , https://b.com ,"
+
+	o := &options{}
+	applyEnvDefaults(o, cfg)
+
+	if !o.corsWired {
+		t.Error("corsWired = false, want true (two non-blank origins after trim)")
+	}
+}
+
+func TestApplyEnvDefaults_CORSOrigins_OnlyBlanks_SkipsAutoEnable(t *testing.T) {
+	cfg := Config{}
+	cfg.Service.CORSOrigins = " , , , "
+
+	o := &options{}
+	applyEnvDefaults(o, cfg)
+
+	if o.corsWired {
+		t.Error("corsWired = true, want false (CORS_ORIGINS contains only blanks)")
+	}
+}
+
+func TestApplyEnvDefaults_CORSOrigins_DefersToCallerOpt(t *testing.T) {
+	// Caller already wired WithCORS / WithCORSConfig (signalled by
+	// corsWired pre-flip). env auto-enable MUST NOT apply a second
+	// cors.New on top.
+	cfg := Config{}
+	cfg.Service.CORSOrigins = "https://from-env.example.com"
+
+	o := &options{corsWired: true} // simulate caller-WithCORS effect
+	preLen := len(o.fiberMiddleware)
+	applyEnvDefaults(o, cfg)
+
+	if len(o.fiberMiddleware) != preLen {
+		t.Errorf("fiberMiddleware len changed from %d to %d; expected env to defer to caller-wired CORS",
+			preLen, len(o.fiberMiddleware))
+	}
+}
+
+func TestParseCORSOrigins(t *testing.T) {
+	cases := map[string][]string{
+		"":                                       nil,
+		",":                                      nil,
+		" , , ":                                  nil,
+		"https://a.com":                          {"https://a.com"},
+		"https://a.com,https://b.com":            {"https://a.com", "https://b.com"},
+		" https://a.com , https://b.com ":        {"https://a.com", "https://b.com"},
+		"https://a.com,,https://b.com,":          {"https://a.com", "https://b.com"},
+		"*":                                      {"*"},
+	}
+	for in, want := range cases {
+		got := parseCORSOrigins(in)
+		if len(got) != len(want) {
+			t.Errorf("parseCORSOrigins(%q) = %#v, want %#v", in, got, want)
+			continue
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("parseCORSOrigins(%q)[%d] = %q, want %q", in, i, got[i], want[i])
+			}
+		}
+	}
 }
 
 func TestApplyEnvDefaults_SentryDSNEnv_PopulatesSlot(t *testing.T) {

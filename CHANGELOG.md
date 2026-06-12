@@ -9,6 +9,23 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Added
+- `service.ServiceConfig.CORSOrigins string` + env `CORS_ORIGINS`.
+  Comma-separated list of allowed origins. When non-empty AND no
+  `WithCORS` / `WithCORSConfig` option was passed by the caller,
+  `service.New` applies `WithCORS(origins...)` with the kit-defaulted
+  `cors.Config` automatically. Whitespace around each comma-separated
+  entry is trimmed and blank entries are dropped (so `" , a.com,, "`
+  parses as `["a.com"]`). `AllowCredentials` matches the WithCORS
+  contract: enabled when every origin is explicit, auto-disabled
+  when `*` appears (per the CORS spec rejecting
+  `Access-Control-Allow-Origin: *` together with credentials).
+  Caller-supplied `WithCORS` / `WithCORSConfig` always wins —
+  detection rides on a new `options.corsWired` flag flipped by both
+  option constructors. The env auto-enable path only covers the
+  kit-defaulted shape; custom headers / `AllowOriginsFunc` /
+  non-default `MaxAge` still require an explicit `WithCORSConfig`.
+  Surfaced by the first integrator (LicenseKit, P2-11 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md)).
 - `auth.GenerateAPIKey(pepper []byte) (plain, hash []byte, prefix string, err error)`
   — kit-standard recipe for minting fresh API keys. Returns the
   triple every service was reinventing: `plain` (`ak_<28-char
