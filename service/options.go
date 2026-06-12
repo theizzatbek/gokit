@@ -39,6 +39,7 @@ type options struct {
 	openapiEnable              bool // WithOpenAPI() flips this
 	openapiOpts                []openapi.Option
 	fiberMiddleware            []fiber.Handler
+	corsWired                  bool // flipped by WithCORS / WithCORSConfig; gates env auto-enable in applyEnvDefaults
 	skipBearerLayer            bool
 	httpcOpts                  []httpc.Option
 	apimapOpts                 []apimap.Option
@@ -205,6 +206,7 @@ func WithCORS(origins ...string) Option {
 func WithCORSConfig(cfg cors.Config) Option {
 	return func(o *options) {
 		o.fiberMiddleware = append(o.fiberMiddleware, cors.New(cfg))
+		o.corsWired = true
 	}
 }
 

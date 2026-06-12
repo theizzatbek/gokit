@@ -1,12 +1,16 @@
 package service
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
-// applyEnvDefaults wires Sentry and OTel automatically when their
-// respective environment variables are present AND the caller did
-// not already opt-in programmatically via [WithSentry] / [WithOtel].
-// Runs once, after the caller-options loop in [New], before
-// setupOtel / setupSentry consume the option fields.
+// applyEnvDefaults wires Sentry, OTel, and CORS automatically when
+// their respective environment variables are present AND the caller
+// did not already opt-in programmatically via [WithSentry] /
+// [WithOtel] / [WithCORS] / [WithCORSConfig]. Runs once, after the
+// caller-options loop in [New], before setup* consumes the option
+// fields.
 //
 // Sentry trigger:
 //
@@ -24,8 +28,8 @@ import "os"
 //	                           → presence triggers auto-enable.
 //	                             Either env alone is enough.
 //
-// When auto-enable triggers, the OTel service.name is resolved in
-// this order:
+// When OTel auto-enable triggers, the OTel service.name is resolved
+// in this order:
 //
 //  1. OTEL_SERVICE_NAME — W3C-standard env, wins over any kit
 //     config-derived fallback. Operators who set both expect this
@@ -38,8 +42,20 @@ import "os"
 //  4. empty string — no auto-enable. Caller must call WithOtel
 //     explicitly to supply a name.
 //
-// Caller-supplied WithOtel always wins: this helper only sets the
-// otelServiceName slot when it is still empty.
+// CORS trigger:
+//
+//	CORS_ORIGINS=https://a.com,https://b.com
+//	    → applies [WithCORS]([origins...]) when no [WithCORS] /
+//	      [WithCORSConfig] option was passed by the caller. Whitespace
+//	      around each entry is trimmed; blank entries are skipped.
+//	      AllowCredentials matches the WithCORS contract — disabled
+//	      when "*" is among the origins, enabled otherwise. For full
+//	      control over the cors.Config, pass [WithCORSConfig]
+//	      explicitly; env auto-enable only covers the kit-defaulted
+//	      shape.
+//
+// Caller-supplied WithSentry / WithOtel / WithCORS / WithCORSConfig
+// always wins: this helper only fills slots the caller left empty.
 func applyEnvDefaults(o *options, cfg Config) {
 	if o.sentryDSN == "" {
 		if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {
@@ -52,6 +68,35 @@ func applyEnvDefaults(o *options, cfg Config) {
 			o.otelServiceName = name
 		}
 	}
+
+	if !o.corsWired && cfg.Service.CORSOrigins != "" {
+		if origins := parseCORSOrigins(cfg.Service.CORSOrigins); len(origins) > 0 {
+			// Apply WithCORS via its Option func so the same code
+			// path (incl. corsWired = true side-effect) runs whether
+			// the caller wires it programmatically or via env.
+			WithCORS(origins...)(o)
+		}
+	}
+}
+
+// parseCORSOrigins splits a comma-separated origin list as supplied
+// in CORS_ORIGINS env, trimming whitespace around each entry and
+// dropping blanks. Returns nil when the result is empty so the
+// caller in applyEnvDefaults treats it as "no auto-enable" rather
+// than "wire CORS with no origins" (which Fiber's middleware would
+// reject at request time).
+func parseCORSOrigins(csv string) []string {
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // otelDisabledByEnv reports whether OTEL_SDK_DISABLED=true is set —
