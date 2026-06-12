@@ -8,6 +8,20 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 
 ## [Unreleased]
 
+### Fixed
+- `service.Run` — `fibermap.ErrorHandler` is now installed
+  unconditionally instead of being gated by `WithBodyLimit(>0)`.
+  Pre-fix, a caller that wired `service.New` without an explicit
+  body-limit silently fell back to fiber's default plain-text 500
+  on every typed `*errs.Error` return. The wire shape
+  `{code, message, details[]}` documented everywhere else in the
+  kit was unreachable without remembering to set `WithBodyLimit`.
+  Fix: `service.(*Service).buildFiberConfig` always seeds
+  `fiber.Config{ErrorHandler: fibermap.ErrorHandler(logger)}` and
+  only overlays `BodyLimit` when the option supplied a positive
+  value. Surfaced by the first integrator (LicenseKit, P0-3 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md)).
+
 ## [v1.0.0] - 2026-06-11
 
 First stable major. Promoted from `v1.0.0-rc1` on the same day —
