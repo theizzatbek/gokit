@@ -11,17 +11,18 @@ import (
 type Option func(*options)
 
 type options struct {
-	refreshStore   RefreshStore
-	revokedAccess  RevokedAccessStore
-	logger         *slog.Logger
-	securityLogger *slog.Logger
-	metrics        prometheus.Registerer
-	cookieDomain   string
-	cookiePath     string
-	cookieSecure   *bool // tri-state: nil = default (true)
-	leewayOverride time.Duration
-	now            func() time.Time
-	ipExtractor    IPExtractor
+	refreshStore             RefreshStore
+	revokedAccess            RevokedAccessStore
+	logger                   *slog.Logger
+	securityLogger           *slog.Logger
+	metrics                  prometheus.Registerer
+	cookieDomain             string
+	cookiePath               string
+	cookieSecure             *bool // tri-state: nil = default (true)
+	leewayOverride           time.Duration
+	now                      func() time.Time
+	ipExtractor              IPExtractor
+	apiKeyHashSecretOverride []byte
 }
 
 // WithRefreshStore wires the persistence backend for refresh tokens.
@@ -87,3 +88,27 @@ func WithLeeway(d time.Duration) Option { return func(o *options) { o.leewayOver
 // withNow injects a fake clock for tests. Unexported — production code uses
 // time.Now exclusively.
 func withNow(now func() time.Time) Option { return func(o *options) { o.now = now } }
+
+// WithAPIKeyHashSecret supplies the HMAC pepper the APIKey middleware
+// uses to derive `keyHash` from the plain key before calling
+// KeyStore.Lookup. Functionally equivalent to setting
+// Config.APIKeyHashSecret — the Option form is the canonical place
+// callers reach for it, mirroring the With* family used for every
+// other tunable.
+//
+// Precedence: this Option WINS over Config.APIKeyHashSecret when
+// both are set. Pass a non-empty slice to override; pass nil / empty
+// to fall back to Config (or to leave Auth without a pepper, which
+// will trip CodeAPIKeyMissingSecret if APIKey middleware is built).
+//
+// 32 bytes minimum is the kit's recommended length (HMAC-SHA256
+// best practice). Auth does not enforce the floor at construction
+// time — the failure surfaces only when APIKey middleware would
+// run — but callers wiring this via service.AuthConfig.APIKeyHashSecret
+// will see a service.CodeAuthInvalidAPIKeyHashSecret validation
+// error at service.New time when the decoded value is shorter.
+func WithAPIKeyHashSecret(secret []byte) Option {
+	return func(o *options) {
+		o.apiKeyHashSecretOverride = secret
+	}
+}

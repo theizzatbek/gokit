@@ -35,9 +35,10 @@ const (
 	CodeAPIKeyRevoked = "api_key_revoked"
 
 	// CodeAPIKeyMissingSecret — Auth was constructed without
-	// `WithAPIKeyHashSecret` but the APIKey middleware was invoked.
-	// Panics at middleware-build time to surface the misconfig
-	// before the first request lands.
+	// supplying the HMAC pepper (neither Config.APIKeyHashSecret
+	// nor [WithAPIKeyHashSecret]) but the APIKey middleware was
+	// invoked. Panics at middleware-build time to surface the
+	// misconfig before the first request lands.
 	CodeAPIKeyMissingSecret = "api_key_missing_secret"
 )
 

@@ -85,6 +85,11 @@ func New[C any](cfg Config, opts ...Option) (*Auth[C], error) {
 	if o.metrics != nil {
 		m = newAuthMetrics(o.metrics)
 	}
+	apiKeyHashSecret := cfg.APIKeyHashSecret
+	if len(o.apiKeyHashSecretOverride) > 0 {
+		apiKeyHashSecret = o.apiKeyHashSecretOverride
+	}
+
 	a := &Auth[C]{
 		eng: newEngine[C](engineConfig{
 			Keys: cfg.Keys, Issuer: cfg.Issuer, Audience: cfg.Audience,
@@ -100,7 +105,7 @@ func New[C any](cfg Config, opts ...Option) (*Auth[C], error) {
 		accessTTL:        cfg.AccessTTL,
 		refreshTTL:       cfg.RefreshTTL,
 		now:              now,
-		apiKeyHashSecret: cfg.APIKeyHashSecret,
+		apiKeyHashSecret: apiKeyHashSecret,
 		revokedAccess:    o.revokedAccess,
 		ipExtractor:      o.ipExtractor,
 	}
