@@ -1,0 +1,39 @@
+version: 2
+
+# Automated dependency-update PRs. Each one runs the full PR gate
+# (test + golangci-lint + govulncheck + gosec + apidiff), so a bump that
+# breaks the build, regresses the API, or pulls a vulnerable transitive
+# is caught before merge. This makes the govulncheck gate proactive
+# instead of waiting for a human to notice a CVE.
+updates:
+  # Go module dependencies.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # Collapse the routine minor/patch churn into a single weekly PR;
+      # the kit has many deps and per-dep PRs would be noise. Major bumps
+      # stay separate (they can be breaking and deserve individual review).
+      go-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions used in the workflows (checkout, setup-go, cache,
+  # upload/download-artifact, …).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
