@@ -139,6 +139,19 @@ fields из `opts ...` в Config.
 - **Источник:** discovery sweep 2026-06-11 #2.
 - **Triage:** `v2-only` — signature change на всех трёх call-sites.
 
+#### service fiber-config layering — clobber между WithBodyLimit/WithErrorHandler и WithRunOptions(WithFiberConfig)
+
+Сейчас (v1.0.1 + v1.1.0) `service.buildFiberConfig` собирает `fiber.Config{ErrorHandler, BodyLimit}` из `WithBodyLimit` / `WithErrorHandler` и оборачивает в одну `fibermap.WithFiberConfig(cfg)` RunOption'у. Если caller дополнительно передаёт `WithRunOptions(fibermap.WithFiberConfig(custom))` через `WithRunOptions`, его custom-cfg применяется ПОЗЖЕ в RunOption chain и full-overwrite'ит service-side всю `fiber.Config` — теряя kit-default `ErrorHandler` И BodyLimit одновременно. Workaround сейчас: caller сам пишет полную `fiber.Config` включая `fibermap.ErrorHandler(logger)` + BodyLimit. Это неприятный gotcha [`docs/common-gotchas.md`](common-gotchas.md) row 14.
+
+v2-fix design options:
+- `fibermap.WithFiberConfig` merges с предыдущей cfg вместо overwrite (last-write-wins на per-field, не на whole struct).
+- Service split'ит `buildFiberConfig` на slot-mergeable Options (`fibermap.WithBodyLimit`, `fibermap.WithErrorHandler` в самом fibermap'е) которые natively compose с user'ским `fibermap.WithFiberConfig` через accumulation.
+
+Любой путь — это behaviour change на fibermap.WithFiberConfig semantics (current: full replace), так что **breaking** for any caller depending on the overwrite behaviour.
+
+- **Источник:** common-gotchas row 14, surfaced in v1.0.1 P0-3 design discussion + v1.1.0 P2-16 changelog ("Caller-supplied `fibermap.WithFiberConfig` via `WithRunOptions` continues to win over this option").
+- **Triage:** `v2-only` — `fibermap.WithFiberConfig` semantics change.
+
 ---
 
 ## 2. Additive / operational (v1.x MINOR / PATCH)
