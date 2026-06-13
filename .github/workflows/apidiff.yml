@@ -1,0 +1,45 @@
+name: api-compat
+
+# Protects the semver promise in docs/versioning.md: every PR's public
+# API is diffed against the latest release tag with gorelease, and the
+# job FAILS on any incompatible change. A deliberate breaking change is
+# then a conscious choice — restore compatibility, or cut a new major.
+#
+# gorelease prints its verdict but exits 0 even when it finds breaking
+# changes, so the gate keys off the "Incompatible changes were detected"
+# marker in its output.
+
+on:
+  pull_request:
+
+jobs:
+  gorelease:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the full tag list to resolve the latest release as base.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      - name: Install gorelease
+        run: go install golang.org/x/exp/cmd/gorelease@latest
+
+      - name: API-compatibility check vs latest release
+        run: |
+          base=$(git tag -l 'v*' | sort -V | tail -1)
+          if [ -z "$base" ]; then
+            echo "no v* release tag found — skipping API-compat gate"
+            exit 0
+          fi
+          echo "Diffing public API against $base"
+          out=$("$(go env GOPATH)/bin/gorelease" -base "$base" 2>&1) || true
+          echo "$out"
+          if echo "$out" | grep -q "Incompatible changes were detected"; then
+            echo "::error::Public API is incompatible with $base. Restore compatibility or bump the major version (see docs/versioning.md)."
+            exit 1
+          fi
