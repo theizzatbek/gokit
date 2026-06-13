@@ -32,10 +32,10 @@ func TestDecodeAPIKeyHashSecret_AcceptsEveryBase64Flavour(t *testing.T) {
 		t.Fatalf("test setup: raw secret length %d, expected 32", len(raw))
 	}
 	cases := map[string]string{
-		"std-padded":     base64.StdEncoding.EncodeToString(raw),
-		"std-raw":        base64.RawStdEncoding.EncodeToString(raw),
-		"url-padded":     base64.URLEncoding.EncodeToString(raw),
-		"url-raw":        base64.RawURLEncoding.EncodeToString(raw),
+		"std-padded": base64.StdEncoding.EncodeToString(raw),
+		"std-raw":    base64.RawStdEncoding.EncodeToString(raw),
+		"url-padded": base64.URLEncoding.EncodeToString(raw),
+		"url-raw":    base64.RawURLEncoding.EncodeToString(raw),
 	}
 	for name, encoded := range cases {
 		t.Run(name, func(t *testing.T) {

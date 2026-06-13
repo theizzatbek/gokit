@@ -36,7 +36,7 @@ import (
 //  3. Renders the *errs.Error to status + JSON via [errs.HTTP] and
 //     writes both via *fibermap.Context (which embeds *fiber.Ctx).
 //
-// Default-handler vs ErrsvalBindError trade-off
+// # Default-handler vs ErrsvalBindError trade-off
 //
 // The kit ships a plain default (`{"error": "<message>"}` 400) so the
 // `fibermap` package stays consumable without the caller buying into
@@ -45,7 +45,7 @@ import (
 // with this helper at engine-construction time — once — and forget
 // it.
 //
-// Behaviour for non-bind errors
+// # Behaviour for non-bind errors
 //
 // Anything that doesn't match a bind sentinel (e.g. a custom handler
 // returning a non-bind error through the same channel) is mapped to

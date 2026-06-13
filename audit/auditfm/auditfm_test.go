@@ -111,7 +111,7 @@ func TestWrap_HappyPath_EmitsSuccess(t *testing.T) {
 	target := audit.Target{Type: "license", ID: "lic_42"}
 
 	handler := Wrap[appCtx](logger, Spec{
-		Action: "license.revoke",
+		Action:    "license.revoke",
 		SubjectFn: func(*fiber.Ctx) string { return "user_abc" },
 		TargetFn:  func(*fiber.Ctx) audit.Target { return target },
 		MetadataFn: func(*fiber.Ctx) map[string]any {

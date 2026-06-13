@@ -7,7 +7,7 @@
 // raw)` helpers on top of [github.com/oklog/ulid/v2]. This package
 // is the single canonical implementation.
 //
-// Wire shape
+// # Wire shape
 //
 // Every ID is `<prefix><26-char Crockford-Base32 ULID>`. Crockford
 // Base32 is the ULID-spec encoding — case-insensitive on Parse, but
@@ -22,28 +22,28 @@
 // Functions
 //
 //   - [New]     — mint a new prefixed ID. Time-sortable. Monotonic
-//                 within a process under contention.
+//     within a process under contention.
 //   - [Parse]   — validate + strip prefix, return raw 16 bytes for
-//                 storage as `uuid`.
+//     storage as `uuid`.
 //   - [Format]  — inverse of Parse for callers holding raw bytes
-//                 (typical: row scanned from a `uuid` column).
+//     (typical: row scanned from a `uuid` column).
 //   - [RegisterValidator] — wire a `validate:"prefix=prod_"` struct
-//                 tag for declarative DTO validation.
+//     tag for declarative DTO validation.
 //
-// Error codes
+// # Error codes
 //
 // All parse-stage errors are [*errs.Error] of Kind = Validation:
 //
 //   - [CodeBadPrefix] — input doesn't start with the expected prefix
-//                       (including length mismatch or empty input).
+//     (including length mismatch or empty input).
 //   - [CodeBadSuffix] — 26-char suffix isn't a valid Crockford-Base32
-//                       ULID (wrong length, illegal character, etc).
+//     ULID (wrong length, illegal character, etc).
 //
 // `errors.Is` works against the package-level sentinels [ErrBadPrefix]
 // and [ErrBadSuffix] for branching code, but most callers should
 // match on `e.Code` for stable wire / log behaviour.
 //
-// Goroutine safety
+// # Goroutine safety
 //
 // [New] is goroutine-safe: it serialises around a package-level
 // monotonic entropy source so two concurrent calls in the same
