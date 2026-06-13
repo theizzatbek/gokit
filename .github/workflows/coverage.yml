@@ -1,0 +1,153 @@
+name: coverage
+
+# Aggregate test coverage across the same shard split that test.yml uses
+# for speed. Each shard runs its tests with whole-module coverage
+# instrumentation (-coverpkg) and uploads a profile; the merge job unions
+# them with gocovmerge and reports the total.
+#
+# Why a separate workflow (not part of PR-gating test.yml):
+#   -coverpkg=<module> instruments every package, which materially slows
+#   compile + run. test.yml is tuned for fast PR feedback, so coverage
+#   runs on push-to-main and on demand instead of blocking every PR.
+#
+# Why the unit shard alone isn't enough: it runs `-short`, so the
+# container-backed packages (db, auth/*pg, clients/nats, …) only get
+# their non-container coverage. The integration shards fill that in;
+# merging produces the true aggregate. Conversely the unit shard is what
+# guarantees EVERY package appears in the profile (it compiles ./...),
+# so packages no integration shard touches still count.
+#
+# Shard package lists mirror .github/workflows/test.yml — keep them in
+# sync when that matrix changes.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  cover:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: unit
+            short: "-short"
+            images: ""
+            packages: ./...
+          - shard: pg
+            short: ""
+            images: postgres:16-alpine bitnamilegacy/postgresql:16
+            packages: >-
+              ./db ./db/sqb/... ./db/lock/... ./db/migrate/... ./db/jobs/...
+              ./db/outbox ./db/inbox ./db/testdb/...
+              ./auth/refreshpg/... ./auth/apikeypg/...
+              ./audit/auditpg/... ./clients/webhooks/storepg/...
+          - shard: redis
+            short: ""
+            images: redis:7-alpine
+            packages: >-
+              ./clients/redis/... ./clients/cache/... ./clients/ratelimit/...
+              ./auth/refreshredis/... ./auth/sessionsredis/...
+          - shard: nats
+            short: ""
+            images: nats:2-alpine
+            packages: >-
+              ./clients/nats/... ./clients/natsmap ./clients/natsmap/natsgw/...
+          - shard: bundle
+            short: ""
+            images: postgres:16-alpine nats:2-alpine minio/minio:latest
+            packages: >-
+              ./service/... ./clients/s3/...
+              ./db/inbox/inboxnats/... ./db/outbox/outboxnats/...
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      - name: Cache compiled tests
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-build-
+
+      - name: Cache Docker images
+        if: matrix.images != ''
+        uses: actions/cache@v4
+        with:
+          path: ~/docker-images
+          key: ${{ runner.os }}-docker-images-${{ matrix.shard }}-${{ hashFiles('.github/docker-images.txt') }}
+          restore-keys: ${{ runner.os }}-docker-images-${{ matrix.shard }}-
+
+      - name: Load + pull Docker images
+        if: matrix.images != ''
+        run: |
+          mkdir -p ~/docker-images
+          for tar in ~/docker-images/*.tar; do
+            [ -f "$tar" ] && docker load -i "$tar"
+          done
+          for image in ${{ matrix.images }}; do
+            if ! docker image inspect "$image" > /dev/null 2>&1; then
+              docker pull "$image"
+              safe=$(echo "$image" | tr '/:' '__')
+              docker save "$image" -o ~/docker-images/${safe}.tar
+            fi
+          done
+
+      # Coverage denominator is library code only: examples/ (demo apps)
+      # and cmd/ (CLIs) are excluded so the percentage reflects the
+      # importable surface. covermode=atomic is required for -race-safe
+      # counting and for gocovmerge to combine shards.
+      - name: Test with coverage
+        run: |
+          coverpkg=$(go list ./... | grep -vE '/(examples|cmd)(/|$)' | paste -sd, -)
+          go test ${{ matrix.short }} \
+            -covermode=atomic \
+            -coverpkg="$coverpkg" \
+            -coverprofile="cover-${{ matrix.shard }}.out" \
+            ${{ matrix.packages }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cover-${{ matrix.shard }}
+          path: cover-${{ matrix.shard }}.out
+          retention-days: 7
+
+  merge:
+    needs: cover
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      - name: Download shard profiles
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cover-*
+          merge-multiple: true
+
+      - name: Merge + report
+        run: |
+          go run github.com/wadey/gocovmerge@latest cover-*.out > coverage.out
+          go tool cover -html=coverage.out -o coverage.html
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $NF}')
+          echo "## Test coverage: ${total}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Aggregated across unit + pg + redis + nats + bundle shards (library code only)." >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage.out | tail -1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.out
+            coverage.html
+          retention-days: 14
