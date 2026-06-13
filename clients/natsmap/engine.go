@@ -122,6 +122,8 @@ func (e *Engine) RegisterSubscriberOptions(name string, opts ...natsclient.Subsc
 // LoadFile reads a YAML file (subscribers, publishers, or both) and
 // appends its entries.
 func (e *Engine) LoadFile(path string) error {
+	// #nosec G304 -- path is the operator-supplied natsmap YAML location,
+	// not request-derived input.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation, CodeReadFile,

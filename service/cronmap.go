@@ -106,6 +106,8 @@ func (s *Service[T, C]) buildCronMap(_ context.Context) error {
 	}
 
 	explicit := s.cfg.CronMap.Path != ""
+	// #nosec G304 -- path is the operator-supplied crons.yaml location
+	// from service config, not request-derived input.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) && !explicit {

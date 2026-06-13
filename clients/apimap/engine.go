@@ -122,6 +122,8 @@ func (e *Engine) SetClientDefaultCall(clientName string, c Call) {
 // May be called multiple times (one file per upstream API is the
 // expected pattern).
 func (e *Engine) LoadFile(path string) error {
+	// #nosec G304 -- path is the operator-supplied YAML spec location
+	// passed at boot, not request-derived input.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation, CodeInvalidBaseURL,

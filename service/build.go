@@ -73,6 +73,9 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 	// observably-ctx-aware jobs can return before the scheduler-stop
 	// timeout. Background-derived (not the boot ctx) because boot ctx
 	// is typically scoped to startup and not held by callers.
+	// #nosec G118 -- runCancel is stored on the Service and invoked once
+	// at the head of Service.Close (run.go); gosec can't track a cancel
+	// func held across method boundaries.
 	s.runCtx, s.runCancel = context.WithCancel(context.Background())
 	s.registerRuntimeCollectors()
 

@@ -2,6 +2,9 @@ package verifiers
 
 import (
 	"crypto/hmac"
+	// #nosec G505 -- SHA-1 is used only inside HMAC (HashSHA1), where its
+	// collision weakness does not apply; required to verify webhooks from
+	// providers that still sign with HMAC-SHA1.
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"

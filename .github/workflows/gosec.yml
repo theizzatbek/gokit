@@ -1,0 +1,55 @@
+name: gosec
+
+# Static security analysis of the importable library code. Runs on every
+# PR and push to main, plus a weekly cron (gosec's rule set evolves).
+#
+# Scope & rule tuning (mirror this invocation when running gosec locally):
+#   -tests=false           library code is the security surface, not fixtures
+#   -exclude-dir=cmd       the kit/scaffold CLIs write world-readable source
+#   -exclude-dir=examples  demo apps, not shipped
+#   -exclude=G115,G404,G101  recurring architectural false-positives for
+#     this codebase, each documented:
+#       G115 (int overflow): NATS stream sequences, sha256→bigint advisory
+#         lock keys (deliberate signed reinterpret), and length-guarded
+#         Argon2 params — all safe-by-construction on the supported 64-bit
+#         targets and would fire on every uint64→int conversion.
+#       G404 (weak RNG): math/rand is used only for backoff/jitter and
+#         read-replica load-balancing. ALL security randomness uses
+#         crypto/rand (auth, crypto) or crypto-seeded ULIDs (ids).
+#       G101 (hardcoded creds): a LOW-confidence name heuristic that fires
+#         on the kit's `Code*Key/Token/Secret = "..."` error-code constants.
+#
+# Genuine one-off exceptions (path loads from operator config, HMAC-SHA1
+# for webhook compatibility, source-file permissions, a struct-held
+# context cancel) are annotated inline with justified `#nosec` comments
+# rather than excluded wholesale, so the rules stay live for new code.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1' # 06:00 UTC every Monday
+
+jobs:
+  gosec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run gosec
+        run: |
+          "$(go env GOPATH)/bin/gosec" \
+            -tests=false \
+            -exclude-dir=cmd \
+            -exclude-dir=examples \
+            -exclude=G115,G404,G101 \
+            ./...

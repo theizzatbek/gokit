@@ -220,6 +220,8 @@ func detectSetCycles(sets map[string][]mwRef, file string) error {
 }
 
 func loadFileToConfig(path string) (*rawConfig, error) {
+	// #nosec G304 -- path is the operator-supplied routes.yaml location,
+	// not request-derived input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, &Error{Stage: "parse", Code: CodeFileNotFound, Message: err.Error(), File: path}
@@ -243,6 +245,8 @@ func Lint(data []byte) error {
 // LintFile is Lint over the contents of a file. File-not-found is
 // surfaced as *Error / CodeFileNotFound.
 func LintFile(path string) error {
+	// #nosec G304 -- path is an operator/CI-supplied routes.yaml location,
+	// not request-derived input.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return &Error{Stage: "parse", Code: CodeFileNotFound, Message: err.Error(), File: path}

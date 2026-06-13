@@ -41,6 +41,8 @@ func New(opts ...EngineOption) *Engine {
 // May be called multiple times so different teams can own different
 // crons.yaml files; Build validates the union.
 func (e *Engine) LoadFile(path string) error {
+	// #nosec G304 -- path is the operator-supplied crons.yaml location,
+	// not request-derived input.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return xerrs.Wrap(err, xerrs.KindValidation, CodeMissingSchedule,

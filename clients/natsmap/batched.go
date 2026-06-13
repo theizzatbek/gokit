@@ -91,6 +91,10 @@ func openBatchedSubscriber(
 		stop: make(chan struct{}),
 	}
 	p.wg.Add(1)
+	// #nosec G118 -- fetchLoop is a long-lived background worker whose
+	// lifecycle is the p.stop channel (closed by Stop), not a
+	// request-scoped ctx; it dispatches each batch with a fresh
+	// background context by design.
 	go p.fetchLoop(s, handlerType, codec, interval, batchedFn)
 
 	_ = ctx // reserved for future cancellation propagation
@@ -156,6 +160,8 @@ func (p *batchedPuller) fetchLoop(
 		// fetches have no incoming ctx, and the handler is a long-
 		// running domain operation that shouldn't be tied to the
 		// fetch deadline.
+		// Background context by design: the puller is a long-lived worker
+		// driven by p.stop, not a request-scoped ctx (see fetchLoop launch).
 		err = batchedFn(context.Background(), ptrs, metas)
 		if err == nil {
 			ackAll(msgs, decodeErrs)

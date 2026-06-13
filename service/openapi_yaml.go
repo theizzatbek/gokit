@@ -54,6 +54,8 @@ type openapiEnvelope struct {
 // `openapi:` block. Returns nil if the block is absent. Returns
 // *errs.Error{Code: CodeOpenAPIYAMLParse} on malformed YAML.
 func parseOpenAPIBlock(routesPath string) (*openapiYAML, error) {
+	// #nosec G304 -- routesPath is the operator-supplied routes.yaml
+	// location from service config, not request-derived input.
 	b, err := os.ReadFile(routesPath)
 	if err != nil {
 		return nil, xerrs.Wrapf(err, xerrs.KindNotFound, CodeOpenAPIYAMLParse,

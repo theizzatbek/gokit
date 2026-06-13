@@ -78,6 +78,9 @@ func Generate(dir, name string, opts ...GenerateOption) (string, error) {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	// #nosec G301 -- migrations live under version control and must be
+	// readable by the whole team + tooling; 0755 is correct for a source
+	// directory, not a secret store.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", errs.Wrap(err, errs.KindInternal, CodeGenerateFailed,
 			"migrate: mkdir "+dir)
@@ -165,6 +168,9 @@ func isSafeName(name string) bool {
 // scaffold would normally pick distinct names; if they collide,
 // loud-fail beats silent overwrite.
 func writeIfNotExist(path string, body []byte) (err error) {
+	// #nosec G302 G304 -- generated migration is a version-controlled
+	// source file (0644 is correct, no secrets); path is built from the
+	// operator-supplied dir + generated filename, not request input.
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return errs.Wrap(err, errs.KindInternal, CodeGenerateFailed,
