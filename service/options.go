@@ -75,7 +75,8 @@ type options struct {
 	readinessExtraCheckers     []fibermap.Checker // app-level checkers appended after kit-wired subsystems
 	skipSecurityHeaders        bool               // WithoutSecurityHeaders — suppress auto OWASP headers
 	securityHeaderOpts         []fibermap.SecurityHeadersOption
-	bodyLimit                  int // WithBodyLimit — fiber.Config.BodyLimit override; 0 → fiber default (4 MiB)
+	bodyLimit                  int                 // WithBodyLimit — fiber.Config.BodyLimit override; 0 → fiber default (4 MiB)
+	errorHandler               fiber.ErrorHandler  // WithErrorHandler — overrides the default fibermap.ErrorHandler when non-nil
 	dbOpts                     []db.Option
 	skipAutoDBMetrics          bool // WithoutAutoDBMetrics — suppress auto db.WithMetrics(s.metrics)
 	otelPgxOpts                []otelkit.PgxTracerOption
@@ -719,6 +720,35 @@ func WithSecurityHeaders(opts ...fibermap.SecurityHeadersOption) Option {
 // chain).
 func WithBodyLimit(bytes int) Option {
 	return func(o *options) { o.bodyLimit = bytes }
+}
+
+// WithErrorHandler overrides the default fiber.Config.ErrorHandler.
+// The kit's default is [fibermap.ErrorHandler] (renders *errs.Error
+// returns as the kit's `{code, message, details[]}` JSON wire shape),
+// installed unconditionally since v1.0.1 regardless of [WithBodyLimit].
+//
+// Pass a wrapper to layer cross-cutting behaviour on top of the kit
+// default — the typical case is sentrykit 5xx auto-capture:
+//
+//	svc, _ := service.New[AppCtx, Claims](ctx, cfg,
+//	    service.WithSentry(dsn, sentryOpts),
+//	    service.WithErrorHandler(
+//	        sentrykit.WrapErrorHandler(fibermap.ErrorHandler(logger))))
+//
+// `sentrykit.WrapErrorHandler` reports the error to the
+// per-request Sentry hub BEFORE delegating to the supplied
+// fibermap.ErrorHandler for the actual HTTP response. Without this
+// option, the kit's auto-installed default ErrorHandler runs
+// directly — *errs.Error still maps to the right JSON shape, but
+// Sentry sees nothing.
+//
+// Pass nil to keep the kit default (equivalent to never calling
+// WithErrorHandler at all). Caller-supplied
+// [fibermap.WithFiberConfig] via [WithRunOptions] still wins over
+// this option (it's applied later in the RunOption chain) — use
+// either WithErrorHandler OR a custom fiber.Config, not both.
+func WithErrorHandler(h fiber.ErrorHandler) Option {
+	return func(o *options) { o.errorHandler = h }
 }
 
 // WithMigrations applies the migrations bundled into fsys via

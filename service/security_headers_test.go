@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"reflect"
 	"testing"
+
+	"github.com/gofiber/fiber/v2"
 
 	"github.com/theizzatbek/gokit/fibermap"
 )
@@ -90,5 +93,57 @@ func TestBuildFiberConfig_BodyLimitSet_KeepsErrorHandler(t *testing.T) {
 	}
 	if cfg.BodyLimit != 64*1024 {
 		t.Errorf("BodyLimit = %d, want 65536", cfg.BodyLimit)
+	}
+}
+
+// Regression guards for v1.1.0 P2-16 (LicenseKit followup):
+// service.WithErrorHandler must override the kit default
+// fibermap.ErrorHandler. The typical use case is the sentrykit wrap
+// shape:
+//
+//	service.WithErrorHandler(sentrykit.WrapErrorHandler(fibermap.ErrorHandler(logger)))
+
+func TestBuildFiberConfig_WithErrorHandler_OverridesDefault(t *testing.T) {
+	sentinel := func(c *fiber.Ctx, err error) error { return nil }
+	svc := newServiceForSecHeadersTest(t, WithErrorHandler(sentinel))
+	cfg := svc.buildFiberConfig()
+
+	if cfg.ErrorHandler == nil {
+		t.Fatal("ErrorHandler is nil after WithErrorHandler — kit default leaked")
+	}
+	// Compare function pointers via reflect.Value.Pointer.
+	got := reflect.ValueOf(cfg.ErrorHandler).Pointer()
+	want := reflect.ValueOf(fiber.ErrorHandler(sentinel)).Pointer()
+	if got != want {
+		t.Errorf("ErrorHandler pointer %x != supplied sentinel %x", got, want)
+	}
+}
+
+func TestBuildFiberConfig_WithErrorHandlerNil_KeepsKitDefault(t *testing.T) {
+	// WithErrorHandler(nil) is documented as "equivalent to never
+	// calling WithErrorHandler at all" — the kit default
+	// (fibermap.ErrorHandler) must still install.
+	svc := newServiceForSecHeadersTest(t, WithErrorHandler(nil))
+	cfg := svc.buildFiberConfig()
+	if cfg.ErrorHandler == nil {
+		t.Fatal("ErrorHandler is nil after WithErrorHandler(nil) — kit default did not fall back")
+	}
+}
+
+func TestBuildFiberConfig_WithErrorHandler_KeepsBodyLimit(t *testing.T) {
+	// WithErrorHandler must compose cleanly with WithBodyLimit —
+	// neither option should clobber the other.
+	sentinel := func(c *fiber.Ctx, err error) error { return nil }
+	svc := newServiceForSecHeadersTest(t,
+		WithErrorHandler(sentinel),
+		WithBodyLimit(128*1024),
+	)
+	cfg := svc.buildFiberConfig()
+
+	if cfg.ErrorHandler == nil {
+		t.Error("ErrorHandler is nil")
+	}
+	if cfg.BodyLimit != 128*1024 {
+		t.Errorf("BodyLimit = %d, want %d", cfg.BodyLimit, 128*1024)
 	}
 }

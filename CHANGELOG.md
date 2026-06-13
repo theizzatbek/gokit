@@ -9,6 +9,33 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Added
+- `service.WithErrorHandler(fiber.ErrorHandler) Option` — overrides
+  the default `fibermap.ErrorHandler(logger)` install in
+  `service.buildFiberConfig`. The typical use case is sentrykit 5xx
+  auto-capture wired as:
+
+      service.WithErrorHandler(
+          sentrykit.WrapErrorHandler(fibermap.ErrorHandler(logger)))
+
+  Before this option, the only path to override the kit-default
+  ErrorHandler was `WithRunOptions(fibermap.WithFiberConfig(...))`,
+  which clobbered the caller's body-limit and any other fiber
+  config the kit had wired. `WithErrorHandler` composes cleanly
+  with `WithBodyLimit` (both fields merge into the single
+  buildFiberConfig output) and with the rest of the kit-default
+  fiber.Config.
+
+  Nil argument is "equivalent to never calling WithErrorHandler at
+  all" — the kit default still installs. Caller-supplied
+  `fibermap.WithFiberConfig` via `WithRunOptions` continues to win
+  over this option (it's applied later in the RunOption chain), so
+  use either WithErrorHandler OR a custom fiber.Config, not both.
+
+  Surfaced by the first integrator (LicenseKit, P2-16 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md)).
+  Originally proposed as cleanup work alongside the v1.0.1 P0-3
+  ErrorHandler / BodyLimit decoupling; the option-form lands now
+  as an additive surface in v1.1.0.
 - `audit/auditfm` — new subpackage wiring `audit` into `fibermap`
   handler registration. `auditfm.Wrap[T](logger, spec, fn) HandlerFunc[T]`
   decorates a fibermap handler with post-execution audit emission;
