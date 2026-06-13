@@ -115,7 +115,7 @@ audit, schedulers, file uploads, webhook'и.
 
 | Пакет | Что делает |
 |---|---|
-| [`audit/`](audit/README.md) | Append-only audit-log infrastructure (SOC2 / HIPAA / PCI-DSS). |
+| [`audit/`](audit/README.md) | Append-only audit-log infrastructure (SOC2 / HIPAA / PCI-DSS). С v1.1.0: [`audit/auditfm/`](audit/auditfm/README.md) — declarative per-handler decorator поверх `fibermap`. |
 | [`runbook/`](runbook/README.md) | Runtime kill-switch для ops без redeploy. |
 | [`fibermap/uploadguard/`](fibermap/uploadguard/README.md) | File-upload validation middleware (pairs с `clients/s3`). |
 

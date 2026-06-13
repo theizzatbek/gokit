@@ -9,6 +9,45 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Added
+- `audit/auditfm` — new subpackage wiring `audit` into `fibermap`
+  handler registration. `auditfm.Wrap[T](logger, spec, fn) HandlerFunc[T]`
+  decorates a fibermap handler with post-execution audit emission;
+  the spec declares Action / SubjectFn / TargetFn / MetadataFn /
+  OutcomeFn next to the handler at registration:
+
+      fibermap.RegisterHandler(eng, "license.revoke",
+          auditfm.Wrap[AppCtx](svc.Audit, auditfm.Spec{
+              Action: "license.revoke",
+              SubjectFn: func(c *fiber.Ctx) string { ... },
+              TargetFn: func(c *fiber.Ctx) audit.Target { ... },
+          }, h.RevokeLicense),
+      )
+
+  Default outcome classifier maps nil → Success,
+  `*errs.Error{Kind: Unauthorized|Permission}` → Denied, anything
+  else → Failure. Override via Spec.OutcomeFn for domain-specific
+  rules.
+
+  Emission uses a Background-derived context so the audit append
+  outlives the request ctx (which may already be Done by the time
+  the response writes complete). Audit-store failures surface via
+  Spec.Logger.Warn — they never bubble back to the handler path.
+  Nil *audit.Logger panics at registration time (gap must surface
+  loud); empty Spec.Action skips silently with a warn.
+
+  For typed-bind handlers (RegisterHandlerWithBody / WithParams /
+  WithInput / etc), the lower-level `auditfm.Emit(c, logger, spec, err)`
+  is the inline building block — same emission contract, called
+  manually inside the typed handler after deciding outcome.
+
+  Complements (does not replace) `audit/auditmw` — auditmw stays
+  the app-level "blanket policy" middleware, auditfm is the
+  per-handler precision adapter.
+
+  Surfaced by the first integrator (LicenseKit, P2-15 in
+  [`docs/v1-followup-licensekit.md`](docs/v1-followup-licensekit.md))
+  who needed to wire audit on six mutating endpoints in six lines
+  rather than sixty.
 - `service.BootOption`, `service.WithSubcommand(name, fn)`,
   `service.BootSeed(name, fn)` — subcommand routing for the
   existing `service.Boot` main()-reducer. When the first CLI
