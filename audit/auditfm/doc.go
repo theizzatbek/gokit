@@ -34,7 +34,7 @@
 // Mixing the two is fine — auditfm runs inside the handler scope,
 // auditmw wraps the whole request.
 //
-// Outcome classification
+// # Outcome classification
 //
 // The default classifier maps the handler's returned error to an
 // [audit.Outcome]:

@@ -55,10 +55,10 @@ type options struct {
 	routesEnable               bool
 	runOpts                    []fibermap.RunOption
 	skipConnectRetry           bool
-	validator                  bind.Validator // nil → default validator.New(validator.WithRequiredStructEnabled())
+	validator                  bind.Validator            // nil → default validator.New(validator.WithRequiredStructEnabled())
 	extraValidators            map[string]validator.Func // tag-name → func; registered on the kit-default validator when WithValidator was NOT passed
-	refreshGCInterval          time.Duration  // 0 = disabled (default); > 0 = period between refresh-store GarbageCollect runs
-	otelServiceName            string         // non-empty triggers OpenTelemetry setup at service.New time
+	refreshGCInterval          time.Duration             // 0 = disabled (default); > 0 = period between refresh-store GarbageCollect runs
+	otelServiceName            string                    // non-empty triggers OpenTelemetry setup at service.New time
 	otelOpts                   []otelkit.Option
 	otelMetricsOpts            []otelkit.MetricsOption
 	skipOtelMetrics            bool // suppress the Prometheus→OTel metrics bridge even when WithOtel is set
@@ -75,8 +75,8 @@ type options struct {
 	readinessExtraCheckers     []fibermap.Checker // app-level checkers appended after kit-wired subsystems
 	skipSecurityHeaders        bool               // WithoutSecurityHeaders — suppress auto OWASP headers
 	securityHeaderOpts         []fibermap.SecurityHeadersOption
-	bodyLimit                  int                 // WithBodyLimit — fiber.Config.BodyLimit override; 0 → fiber default (4 MiB)
-	errorHandler               fiber.ErrorHandler  // WithErrorHandler — overrides the default fibermap.ErrorHandler when non-nil
+	bodyLimit                  int                // WithBodyLimit — fiber.Config.BodyLimit override; 0 → fiber default (4 MiB)
+	errorHandler               fiber.ErrorHandler // WithErrorHandler — overrides the default fibermap.ErrorHandler when non-nil
 	dbOpts                     []db.Option
 	skipAutoDBMetrics          bool // WithoutAutoDBMetrics — suppress auto db.WithMetrics(s.metrics)
 	otelPgxOpts                []otelkit.PgxTracerOption

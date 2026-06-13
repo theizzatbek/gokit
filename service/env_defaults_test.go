@@ -97,14 +97,14 @@ func TestApplyEnvDefaults_CORSOrigins_DefersToCallerOpt(t *testing.T) {
 
 func TestParseCORSOrigins(t *testing.T) {
 	cases := map[string][]string{
-		"":                                       nil,
-		",":                                      nil,
-		" , , ":                                  nil,
-		"https://a.com":                          {"https://a.com"},
-		"https://a.com,https://b.com":            {"https://a.com", "https://b.com"},
-		" https://a.com , https://b.com ":        {"https://a.com", "https://b.com"},
-		"https://a.com,,https://b.com,":          {"https://a.com", "https://b.com"},
-		"*":                                      {"*"},
+		"":                                nil,
+		",":                               nil,
+		" , , ":                           nil,
+		"https://a.com":                   {"https://a.com"},
+		"https://a.com,https://b.com":     {"https://a.com", "https://b.com"},
+		" https://a.com , https://b.com ": {"https://a.com", "https://b.com"},
+		"https://a.com,,https://b.com,":   {"https://a.com", "https://b.com"},
+		"*":                               {"*"},
 	}
 	for in, want := range cases {
 		got := parseCORSOrigins(in)

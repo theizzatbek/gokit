@@ -19,7 +19,7 @@
 // ciphersuites (post-quantum AEADs etc.) get 0x03 / 0x04 with a
 // matching constructor — Open paths stay format-isolated.
 //
-// Key-material conventions
+// # Key-material conventions
 //
 // Both constructors take exactly 32 raw bytes. The base64 convenience
 // constructors ([NewMasterKeyFromBase64], [NewKeychainFromBase64Map])
@@ -27,7 +27,7 @@
 // so operators copy-pasting from arbitrary key-management UIs see
 // "just works" instead of cryptic decoder errors.
 //
-// Failure modes
+// # Failure modes
 //
 // Construction-time errors are [*errs.Error] of Kind = Validation:
 //   - [CodeKeyLength]     — key bytes not exactly 32.
@@ -38,12 +38,12 @@
 // Seal / Open errors are [*errs.Error] of Kind = Internal:
 //   - [CodeSealNonce]   — system PRNG returned an error reading nonce.
 //   - [CodeCiphertext]  — sealed blob is shorter than the header,
-//                         carries an unknown version byte, names a kid
-//                         absent from the Keychain, or the AEAD tag
-//                         verification failed (wrong key, tampered).
-//                         Callers should not distinguish these on the
-//                         wire — they all signal "unable to recover
-//                         plaintext."
+//     carries an unknown version byte, names a kid
+//     absent from the Keychain, or the AEAD tag
+//     verification failed (wrong key, tampered).
+//     Callers should not distinguish these on the
+//     wire — they all signal "unable to recover
+//     plaintext."
 //
 // errors.Is + the Code constants let callers branch when needed:
 //
@@ -55,7 +55,7 @@
 //	    }
 //	}
 //
-// Goroutine safety
+// # Goroutine safety
 //
 // MasterKey and Keychain values are safe for concurrent use after
 // construction. The underlying cipher.AEAD is goroutine-safe per the

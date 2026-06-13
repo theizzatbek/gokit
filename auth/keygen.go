@@ -107,4 +107,3 @@ func GenerateAPIKey(pepper []byte) (plain string, hash []byte, prefix string, er
 	prefix = plain[:apiKeyPrefixLen]
 	return plain, hash, prefix, nil
 }
-

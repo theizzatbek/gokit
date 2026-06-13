@@ -175,7 +175,7 @@ func TestMasterKey_Open_RejectsShortBlobs(t *testing.T) {
 		{},
 		{0x01},
 		{0x01, 0x00, 0x00, 0x00, 0x00}, // version + 4 nonce bytes (need 12)
-		bytes.Repeat([]byte{0x01}, 12),  // version + 11 nonce bytes
+		bytes.Repeat([]byte{0x01}, 12), // version + 11 nonce bytes
 	}
 	for _, blob := range cases {
 		_, err := mk.Open(blob)
