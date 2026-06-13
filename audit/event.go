@@ -137,10 +137,6 @@ func encodeSortedMap(m map[string]any) ([]byte, error) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	ordered := make([]any, 0, len(keys)*2)
-	for _, k := range keys {
-		ordered = append(ordered, k, m[k])
-	}
 	// Use a {k:v,k:v,...} object explicitly so JSON shape stays a
 	// map (not an array) — readers can decode straight into
 	// map[string]any.

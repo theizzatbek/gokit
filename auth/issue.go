@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -200,7 +201,8 @@ func (a *Auth[C]) RotateRefresh(ctx context.Context, rawCookie string, meta Issu
 // (rather than panicking) so a future store error code never breaks
 // metric collection.
 func refreshOutcomeFromErr(err error) string {
-	if e, ok := err.(*xerrs.Error); ok {
+	var e *xerrs.Error
+	if errors.As(err, &e) {
 		switch e.Code {
 		case CodeRefreshReused:
 			return "reused"

@@ -135,11 +135,11 @@ func planInputBinders(inputType reflect.Type) ([]inputBinder, []HandlerOption) {
 
 func bindBodyField(c *fiber.Ctx, v bind.Validator, target any) error {
 	if err := c.BodyParser(target); err != nil {
-		return fmt.Errorf("%w: %v", bind.ErrParseBody, err)
+		return fmt.Errorf("%w: %w", bind.ErrParseBody, err)
 	}
 	if v != nil {
 		if err := v.Struct(target); err != nil {
-			return fmt.Errorf("%w: %v", bind.ErrValidateBody, err)
+			return fmt.Errorf("%w: %w", bind.ErrValidateBody, err)
 		}
 	}
 	return nil
@@ -147,11 +147,11 @@ func bindBodyField(c *fiber.Ctx, v bind.Validator, target any) error {
 
 func bindParamsField(c *fiber.Ctx, v bind.Validator, target any) error {
 	if err := c.ParamsParser(target); err != nil {
-		return fmt.Errorf("%w: %v", bind.ErrParseParams, err)
+		return fmt.Errorf("%w: %w", bind.ErrParseParams, err)
 	}
 	if v != nil {
 		if err := v.Struct(target); err != nil {
-			return fmt.Errorf("%w: %v", bind.ErrValidateParams, err)
+			return fmt.Errorf("%w: %w", bind.ErrValidateParams, err)
 		}
 	}
 	return nil
@@ -159,11 +159,11 @@ func bindParamsField(c *fiber.Ctx, v bind.Validator, target any) error {
 
 func bindQueryField(c *fiber.Ctx, v bind.Validator, target any) error {
 	if err := c.QueryParser(target); err != nil {
-		return fmt.Errorf("%w: %v", bind.ErrParseQuery, err)
+		return fmt.Errorf("%w: %w", bind.ErrParseQuery, err)
 	}
 	if v != nil {
 		if err := v.Struct(target); err != nil {
-			return fmt.Errorf("%w: %v", bind.ErrValidateQuery, err)
+			return fmt.Errorf("%w: %w", bind.ErrValidateQuery, err)
 		}
 	}
 	return nil
@@ -171,11 +171,11 @@ func bindQueryField(c *fiber.Ctx, v bind.Validator, target any) error {
 
 func bindHeaderField(c *fiber.Ctx, v bind.Validator, target any) error {
 	if err := c.ReqHeaderParser(target); err != nil {
-		return fmt.Errorf("%w: %v", bind.ErrParseHeader, err)
+		return fmt.Errorf("%w: %w", bind.ErrParseHeader, err)
 	}
 	if v != nil {
 		if err := v.Struct(target); err != nil {
-			return fmt.Errorf("%w: %v", bind.ErrValidateHeader, err)
+			return fmt.Errorf("%w: %w", bind.ErrValidateHeader, err)
 		}
 	}
 	return nil

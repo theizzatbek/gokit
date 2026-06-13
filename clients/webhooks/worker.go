@@ -310,7 +310,6 @@ func (w *Worker) drain(ctx context.Context) {
 	sem := make(chan struct{}, w.cfg.MaxInFlight)
 	var wg sync.WaitGroup
 	for _, d := range deliveries {
-		d := d
 		sem <- struct{}{}
 		wg.Add(1)
 		go func() {
@@ -410,12 +409,12 @@ func (w *Worker) attempt(ctx context.Context, d Delivery) {
 
 	if err != nil {
 		if resp != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		w.fail(ctx, d, 0, err.Error())
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
 
 	switch outcome {

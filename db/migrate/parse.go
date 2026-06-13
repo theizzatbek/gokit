@@ -77,7 +77,9 @@ func Parse(fsys fs.FS) (ups []Migration, downs map[string]Migration, err error) 
 	if err != nil {
 		// Fall back to walking from the migrations/ subdir if the
 		// caller supplied the root of the embed.FS rather than a sub.
-		entries, err = fs.ReadDir(fsys, "migrations")
+		// We only need the existence check here; entries is re-read
+		// below from the subbed FS view.
+		_, err = fs.ReadDir(fsys, "migrations")
 		if err != nil {
 			return nil, nil, errs.Wrap(err, errs.KindInternal, CodeReadFS,
 				"migrate: read fs")

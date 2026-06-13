@@ -835,7 +835,7 @@ func (e *Engine[T]) All() iter.Seq[RouteInfo] {
 func (e *Engine[T]) Walk(fn func(r RouteInfo) error) error {
 	for _, r := range e.routes {
 		if err := fn(copyRouteInfo(r)); err != nil {
-			if err == ErrStopWalk {
+			if errors.Is(err, ErrStopWalk) {
 				return nil
 			}
 			return err

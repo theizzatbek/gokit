@@ -341,7 +341,8 @@ func extractAPIKey(c *fiber.Ctx, cfg *apiKeyConfig) string {
 // returns the error so the application's ErrorHandler renders it.
 func apiKeyReject(c *fiber.Ctx, err error) error {
 	code := CodeAPIKeyInvalid
-	if x, ok := err.(*xerrs.Error); ok {
+	var x *xerrs.Error
+	if errors.As(err, &x) {
 		code = x.Code
 	}
 	c.Set(fiber.HeaderWWWAuthenticate, `ApiKey realm="api", error="`+code+`"`)

@@ -120,7 +120,7 @@ func (h *hook) observe(ctx context.Context, cmd string, elapsed time.Duration, e
 	if h.logger == nil {
 		return
 	}
-	if err != nil && err != redis.Nil {
+	if err != nil && !errors.Is(err, redis.Nil) {
 		h.logger.WarnContext(ctx, "redis command failed",
 			"cmd", cmd, "elapsed", elapsed, "err", err)
 		return

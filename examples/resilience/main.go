@@ -63,7 +63,7 @@ func run(ctx context.Context) error {
 	apimap.RegisterResponse[pingResponse](eng, "flaky.ping")
 	client, err := eng.Build(apimap.WithMetrics(reg))
 	if err != nil {
-		return fmt.Errorf("Build: %w", err)
+		return fmt.Errorf("build client: %w", err)
 	}
 
 	// 3. 30 concurrent callers, 2 batches separated by a small pause so

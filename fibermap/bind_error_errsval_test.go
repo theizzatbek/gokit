@@ -92,18 +92,6 @@ func mountWithErrsval(t *testing.T, yaml string, wire func(*Engine[errsvalCtx]))
 	return app
 }
 
-func decodeWireBody(t *testing.T, resp interface {
-	GetBody() io.ReadCloser
-}) map[string]any {
-	t.Helper()
-	body, _ := io.ReadAll(resp.GetBody())
-	var out map[string]any
-	if err := json.Unmarshal(body, &out); err != nil {
-		t.Fatalf("decode body: %v (raw: %s)", err, body)
-	}
-	return out
-}
-
 func TestErrsvalBindError_BodyValidationFail_400_TypedJSON(t *testing.T) {
 	app := mountWithErrsval(t,
 		`groups: [{routes: [{method: POST, path: /u, handler: u.create}]}]`,

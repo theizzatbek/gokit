@@ -71,33 +71,35 @@ func pubToJWK(e signingKey) (JWK, error) {
 			X:   base64.RawURLEncoding.EncodeToString(p),
 		}, nil
 	case *ecdsa.PublicKey:
-		// X / Y coordinates serialised as fixed-width 32-byte
-		// big-endian per RFC 7518 §6.2.1.2 — leading zeros matter.
+		// X / Y coordinates serialised as fixed-width big-endian per
+		// RFC 7518 §6.2.1.2 — leading zeros matter. Derived from the
+		// uncompressed SEC1 point (0x04 || X || Y, each already padded
+		// to field size) via crypto/ecdh; reading p.X / p.Y directly is
+		// deprecated since Go 1.26.
+		ek, err := p.ECDH()
+		if err != nil {
+			return JWK{}, xerrs.Internalf("jwks_encode_failed",
+				"kid %q: ecdsa key not ecdh-convertible: %v", e.KID, err)
+		}
 		size := (p.Curve.Params().BitSize + 7) / 8
-		x := padLeft(p.X.Bytes(), size)
-		y := padLeft(p.Y.Bytes(), size)
+		raw := ek.Bytes() // 0x04 || X(size) || Y(size)
+		if len(raw) != 1+2*size {
+			return JWK{}, xerrs.Internalf("jwks_encode_failed",
+				"kid %q: unexpected SEC1 point length %d", e.KID, len(raw))
+		}
 		return JWK{
 			KID: e.KID,
 			Kty: "EC",
 			Crv: "P-256",
 			Alg: "ES256",
 			Use: "sig",
-			X:   base64.RawURLEncoding.EncodeToString(x),
-			Y:   base64.RawURLEncoding.EncodeToString(y),
+			X:   base64.RawURLEncoding.EncodeToString(raw[1 : 1+size]),
+			Y:   base64.RawURLEncoding.EncodeToString(raw[1+size : 1+2*size]),
 		}, nil
 	default:
 		return JWK{}, xerrs.Internalf("jwks_encode_failed",
 			"kid %q: unsupported public-key type %T", e.KID, e.Pub)
 	}
-}
-
-func padLeft(b []byte, n int) []byte {
-	if len(b) >= n {
-		return b
-	}
-	out := make([]byte, n)
-	copy(out[n-len(b):], b)
-	return out
 }
 
 // JWKSHandler returns a Fiber handler that serves the kit's KeySet as a

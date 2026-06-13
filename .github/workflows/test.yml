@@ -70,6 +70,19 @@ jobs:
       # ~/.cache/go-build.
       - run: go vet ./...
 
+      # Static analysis beyond vet: errcheck, staticcheck, errorlint,
+      # ineffassign, unused, copyloopvar — config in .golangci.yml.
+      # Security scanning (gosec) and dependency-vuln scanning
+      # (govulncheck) run in their own dedicated workflow, not here.
+      # Pinned to match the version developers run locally; installed via
+      # the official script for a deterministic, action-version-agnostic
+      # setup that reuses the warm build cache above.
+      - name: golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
+          "$(go env GOPATH)/bin/golangci-lint" run --timeout 5m ./...
+
   unit:
     needs: static
     runs-on: ubuntu-latest

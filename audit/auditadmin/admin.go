@@ -291,8 +291,8 @@ func filterToQS(f audit.Filter) string {
 // the "JSON export" link mirrors the operator's current filter.
 func currentQS(c *fiber.Ctx) string {
 	q := url.Values{}
-	c.Context().QueryArgs().VisitAll(func(k, v []byte) {
+	for k, v := range c.Context().QueryArgs().All() {
 		q.Set(string(k), string(v))
-	})
+	}
 	return q.Encode()
 }

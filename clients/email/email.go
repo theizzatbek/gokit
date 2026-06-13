@@ -128,7 +128,7 @@ func New(cfg Config, opts ...Option) (Sender, error) {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	base := baseSender{logger: o.logger, metric: o.metric}
+	base := baseSender(o)
 	switch strings.ToLower(strings.TrimSpace(cfg.Backend)) {
 	case "smtp":
 		return newSMTPSender(cfg.SMTP, base)

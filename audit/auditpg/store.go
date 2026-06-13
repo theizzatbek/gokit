@@ -254,7 +254,8 @@ func compileFilter(f audit.Filter) (string, []any) {
 	if !f.To.IsZero() {
 		clauses = append(clauses, fmt.Sprintf("occurred_at <= $%d", idx))
 		args = append(args, f.To)
-		idx++
+		// no idx++ here: this is the last positional placeholder, and
+		// LIMIT/OFFSET below are inlined as literals, not args.
 	}
 	if len(clauses) > 0 {
 		sb.WriteString(" WHERE ")

@@ -37,6 +37,9 @@ func walkAll(err error, out *[]*Error) {
 	if err == nil {
 		return
 	}
+	//nolint:errorlint // deliberate per-layer assertion: this walk
+	// collects EVERY *Error in the chain, so it inspects each node
+	// directly rather than via errors.As (which stops at the first match).
 	if e, ok := err.(*Error); ok {
 		*out = append(*out, e)
 		// fall through so Cause (via Unwrap) also gets walked — a

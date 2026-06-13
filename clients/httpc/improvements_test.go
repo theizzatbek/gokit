@@ -198,10 +198,8 @@ func TestWithBeforeAfter_FireExactlyOncePerRoundTrip(t *testing.T) {
 }
 
 func TestWithAfterResponse_FiresEvenOnNetworkError(t *testing.T) {
-	cli, _ := New(Config{Timeout: 50 * time.Millisecond, MaxRetries: -1})
-
 	var fired atomic.Bool
-	cli, _ = New(Config{Timeout: 50 * time.Millisecond, MaxRetries: -1},
+	cli, _ := New(Config{Timeout: 50 * time.Millisecond, MaxRetries: -1},
 		WithAfterResponse(func(req *http.Request, resp *http.Response, err error, d time.Duration) {
 			if err != nil && resp == nil {
 				fired.Store(true)

@@ -142,7 +142,7 @@ func Guard(fieldName string, opts ...Option) fiber.Handler {
 			return xerrs.Wrapf(err, xerrs.KindInternal, CodeOpenFailed,
 				"upload %q: open failed", fieldName)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		// Sniff the first 512 bytes — http.DetectContentType caps
 		// internally so a shorter file is fine.

@@ -94,7 +94,6 @@ type options struct {
 	outboxCheckerOpts          []outbox.CheckerOption
 	skipOtelLogs               bool
 	otelLogsOpts               []otelkit.LogsOption
-	skipLogger                 bool
 	dbDrainTimeout             time.Duration
 	s3Opts                     []s3client.Option
 	rateLimitCfg               *ratelimit.Config

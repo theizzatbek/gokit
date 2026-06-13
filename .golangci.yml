@@ -1,0 +1,56 @@
+# golangci-lint v2 configuration for gokit.
+#
+# Scope: general hygiene + correctness. Security scanning (gosec) and
+# dependency-vuln scanning (govulncheck) run in a dedicated security
+# workflow, NOT here — they have a different signal/noise profile and
+# their own triage cadence.
+#
+# Run locally with:   golangci-lint run ./...
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  # `standard` = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - errorlint   # err == sentinel / %v-on-error → wrapped-error correctness
+    - copyloopvar # redundant loop-var copies (Go 1.22+ semantics)
+
+  settings:
+    errcheck:
+      # Formatted writes to stderr / in-memory buffers are fire-and-forget
+      # across the kit — a failed Fprint to a terminal or bytes.Buffer is
+      # not actionable. (Network/file writes go through checked paths.)
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    staticcheck:
+      # SA (bug) + S (simplify) checks stay on. Drop two categories:
+      #   QF*  — editor-assist "quickfix" refactors (tagged switch,
+      #          Fprintf-vs-WriteString, dropping embedded selectors);
+      #          suggestions, not defects.
+      #   ST*  — stylecheck naming/comment conventions; off by default
+      #          in golangci-lint and not worth a tree-wide rename now.
+      checks:
+        - all
+        - -QF1*
+        - -ST1*
+
+  exclusions:
+    rules:
+      # Best-effort stdout/stderr writes and Close() in CLI tooling and
+      # runnable examples aren't worth gating on — a failed Fprint to a
+      # terminal is not actionable.
+      - path: (^|/)cmd/
+        linters: [errcheck]
+      - path: (^|/)examples/
+        linters: [errcheck]
+      # Test code legitimately ignores teardown errors (errcheck),
+      # asserts on exact sentinel values (errorlint), and uses throwaway
+      # assignments (ineffassign). `unused` stays on — dead test helpers
+      # are still dead code.
+      - path: _test\.go$
+        linters: [errcheck, errorlint, ineffassign]

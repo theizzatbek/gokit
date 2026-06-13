@@ -37,12 +37,6 @@ type CronJob struct {
 	Singleton bool
 }
 
-type cronConfig struct {
-	jobs        []CronJob
-	parser      cron.Parser
-	customSlugs map[string]string // job name → custom Sentry slug
-}
-
 // CodeCronInvalidSchedule — the parser rejected the cron expression
 // at scheduler boot.
 const CodeCronInvalidSchedule = "service_cron_invalid_schedule"

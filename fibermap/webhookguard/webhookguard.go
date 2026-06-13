@@ -49,9 +49,9 @@ func New(v webhooks.Verifier, opts ...Option) fiber.Handler {
 			return fiber.ErrRequestEntityTooLarge
 		}
 		headers := map[string][]string{}
-		c.Request().Header.VisitAll(func(k, v []byte) {
+		for k, v := range c.Request().Header.All() {
 			headers[string(k)] = append(headers[string(k)], string(v))
-		})
+		}
 		if err := v.Verify(headers, body, cfg.now()); err != nil {
 			return err
 		}

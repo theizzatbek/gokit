@@ -131,9 +131,9 @@ func populateScope(c *fiber.Ctx, scope *sentry.Scope) {
 		Host:   c.Hostname(),
 		Proto:  c.Protocol(),
 	}
-	c.Request().Header.VisitAll(func(k, v []byte) {
+	for k, v := range c.Request().Header.All() {
 		req.Header.Add(string(k), string(v))
-	})
+	}
 	scope.SetRequest(req)
 
 	// http.route is set on the way out of FiberMiddleware (Fiber

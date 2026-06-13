@@ -98,9 +98,9 @@ footer { padding: 14px 32px; color: #9ca3af; font-size: 12px; }
 	sb.WriteString(`</dl></section>`)
 
 	sb.WriteString(`<section><h2>Headers</h2><pre>`)
-	c.Request().Header.VisitAll(func(k, v []byte) {
+	for k, v := range c.Request().Header.All() {
 		fmt.Fprintf(&sb, "%s: %s\n", html.EscapeString(string(k)), html.EscapeString(string(v)))
-	})
+	}
 	sb.WriteString(`</pre></section>`)
 
 	sb.WriteString(`<section><h2>Stack</h2><pre>`)

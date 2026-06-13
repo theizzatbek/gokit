@@ -164,13 +164,20 @@ func isSafeName(name string) bool {
 // an existing path. Two developers racing on the same NNNN_name
 // scaffold would normally pick distinct names; if they collide,
 // loud-fail beats silent overwrite.
-func writeIfNotExist(path string, body []byte) error {
+func writeIfNotExist(path string, body []byte) (err error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return errs.Wrap(err, errs.KindInternal, CodeGenerateFailed,
 			"migrate: write "+path)
 	}
-	defer f.Close()
+	// Close can surface a deferred flush error on the just-written file,
+	// so report it — but never mask an earlier write failure.
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = errs.Wrap(cerr, errs.KindInternal, CodeGenerateFailed,
+				"migrate: close "+path)
+		}
+	}()
 	if _, err := f.Write(body); err != nil {
 		return errs.Wrap(err, errs.KindInternal, CodeGenerateFailed,
 			"migrate: write body "+path)

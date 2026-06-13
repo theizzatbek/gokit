@@ -104,7 +104,7 @@ func (s *smtpSender) sendOnce(msg Message, body []byte) error {
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	if err := c.Hello(s.cfg.LocalName); err != nil {
 		return fmt.Errorf("hello: %w", err)

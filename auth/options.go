@@ -85,10 +85,6 @@ func WithCookieSecure(secure bool) Option {
 // Empty/zero = use Config.Leeway (which defaults to 1 minute).
 func WithLeeway(d time.Duration) Option { return func(o *options) { o.leewayOverride = d } }
 
-// withNow injects a fake clock for tests. Unexported — production code uses
-// time.Now exclusively.
-func withNow(now func() time.Time) Option { return func(o *options) { o.now = now } }
-
 // WithAPIKeyHashSecret supplies the HMAC pepper the APIKey middleware
 // uses to derive `keyHash` from the plain key before calling
 // KeyStore.Lookup. Functionally equivalent to setting

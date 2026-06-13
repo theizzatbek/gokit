@@ -252,6 +252,9 @@ func rollbackOne(ctx context.Context, d *db.DB, m Migration) error {
 
 func isNotFound(err error, target **errs.Error) bool {
 	for cur := err; cur != nil; {
+		//nolint:errorlint // explicit chain walk: we step one Unwrap at a
+		// time and stop at the first *errs.Error to read its Kind, which
+		// errors.As cannot express.
 		if e, ok := cur.(*errs.Error); ok {
 			*target = e
 			return e.Kind == errs.KindNotFound

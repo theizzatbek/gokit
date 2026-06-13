@@ -133,7 +133,7 @@ func (s *postmarkSender) Send(ctx context.Context, msg Message) (err error) {
 		return xerrs.Wrap(err, xerrs.KindUnavailable, CodeSendFailed,
 			"email/postmark: send failed")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
 		pe := postmarkError{}

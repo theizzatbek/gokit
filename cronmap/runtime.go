@@ -411,14 +411,18 @@ func (r *Runtime) runOnce(ctx context.Context, j plannedJob, skipSingleton bool)
 
 	totalStart := time.Now()
 	var finalErr error
+retryLoop:
 	for attempt := 0; attempt <= j.maxRetries; attempt++ {
 		if attempt > 0 {
 			wait := j.retryBackoffFor(attempt)
 			if wait > 0 {
 				select {
 				case <-ctx.Done():
+					// Context cancelled during backoff: stop retrying
+					// and surface the cancellation. A bare `break` here
+					// would only leave the select and run another attempt.
 					finalErr = ctx.Err()
-					break
+					break retryLoop
 				case <-time.After(wait):
 				}
 			}

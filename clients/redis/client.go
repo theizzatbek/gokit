@@ -94,15 +94,12 @@ func ConnectCluster(ctx context.Context, cfg ClusterConfig, opts ...Option) (*Cl
 		Username: cfg.Username,
 		Password: cfg.Password,
 	}
-	if o.redisOptions != nil {
-		// Reuse the single-node mutator by re-routing through the
-		// universal shape: ClusterOptions exposes the same hot fields
-		// (PoolSize, MinIdleConns, ReadTimeout, TLSConfig) so a
-		// caller-supplied mutator built for *redis.Options would
-		// need adaptation. We surface clusterOptions via a separate
-		// option (see WithClusterOptions) so the legacy
-		// WithRedisOptions stays single-mode.
-	}
+	// A caller-supplied WithRedisOptions mutator (built for *redis.Options)
+	// is intentionally NOT applied in cluster mode: ClusterOptions exposes
+	// the same hot fields (PoolSize, MinIdleConns, ReadTimeout, TLSConfig)
+	// but through a different type, so cluster tuning routes through the
+	// dedicated WithClusterOptions mutator below and WithRedisOptions stays
+	// single-mode.
 	if o.clusterMutator != nil {
 		o.clusterMutator(clusterOpts)
 	}

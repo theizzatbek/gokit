@@ -1,6 +1,8 @@
 package natsgw
 
 import (
+	"errors"
+
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/theizzatbek/gokit/clients/natsmap"
@@ -66,7 +68,8 @@ func Handler(rt *natsmap.Runtime, opts ...Option) fiber.Handler {
 				// *errs.Error from the validator passes through
 				// unchanged so its Code wins; plain errors get
 				// wrapped with CodeValidationFailed.
-				if _, ok := err.(*xerrs.Error); ok {
+				var ve *xerrs.Error
+				if errors.As(err, &ve) {
 					return err
 				}
 				return xerrs.Wrap(err, xerrs.KindValidation, CodeValidationFailed,

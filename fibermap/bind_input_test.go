@@ -36,8 +36,8 @@ type badFieldInput struct {
 }
 
 // strictValidator already handles createReq, listQuery, idParams,
-// authHeader. Extend it for updateBody used here.
-type strictValidatorWithBody struct{ strictValidator }
+// authHeader. This variant delegates to it and adds updateBody.
+type strictValidatorWithBody struct{}
 
 func (strictValidatorWithBody) Struct(s any) error {
 	if b, ok := s.(*updateBody); ok && b.Title == "" {

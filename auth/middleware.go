@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -72,7 +73,8 @@ func (a *Auth[C]) Bearer(mode BearerMode) fiber.Handler {
 // error unchanged so the application's ErrorHandler can render the body.
 func bearerReject(c *fiber.Ctx, err error) error {
 	code := CodeInvalidToken
-	if x, ok := err.(*xerrs.Error); ok {
+	var x *xerrs.Error
+	if errors.As(err, &x) {
 		code = x.Code
 	}
 	c.Set(fiber.HeaderWWWAuthenticate, wwwAuthenticate(bearerRealm, code))

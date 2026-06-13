@@ -1,6 +1,7 @@
 package redisclient
 
 import (
+	"errors"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -88,7 +89,7 @@ func (m *metricsCollector) observe(cmd string, elapsed time.Duration, err error)
 		return
 	}
 	outcome := "success"
-	if err != nil && err != redis.Nil {
+	if err != nil && !errors.Is(err, redis.Nil) {
 		// redis.Nil is the "key not found" signal, not an error in
 		// the operational sense — counts as success.
 		outcome = "error"
