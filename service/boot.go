@@ -47,10 +47,23 @@ import (
 //	    return svc.Run()
 //	}
 //
-// Subcommand usage (seed mode):
+// For subcommand / seed dispatch (`./mybinary seed`, `migrate`, …) use
+// [BootWithOptions]; Boot itself is the zero-option fast path.
+//
+// Boot exits the process via [os.Exit] on the failure path. main's own
+// deferred cleanup is skipped on that path (a known Go quirk of
+// os.Exit) — put deferred work inside fn instead.
+func Boot(fn func(ctx context.Context) error) {
+	bootImpl(fn, os.Stderr, os.Exit)
+}
+
+// BootWithOptions is [Boot] plus subcommand dispatch via [BootOption]
+// (currently [WithSubcommand] / [BootSeed]).
+//
+// Typical usage:
 //
 //	func main() {
-//	    service.Boot(run,
+//	    service.BootWithOptions(run,
 //	        service.BootSeed("seed", seed),
 //	        service.WithSubcommand("migrate", migrate),
 //	    )
@@ -70,10 +83,8 @@ import (
 // paths typically want different option sets than the production run
 // path (e.g. WithoutCron, WithoutOpenAPI, but WithMigrations).
 //
-// Boot exits the process via [os.Exit] on the failure path. main's own
-// deferred cleanup is skipped on that path (a known Go quirk of
-// os.Exit) — put deferred work inside fn instead.
-func Boot(fn func(ctx context.Context) error, opts ...BootOption) {
+// Exit semantics are identical to [Boot].
+func BootWithOptions(fn func(ctx context.Context) error, opts ...BootOption) {
 	bootImpl(resolveBootFn(fn, opts), os.Stderr, os.Exit)
 }
 
