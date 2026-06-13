@@ -1,0 +1,65 @@
+name: fuzz
+
+# Native go-fuzz over the kit's parsers — the surfaces that take external
+# bytes (config YAML, prefixed IDs, at-rest crypto blobs, pagination
+# cursors). Seed corpora already run on every PR as part of `go test`
+# (they execute as ordinary tests); this workflow does the actual
+# mutation fuzzing on a nightly cron + on demand.
+#
+# A crash writes a reproducer under testdata/fuzz/<Target>/; the job
+# uploads it as an artifact and fails so the input can be replayed with
+#   go test -run <Target>/<hash> ./<pkg>
+
+on:
+  schedule:
+    - cron: '0 4 * * *' # 04:00 UTC nightly
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: seconds to fuzz each target
+        default: '180'
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: ./fibermap
+            target: FuzzLint
+          - pkg: ./ids
+            target: FuzzParse
+          - pkg: ./crypto
+            target: FuzzMasterKeyOpen
+          - pkg: ./db/sqb
+            target: FuzzDecodeCursor
+          - pkg: ./clients/apimap
+            target: FuzzLoadBytes
+          - pkg: ./clients/natsmap
+            target: FuzzLoadBytes
+          - pkg: ./cronmap
+            target: FuzzLoadBytes
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      - name: Fuzz ${{ matrix.target }}
+        run: |
+          go test ${{ matrix.pkg }} \
+            -run='^$' \
+            -fuzz="^${{ matrix.target }}$" \
+            -fuzztime="${{ github.event.inputs.fuzztime || '180' }}s"
+
+      - name: Upload crash reproducer
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}-${{ strategy.job-index }}
+          path: ${{ matrix.pkg }}/testdata/fuzz/
+          retention-days: 14
+          if-no-files-found: ignore
