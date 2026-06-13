@@ -158,10 +158,21 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 // which silently produced fiber's default plaintext 500 on every
 // kit-style error when the operator skipped WithBodyLimit.)
 //
+// ErrorHandler precedence (since v1.1.0): [WithErrorHandler] override
+// wins when non-nil; otherwise the kit installs
+// [fibermap.ErrorHandler] over s.logger. The override path is the
+// typical sentrykit wrap shape:
+//
+//	service.WithErrorHandler(sentrykit.WrapErrorHandler(fibermap.ErrorHandler(logger)))
+//
 // BodyLimit defaults to fiber's own default (4 MiB) — only override
 // when [WithBodyLimit] supplied a positive value.
 func (s *Service[T, C]) buildFiberConfig() fiber.Config {
-	cfg := fiber.Config{ErrorHandler: fibermap.ErrorHandler(s.logger)}
+	errHandler := s.opts.errorHandler
+	if errHandler == nil {
+		errHandler = fibermap.ErrorHandler(s.logger)
+	}
+	cfg := fiber.Config{ErrorHandler: errHandler}
 	if s.opts.bodyLimit > 0 {
 		cfg.BodyLimit = s.opts.bodyLimit
 	}
