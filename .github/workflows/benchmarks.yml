@@ -1,0 +1,72 @@
+name: benchmarks
+
+# Hot-path microbenchmarks (breaker, bulkhead, errs, ids, sqb cursors,
+# fibermap routing + request dispatch) compared base-vs-PR with benchstat.
+#
+# This is an INFORMATIONAL report, not a hard gate: GitHub's shared
+# runners have ~20-30% run-to-run variance on microbenchmarks, so a tight
+# threshold would be flaky. benchstat runs -count=6 and reports
+# statistically-significant deltas; reviewers read the table in the job
+# summary. To harden into a gate later, parse the benchstat output and
+# fail on a geomean regression above a chosen threshold.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+# Container-free packages only — these benchmarks have no Docker deps.
+env:
+  BENCH_PKGS: "./breaker ./bulkhead ./errs ./ids ./db/sqb ./fibermap"
+  BENCH_FLAGS: "-run=^$ -bench=. -benchmem -count=6 -benchtime=100ms"
+
+jobs:
+  benchstat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need the base commit to benchmark against
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: Benchmark PR head
+        run: go test ${{ env.BENCH_FLAGS }} ${{ env.BENCH_PKGS }} | tee new.txt
+
+      - name: Benchmark base
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$base" ]; then
+            echo "no PR base (manual run) — skipping comparison"
+            cp new.txt old.txt
+          else
+            git stash --include-untracked || true
+            git checkout --quiet "$base"
+            # Base may predate some benchmarks; missing ones just won't
+            # appear on the old side of the comparison.
+            go test ${{ env.BENCH_FLAGS }} ${{ env.BENCH_PKGS }} | tee old.txt || true
+            git checkout --quiet -
+            git stash pop || true
+          fi
+
+      - name: Compare
+        run: |
+          {
+            echo '## Benchmark comparison (base → PR)'
+            echo '```'
+            "$(go env GOPATH)/bin/benchstat" old.txt new.txt || benchstat old.txt new.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks
+          path: |
+            old.txt
+            new.txt
+          retention-days: 14
