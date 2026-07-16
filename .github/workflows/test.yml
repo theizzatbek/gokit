@@ -28,8 +28,7 @@ on:
 # shared-deps compilation and doesn't parallelize across runners.
 # Gating every PR on that wait was not worth the cost given how rarely
 # race regressions slip in. Race detection moved to .github/workflows/
-# race.yml — runs on push to main, on a nightly cron, and on manual
-# workflow_dispatch.
+# race.yml — runs on push to main and on manual workflow_dispatch.
 #
 # Each integration-matrix shard pulls ONLY the docker images it needs:
 # explicit per-shard `images` list, per-shard cache key keyed on
@@ -103,9 +102,9 @@ jobs:
 
       # -short skips every package whose tests need Docker (testcontainers).
       # The race detector is NOT run here — see .github/workflows/race.yml
-      # for the dedicated race sweep on push-to-main + nightly cron +
-      # manual dispatch. PR-gating runs the no-race compile/test pass for
-      # fast feedback (~30-60s vs ~4m with race).
+      # for the dedicated race sweep on push-to-main + manual dispatch.
+      # PR-gating runs the no-race compile/test pass for fast feedback
+      # (~30-60s vs ~4m with race).
       - run: go test -short ./...
 
   integration-matrix:

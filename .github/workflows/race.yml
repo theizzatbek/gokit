@@ -3,8 +3,6 @@ name: race
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '0 3 * * *'  # 03:00 UTC daily
   workflow_dispatch:
 
 # Race-checked unit-test sweep, separated from the per-PR test.yml
@@ -18,10 +16,6 @@ on:
 #
 # Trigger model:
 #   - push to main         catches race regressions on every merge
-#   - schedule: nightly    catches drift if `-race` is silently broken
-#                          (e.g. ignored failures in noisy nightly logs)
-#                          and provides a heartbeat that the sweep still
-#                          builds against current Go toolchain
 #   - workflow_dispatch    manual kick on any branch — useful before
 #                          merging a PR touching goroutine-heavy code
 #                          (db pool, breaker, bulkhead, fibermap/sse,
@@ -30,7 +24,7 @@ on:
 #
 # Failure surfaces in the Actions tab. Use repo notification settings
 # (Watch → Custom → Actions) to route this to email / Slack when a
-# nightly fails.
+# run fails.
 
 jobs:
   unit-race:

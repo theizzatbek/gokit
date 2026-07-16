@@ -1,7 +1,7 @@
 name: gosec
 
 # Static security analysis of the importable library code. Runs on every
-# PR and push to main, plus a weekly cron (gosec's rule set evolves).
+# PR and push to main.
 #
 # Scope & rule tuning (mirror this invocation when running gosec locally):
 #   -tests=false           library code is the security surface, not fixtures
@@ -28,8 +28,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  schedule:
-    - cron: '0 6 * * 1' # 06:00 UTC every Monday
 
 jobs:
   gosec:
