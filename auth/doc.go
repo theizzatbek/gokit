@@ -1,7 +1,8 @@
 // Package auth provides a complete authentication bundle for fibermap services:
 // asymmetrically-signed JWT access tokens (EdDSA / ES256), opaque rotation-aware
 // refresh tokens with reuse detection, argon2id password hashing, the
-// IssueTokens / IssueLogin / IssueRefresh / Logout primitives, and
+// IssueTokens / IssueLogin / IssueRefresh / Logout / RevokeRefresh /
+// RevokeFamily / RevokeAllForSubject primitives, and
 // Bearer/RequireScope/RequireRole middleware.
 //
 // The core auth package depends on stdlib + crypto + golang-jwt + fiber and never

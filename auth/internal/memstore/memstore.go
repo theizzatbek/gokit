@@ -11,8 +11,11 @@ import (
 	"github.com/theizzatbek/gokit/errs"
 )
 
-// Compile-time check that *Mem satisfies auth.RefreshStore.
-var _ auth.RefreshStore = (*Mem)(nil)
+// Compile-time checks that *Mem satisfies auth.RefreshStore + auth.TokenRevoker.
+var (
+	_ auth.RefreshStore = (*Mem)(nil)
+	_ auth.TokenRevoker = (*Mem)(nil)
+)
 
 type Mem struct {
 	mu       sync.Mutex
@@ -100,4 +103,31 @@ func (m *Mem) revokeFamilyLocked(familyID string, now time.Time) {
 			r.RevokedAt = &t
 		}
 	}
+}
+
+// RevokeToken marks the single record revoked. Idempotent: an existing
+// RevokedAt is preserved; a missing record is found=false, not an error.
+func (m *Mem) RevokeToken(_ context.Context, h [32]byte, now time.Time) (auth.Record, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec, ok := m.records[h]
+	if !ok {
+		return auth.Record{}, false, nil
+	}
+	if rec.RevokedAt == nil {
+		t := now
+		rec.RevokedAt = &t
+	}
+	return *rec, true, nil
+}
+
+// Get returns a copy of the stored record — test-inspection helper.
+func (m *Mem) Get(h [32]byte) (auth.Record, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec, ok := m.records[h]
+	if !ok {
+		return auth.Record{}, false
+	}
+	return *rec, true
 }

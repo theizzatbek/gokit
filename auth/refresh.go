@@ -51,6 +51,31 @@ type RefreshStore interface {
 	GarbageCollect(ctx context.Context, now time.Time) (int64, error)
 }
 
+// TokenRevoker is an optional RefreshStore extension: explicit revocation of
+// a single refresh token by hash, without consuming it or issuing a
+// replacement. All kit stores (refreshpg, refreshredis, the internal test
+// memstore) implement it; Auth.RevokeRefresh / Auth.RevokeFamily prefer this
+// path and fall back to a Consume-based emulation when the configured store
+// predates the interface.
+//
+// Kept as a separate interface rather than a new RefreshStore method so that
+// existing third-party RefreshStore implementations stay compatible (the
+// api-compat CI gate forbids adding methods to exported interfaces). Folding
+// it into RefreshStore is queued for v2 — see docs/v2-backlog.md.
+type TokenRevoker interface {
+	// RevokeToken marks the single record matching tokenHash revoked, the
+	// same way reuse-detection does — a later Consume of this token reports
+	// CodeRefreshReused. Idempotent: an already consumed/revoked/expired
+	// record is still returned with found=true (an existing revocation
+	// timestamp is preserved); a missing record returns found=false and a
+	// nil error. A non-nil error means a transient store failure ONLY.
+	//
+	// The returned Record reliably carries identity fields (FamilyID, Subject,
+	// issue/expiry timestamps); whether RevokedAt/ConsumedAt are populated is
+	// store-specific — callers must not rely on them.
+	RevokeToken(ctx context.Context, tokenHash [32]byte, now time.Time) (rec Record, found bool, err error)
+}
+
 // newRawRefresh generates a fresh wire token and its SHA-256 hash.
 // The raw form goes in the cookie; the hash goes in the store.
 func newRawRefresh() (raw string, hash [32]byte, err error) {

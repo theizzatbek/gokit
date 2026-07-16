@@ -152,6 +152,19 @@ v2-fix design options:
 - **Источник:** common-gotchas row 14, surfaced in v1.0.1 P0-3 design discussion + v1.1.0 P2-16 changelog ("Caller-supplied `fibermap.WithFiberConfig` via `WithRunOptions` continues to win over this option").
 - **Triage:** `v2-only` — `fibermap.WithFiberConfig` semantics change.
 
+### auth — влить TokenRevoker.RevokeToken в RefreshStore
+
+`auth`: влить `TokenRevoker.RevokeToken` в интерфейс `RefreshStore`
+(в v1 живёт отдельным опциональным интерфейсом из-за apidiff-ворот)
+и убрать Consume-fallback из `Auth.revokeByRaw`.
+
+- **Источник:** [`docs/superpowers/specs/2026-07-16-auth-explicit-revoke-design.md`](superpowers/specs/2026-07-16-auth-explicit-revoke-design.md)
+  § «TokenRevoker: почему отдельный интерфейс».
+- **Triage:** `v2-only` — добавление обязательного метода в
+  экспортированный интерфейс `RefreshStore` ломает сторонние
+  реализации; сейчас `TokenRevoker` — opt-in, чтобы не triggerить
+  `apidiff.yml`.
+
 ---
 
 ## 2. Additive / operational (v1.x MINOR / PATCH)

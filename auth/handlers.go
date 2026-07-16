@@ -137,7 +137,9 @@ func (a *Auth[C]) clearRefreshCookie(c *fiber.Ctx) {
 
 // Logout revokes the entire token family of the supplied refresh cookie and
 // clears the cookie. Idempotent: a missing or already-revoked cookie still
-// returns 204.
+// returns 204. Transient store failures are deliberately swallowed — the
+// client-side session ends either way; use RevokeFamily directly when the
+// caller needs to observe store errors.
 func (a *Auth[C]) Logout(c *fiber.Ctx) error {
 	raw := c.Cookies(refreshCookieName)
 	if raw == "" {
@@ -147,13 +149,7 @@ func (a *Auth[C]) Logout(c *fiber.Ctx) error {
 		a.clearRefreshCookie(c)
 		return c.SendStatus(http.StatusNoContent)
 	}
-	hash := hashRefresh(raw)
-	// Consume reveals FamilyID even when the record is already consumed/revoked
-	// (it errors but the side-effect is a family revoke). For a clean logout we
-	// prefer a direct lookup: try a no-op Consume; ignore the error.
-	rec, err := a.store.Consume(c.UserContext(), hash, a.now())
-	if err == nil {
-		_ = a.store.RevokeFamily(c.UserContext(), rec.FamilyID)
+	if rec, found, _ := a.revokeByRaw(c.UserContext(), raw, true); found {
 		a.maybeSecurityInfo(c, "logout", "subject", rec.Subject)
 	}
 	a.metrics.incLogout("single")

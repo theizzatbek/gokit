@@ -184,6 +184,31 @@ func (s *Store) RevokeFamily(ctx context.Context, familyID string) error {
 	return nil
 }
 
+// RevokeToken marks the single matching record revoked — the store half of
+// auth.TokenRevoker. Idempotent: an already-revoked record keeps its
+// original revoked_at (COALESCE) and is still returned; a missing record is
+// (Record{}, false, nil). Single UPDATE … RETURNING round trip.
+func (s *Store) RevokeToken(ctx context.Context, tokenHash [32]byte, now time.Time) (auth.Record, bool, error) {
+	start := time.Now()
+	row := sqb.QueryRow(ctx, s.q, sqb.Builder.
+		Update("auth_refresh_tokens").
+		Set("revoked_at", sq.Expr("COALESCE(revoked_at, ?)", now)).
+		Where(sq.Eq{"token_hash": tokenHash[:]}).
+		Suffix(recordReturning))
+	rec, ok, err := scanOne(row)
+	s.metrics.observe("revoke_token", time.Since(start).Seconds())
+	if err != nil {
+		s.metrics.inc("revoke_token", "error")
+		return auth.Record{}, false, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "refresh token revoke failed")
+	}
+	if !ok {
+		s.metrics.inc("revoke_token", "missing")
+		return auth.Record{}, false, nil
+	}
+	s.metrics.inc("revoke_token", "ok")
+	return rec, true, nil
+}
+
 func scanOne(row interface{ Scan(...any) error }) (auth.Record, bool, error) {
 	var r auth.Record
 	var ip string
@@ -525,5 +550,8 @@ func (s *Store) fireIPRevoke(ctx context.Context, ip string, count int64) {
 	s.onIPRevoke(ctx, ip, count)
 }
 
-// Compile-time interface assertion.
-var _ auth.RefreshStore = (*Store)(nil)
+// Compile-time interface assertions.
+var (
+	_ auth.RefreshStore = (*Store)(nil)
+	_ auth.TokenRevoker = (*Store)(nil)
+)

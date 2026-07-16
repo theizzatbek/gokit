@@ -53,7 +53,7 @@ func newAuthMetrics(reg prometheus.Registerer) *authMetrics {
 		logout: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "auth",
 			Name:      "logout_total",
-			Help:      "Logout calls. scope=single revokes the current refresh family; scope=all revokes every refresh for the subject.",
+			Help:      "Logout / revocation calls. scope=single is the Fiber Logout handler (revokes the presented family); all=LogoutAll/RevokeAllForSubject; token=RevokeRefresh (presented token only); family=RevokeFamily.",
 		}, []string{"scope"}),
 		rateLimitDenied: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "auth",

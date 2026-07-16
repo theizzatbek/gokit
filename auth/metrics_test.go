@@ -178,3 +178,34 @@ func TestMetrics_NilSafe_NoWithMetrics(t *testing.T) {
 		t.Errorf("IssueTokens with nil metrics panicked or failed: %v", err)
 	}
 }
+
+func TestLogoutTotal_RevokePrimitiveScopes(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	a := newTestAuth(t, reg)
+	ctx := context.Background()
+
+	pair1, err := a.IssueTokens(ctx, auth.LoginResult[map[string]any]{Subject: "u-1"}, auth.IssueMeta{})
+	if err != nil {
+		t.Fatalf("IssueTokens: %v", err)
+	}
+	pair2, err := a.IssueTokens(ctx, auth.LoginResult[map[string]any]{Subject: "u-1"}, auth.IssueMeta{})
+	if err != nil {
+		t.Fatalf("IssueTokens: %v", err)
+	}
+
+	if err := a.RevokeRefresh(ctx, pair1.RefreshRaw); err != nil {
+		t.Fatalf("RevokeRefresh: %v", err)
+	}
+	if err := a.RevokeFamily(ctx, pair2.RefreshRaw); err != nil {
+		t.Fatalf("RevokeFamily: %v", err)
+	}
+	if err := a.RevokeAllForSubject(ctx, "u-1"); err != nil {
+		t.Fatalf("RevokeAllForSubject: %v", err)
+	}
+
+	for scope, want := range map[string]float64{"token": 1, "family": 1, "all": 1} {
+		if got := counterValue(t, reg, "auth_logout_total", map[string]string{"scope": scope}); got != want {
+			t.Errorf("auth_logout_total{scope=%q} = %v, want %v", scope, got, want)
+		}
+	}
+}

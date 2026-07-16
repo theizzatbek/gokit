@@ -174,25 +174,7 @@ func (s *Store) Consume(ctx context.Context, tokenHash [32]byte, now time.Time) 
 		return auth.Record{}, errs.Unauthorized(auth.CodeRefreshExpired, "refresh token expired")
 	case "ok":
 		s.metrics.inc("consume", "ok")
-		var r auth.Record
-		r.TokenHash = tokenHash
-		r.FamilyID, _ = arr[1].(string)
-		if ph, _ := arr[2].(string); ph != "" {
-			b, _ := hex.DecodeString(ph)
-			copy(r.ParentHash[:], b)
-		}
-		r.Subject, _ = arr[3].(string)
-		if v, ok := arr[4].(string); ok {
-			n := atoi64(v)
-			r.IssuedAt = time.Unix(n, 0).UTC()
-		}
-		r.UserAgent, _ = arr[5].(string)
-		r.IP, _ = arr[6].(string)
-		if v, ok := arr[7].(string); ok {
-			n := atoi64(v)
-			r.ExpiresAt = time.Unix(n, 0).UTC()
-		}
-		return r, nil
+		return decodeOkReply(arr, tokenHash), nil
 	default:
 		s.metrics.inc("consume", "error")
 		return auth.Record{}, errs.Internalf("consume_bad_reply", "unknown tag: %v", arr[0])
@@ -208,6 +190,74 @@ func atoi64(s string) int64 {
 		n = n*10 + int64(c-'0')
 	}
 	return n
+}
+
+// decodeOkReply maps the {"ok", family, parent_hash, subject, issued_at,
+// user_agent, ip, expires_at} Lua reply shape (shared by consumeScript and
+// revokeTokenScript) into an auth.Record.
+func decodeOkReply(arr []any, tokenHash [32]byte) auth.Record {
+	var r auth.Record
+	r.TokenHash = tokenHash
+	r.FamilyID, _ = arr[1].(string)
+	if ph, _ := arr[2].(string); ph != "" {
+		b, _ := hex.DecodeString(ph)
+		copy(r.ParentHash[:], b)
+	}
+	r.Subject, _ = arr[3].(string)
+	if v, ok := arr[4].(string); ok {
+		r.IssuedAt = time.Unix(atoi64(v), 0).UTC()
+	}
+	r.UserAgent, _ = arr[5].(string)
+	r.IP, _ = arr[6].(string)
+	if v, ok := arr[7].(string); ok {
+		r.ExpiresAt = time.Unix(atoi64(v), 0).UTC()
+	}
+	return r
+}
+
+// revokeTokenScript atomically marks a single record revoked and returns its
+// fields. Missing key → {"missing"}. Reply shape on success matches
+// consumeScript's ok branch so both share decodeOkReply. Setting revoked=1
+// on an already consumed/revoked record is a no-op by value — idempotent.
+var revokeTokenScript = redis.NewScript(`
+local key = KEYS[1]
+if redis.call("EXISTS", key) == 0 then return {"missing"} end
+redis.call("HSET", key, "revoked", "1")
+local h = redis.call("HMGET", key, "family","parent_hash","subject","issued_at","user_agent","ip","expires_at")
+return {"ok", h[1], h[2], h[3], h[4], h[5], h[6], h[7]}
+`)
+
+// RevokeToken marks the single record revoked — the store half of
+// auth.TokenRevoker. Idempotent; a missing record is (Record{}, false, nil).
+func (s *Store) RevokeToken(ctx context.Context, tokenHash [32]byte, _ time.Time) (auth.Record, bool, error) {
+	start := time.Now()
+	defer func() { s.metrics.observe("revoke_token", time.Since(start).Seconds()) }()
+
+	res, err := revokeTokenScript.Run(ctx, s.c, []string{refreshKey(tokenHash)}).Result()
+	if err != nil {
+		s.metrics.inc("revoke_token", "error")
+		return auth.Record{}, false, errs.Wrap(err, errs.KindUnavailable, auth.CodeStoreUnavailable, "redis token revoke failed")
+	}
+	arr, ok := res.([]any)
+	if !ok || len(arr) == 0 {
+		s.metrics.inc("revoke_token", "error")
+		return auth.Record{}, false, errs.Internalf("revoke_bad_reply", "unexpected reply: %v", res)
+	}
+	switch arr[0] {
+	case "missing":
+		s.metrics.inc("revoke_token", "missing")
+		return auth.Record{}, false, nil
+	case "ok":
+		if len(arr) < 8 {
+			s.metrics.inc("revoke_token", "error")
+			return auth.Record{}, false, errs.Internalf("revoke_bad_reply", "short reply: %v", res)
+		}
+		s.metrics.inc("revoke_token", "ok")
+		return decodeOkReply(arr, tokenHash), true, nil
+	default:
+		s.metrics.inc("revoke_token", "error")
+		return auth.Record{}, false, errs.Internalf("revoke_bad_reply", "unknown tag: %v", arr[0])
+	}
 }
 
 // RevokeFamily marks every member of the family set revoked.
@@ -641,5 +691,8 @@ func (s *Store) fireIPRevoke(ctx context.Context, ip string, count int64) {
 	s.onIPRevoke(ctx, ip, count)
 }
 
-// Compile-time interface assertion.
-var _ auth.RefreshStore = (*Store)(nil)
+// Compile-time interface assertions.
+var (
+	_ auth.RefreshStore = (*Store)(nil)
+	_ auth.TokenRevoker = (*Store)(nil)
+)

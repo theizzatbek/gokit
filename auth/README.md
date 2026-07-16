@@ -113,7 +113,7 @@ app.Post("/auth/login-cert", func(c *fiber.Ctx) error {
 | `WithRefreshStore(RefreshStore)` | none | Обязательно для Login/Refresh/Logout. Подключите `refreshpg`/`refreshredis`/свой |
 | `WithLogger(*slog.Logger)` | silent | App-level ошибки |
 | `WithSecurityLogger(*slog.Logger)` | silent | Security-relevant события. **WARN:** `bearer_verify_failed`, `refresh_reused`. **INFO:** `login_success`, `logout`, `logout_all`. Каждое событие несёт `ip`, `ua`, `path`; INFO-вые добавляют `subject`. См. [Security events](#security-события). |
-| `WithMetrics(prometheus.Registerer)` | off | Регистрирует Prometheus-counters: `auth_tokens_issued_total{op}`, `auth_token_issue_failed_total{op,reason}`, `auth_bearer_verify_total{outcome}`, `auth_refresh_total{outcome}`, `auth_logout_total{scope}`, `auth_ratelimit_denied_total`, `auth_idempotency_total{outcome}`. Передайте shared service-registry, так что один scrape покрывает весь кит. RateLimit/Idempotency-counter'ы требуют `*Auth[C]`-bound вариантов (`a.RateLimit`, `a.Idempotency`); package-level свободные функции остаются metric-less by design. |
+| `WithMetrics(prometheus.Registerer)` | off | Регистрирует Prometheus-counters: `auth_tokens_issued_total{op}`, `auth_token_issue_failed_total{op,reason}`, `auth_bearer_verify_total{outcome}`, `auth_refresh_total{outcome}`, `auth_logout_total{scope}` (`single|all|token|family`), `auth_ratelimit_denied_total`, `auth_idempotency_total{outcome}`. Передайте shared service-registry, так что один scrape покрывает весь кит. RateLimit/Idempotency-counter'ы требуют `*Auth[C]`-bound вариантов (`a.RateLimit`, `a.Idempotency`); package-level свободные функции остаются metric-less by design. |
 | `WithCookieDomain(d)`, `WithCookiePath(p)` | "" / "/" | Refresh-cookie scope |
 | `WithCookieSecure(bool)` | true | Force/disable `Secure`-flag на refresh-cookie |
 | `WithLeeway(d)` | из Config.Leeway | Override leeway после конструкции |
@@ -495,6 +495,43 @@ Refresh-токены single-use. `auth.IssueRefresh` (или `RotateRefresh` д�
 ### POST /auth/logout / /auth/logout/all
 
 Revoke'ит текущий токен (или всю family). Возвращает 204. Очищает cookie `refresh_token`.
+
+### Явный revoke refresh-токенов (logout без cookie)
+
+Когда refresh-токен приходит не в kit-cookie (JSON body, RPC metadata, CLI),
+используйте чистые примитивы вместо `RotateRefresh`-хака:
+
+| Метод | Семантика |
+|---|---|
+| `RevokeRefresh(ctx, refreshRaw)` | Гасит только предъявленный токен. Новая пара не выпускается. |
+| `RevokeFamily(ctx, refreshRaw)` | Гасит всю rotation-family предъявленного токена («выйти на всех устройствах этой сессии»). |
+| `RevokeAllForSubject(ctx, subject)` | Административный «разлогинить пользователя отовсюду» (чистый аналог `LogoutAll`). |
+
+Все три **контрактно идемпотентны**: неизвестный / невалидный / просроченный /
+уже отозванный токен — `nil`, ошибка возвращается только на транзиентный сбой
+хранилища. Ошибки глушить не нужно:
+
+```go
+func (h *Handler) Logout(c *fibermap.Context[appctx.AppCtx], body RenewRequest) error {
+    if err := h.auth.RevokeRefresh(c.UserContext(), body.RefreshToken); err != nil {
+        return err // только транзиентные сбои хранилища
+    }
+    return c.SendStatus(fiber.StatusNoContent)
+}
+```
+
+В отличие от Fiber-хендлеров `Logout`/`LogoutAll`, чистые примитивы не пишут
+security-лог (у них нет `*fiber.Ctx`) — сервис, мигрирующий на них, сам
+отвечает за audit-логирование logout-событий.
+
+Отозванный токен при повторном предъявлении ведёт себя как при
+reuse-detection (`refresh_reused` + revoke family).
+
+Под капотом стор должен реализовать опциональный интерфейс
+`auth.TokenRevoker` (одиночный revoke по хешу). `refreshpg`, `refreshredis`
+и тестовый memstore его реализуют; для стороннего стора без него кит
+откатывается на эмуляцию через `Consume` (single-use consume без выпуска
+новой пары).
 
 ## Observability
 

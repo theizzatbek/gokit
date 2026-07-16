@@ -50,7 +50,7 @@ func WithSecurityLogger(l *slog.Logger) Option { return func(o *options) { o.sec
 //   - auth_token_issue_failed_total{op,reason}  store | sign
 //   - auth_bearer_verify_total{outcome}         ok | invalid
 //   - auth_refresh_total{outcome}               ok | reused | expired | invalid | missing
-//   - auth_logout_total{scope}                  single | all
+//   - auth_logout_total{scope}                  single | all | token | family
 //   - auth_ratelimit_denied_total
 //   - auth_idempotency_total{outcome}           hit | miss | skip
 //   - auth_apikey_authentications_total{outcome} success | missing | invalid | expired | revoked | error
