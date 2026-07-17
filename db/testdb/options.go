@@ -94,9 +94,15 @@ func WithStartupTimeout(d time.Duration) Option {
 	return func(c *config) { c.startupTimeout = d }
 }
 
-// WithMaxConns caps the per-pool MaxConns. Default 4 — sufficient
-// for most integration tests; raise when the test exercises
-// concurrency.
+// WithMaxConns caps MaxConns for the pools [SpinCluster] builds
+// (primary, replicas and the combined config). Default 4 — raise
+// when a cluster test exercises concurrency.
+//
+// [Spin] deliberately IGNORES this option: its per-test schema
+// isolation pins `search_path` with a session-level SET, which is
+// only reliable when every query lands on the same connection, so
+// Spin's pool is hard-wired to MaxConns=1/MinConns=1. That contract
+// is part of Spin's API — see the Spin doc comment.
 func WithMaxConns(n int32) Option {
 	return func(c *config) {
 		if n > 0 {

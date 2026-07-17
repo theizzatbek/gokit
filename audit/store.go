@@ -14,6 +14,11 @@ import (
 // event atomically. When the store opts into hash-chaining,
 // implementations MUST serialize Append calls (advisory lock,
 // row-lock, or stream-of-one) so two writers don't fork the chain.
+// When hash-chain mode is active, Append and LastHash MUST only be
+// invoked through Logger.Log's locking discipline (ChainLock →
+// LastHash → Append → release) — calling them directly while another
+// writer holds ChainLock routes the query onto the lock's parked
+// connection.
 type Store interface {
 	Append(ctx context.Context, e *Event) error
 	Query(ctx context.Context, f Filter) ([]Event, error)

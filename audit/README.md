@@ -55,6 +55,19 @@ _, _ = logger.Log(ctx, audit.Event{
 | `failure` | Action attempted и упал на execution layer'е (DB error, downstream timeout). НЕ permission rejection. |
 | `denied` | Auth-layer reject (missing scope/role, ownership check, rate-limit). Самые security-релевантные entries. |
 
+Классификатор ошибок разделяемый: `audit.OutcomeFromError(err)` — `nil` →
+`success`, `*errs.Error{Kind: Unauthorized | Permission}` → `denied`,
+остальное → `failure`. Его используют и `auditfm.DefaultOutcome`, и
+`auditmw`. Middleware классифицирует исход в первую очередь по **ошибке,
+возвращённой хендлером** — в идиоме кита статус выставляет app-level
+ErrorHandler уже после размотки middleware-цепочки, поэтому на момент
+аудита он ещё не финален. Когда хендлер вернул `nil`, исход уточняется по
+фактическому статусу ответа (2xx → `success`, 401/403 → `denied`, прочие →
+`failure`) — путь для кода, пишущего статус вручную. При ошибке
+`Metadata["error"]` несёт `Code` ошибки (для не-`errs` ошибок — текст
+`err.Error()`); `Metadata["status"]` пишется только когда хендлер
+вернул `nil`.
+
 ## Hash-chain (`WithHashChain`)
 
 Каждый Append линкует event с прошлым через SHA-256:
@@ -80,6 +93,12 @@ Hash-chain serialization трёхслойная:
 1. **In-process** — `Logger.chainMu` блокирует concurrent goroutines в одном процессе.
 2. **Cross-process** — `Store.ChainLock` (для Postgres — db/lock advisory lock на key `audit:chain`). Два pod'а пишущих в одну таблицу serialize'ятся через PostgreSQL-lock.
 3. **OccurredAt** — re-stamped INSIDE chain-lock'а, чтобы `ORDER BY occurred_at ASC` точно матчил chain-insert-order.
+
+Вся chain-секция (`ChainLock → LastHash → Append → release`) в `auditpg`
+выполняется на **том же** соединении, на котором взят advisory-лок
+(`db/lock.AcquireConn`), — hash-chain стоит ровно одно соединение пула и
+работает даже при `MaxConns=1` (раньше это самодедлочилось: лок парковал
+единственное соединение, а `LastHash`/`Append` вечно ждали второе).
 
 Пропускная способность падает (serial inserts), но chain integrity гарантирована. Use only when compliance demands it — большинству apps не нужно.
 

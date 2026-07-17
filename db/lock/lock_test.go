@@ -241,6 +241,57 @@ func TestNew_EmptyNamePanics(t *testing.T) {
 	_ = lock.New(d, "")
 }
 
+// AcquireConn hands back the connection the advisory lock lives on so
+// the caller can run its critical section WITHOUT drawing a second
+// conn from the pool. The MaxConns=1 pool below is the point: with
+// plain Acquire the follow-up query would deadlock waiting for the
+// only conn.
+func TestAcquireConn_CriticalSectionOnLockConn(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires Postgres container")
+	}
+	pgOnce.Do(initContainer)
+	if pgErr != nil {
+		t.Fatalf("postgres: %v", pgErr)
+	}
+	cfg := pgCfg
+	cfg.MaxConns = 1
+	cfg.MinConns = 1
+	d, err := db.Connect(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	lk := lock.New(d, "acquireconn-test")
+	ctx := context.Background()
+
+	conn, release, err := lk.AcquireConn(ctx)
+	if err != nil {
+		t.Fatalf("AcquireConn: %v", err)
+	}
+	// Pool is exhausted while the lock is held, yet the critical
+	// section works because it runs on the lock's own conn.
+	var one int
+	if err := conn.QueryRow(ctx, "SELECT 1").Scan(&one); err != nil {
+		t.Fatalf("query on lock conn: %v", err)
+	}
+	if one != 1 {
+		t.Fatalf("SELECT 1 = %d", one)
+	}
+	release()
+
+	// After release the conn returned to the pool and the lock is
+	// free: a blocking Acquire must succeed promptly.
+	ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	release2, err := lk.Acquire(ctx2)
+	if err != nil {
+		t.Fatalf("re-Acquire after release: %v", err)
+	}
+	release2()
+}
+
 func TestKey_DeterministicByName(t *testing.T) {
 	d := freshDB(t)
 	a := lock.New(d, "abc").Key()

@@ -4,9 +4,15 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/theizzatbek/gokit/audit"
 	"github.com/theizzatbek/gokit/db"
@@ -56,12 +62,40 @@ func ApplySchema(ctx context.Context, d *db.DB) error {
 type Store struct {
 	d        *db.DB
 	chainKey string
+
+	// mu guards chainConn. While ChainLock is held, chainConn is the
+	// pool connection the advisory lock lives on; the write path runs
+	// on it so a hash-chained append never draws a SECOND connection
+	// from the pool (a MaxConns=1 pool used to self-deadlock here).
+	mu        sync.Mutex
+	chainConn *pgxpool.Conn
 }
 
 // New wraps an existing *db.DB. The store assumes [ApplySchema] or
 // equivalent migration has already run.
 func New(d *db.DB) *Store {
 	return &Store{d: d, chainKey: "audit:chain"}
+}
+
+// querier is the subset of *db.DB / *pgxpool.Conn the write path
+// needs — both satisfy it with identical signatures.
+type querier interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// writeQuerier picks the querier for Append / LastHash plus a done()
+// to defer. Chain mode (conn parked by ChainLock): mu stays locked
+// for the duration of the call so the single pgx conn is never used
+// concurrently — chain writes are serialized by design anyway. Pool
+// mode: unlock immediately, pgxpool is concurrency-safe.
+func (s *Store) writeQuerier() (querier, func()) {
+	s.mu.Lock()
+	if s.chainConn != nil {
+		return s.chainConn, s.mu.Unlock
+	}
+	s.mu.Unlock()
+	return s.d, func() {}
 }
 
 const appendSQL = `
@@ -87,7 +121,9 @@ func (s *Store) Append(ctx context.Context, e *audit.Event) error {
 		return xerrs.Wrap(err, xerrs.KindInternal, CodeTransport,
 			"auditpg: metadata encode failed")
 	}
-	if _, err := s.d.Exec(ctx, appendSQL,
+	q, done := s.writeQuerier()
+	defer done()
+	if _, err := q.Exec(ctx, appendSQL,
 		e.ID, e.OccurredAt, nullable(e.ServiceName),
 		nullable(e.Actor.Subject), nullable(e.Actor.Type),
 		nullable(e.Actor.IP), nullable(e.Actor.UA),
@@ -161,7 +197,9 @@ func (s *Store) LastHash(ctx context.Context) ([]byte, error) {
 	if s == nil || s.d == nil {
 		return nil, xerrs.Validation(CodeNilDB, "auditpg: nil DB")
 	}
-	row := s.d.QueryRow(ctx, `
+	q, done := s.writeQuerier()
+	defer done()
+	row := q.QueryRow(ctx, `
 		SELECT hash FROM audit_events
 		WHERE hash IS NOT NULL
 		ORDER BY occurred_at DESC LIMIT 1
@@ -179,21 +217,43 @@ func (s *Store) LastHash(ctx context.Context) ([]byte, error) {
 	return h, nil
 }
 
-// ChainLock acquires the cross-process advisory lock that
-// serializes hash-chain writers. Postgres-side advisory lock keyed
-// by [Store.chainKey]; release the lock by invoking the returned
-// function.
+// ChainLock acquires the cross-process advisory lock that serializes
+// hash-chain writers, keyed by [Store.chainKey]. The whole chain
+// section (LastHash → Append) then runs on the SAME pooled connection
+// the lock lives on — hash-chain mode costs exactly one connection,
+// so it works on MaxConns=1 pools and can never self-deadlock waiting
+// for a second conn. Release the lock by invoking the returned func.
 func (s *Store) ChainLock(ctx context.Context) (func(), error) {
 	if s == nil || s.d == nil {
 		return func() {}, xerrs.Validation(CodeNilDB, "auditpg: nil DB")
 	}
 	lk := lock.New(s.d, s.chainKey)
-	release, err := lk.Acquire(ctx)
+	conn, release, err := lk.AcquireConn(ctx)
 	if err != nil {
 		return func() {}, xerrs.Wrap(err, xerrs.KindUnavailable, CodeTransport,
 			"auditpg: chain lock acquire failed")
 	}
-	return release, nil
+	s.mu.Lock()
+	s.chainConn = conn
+	s.mu.Unlock()
+	return func() {
+		// Detach BEFORE releasing so no writeQuerier caller can pick
+		// up a conn that already went back to the pool; taking mu also
+		// waits out any in-flight query on the conn (writeQuerier
+		// holds mu for the duration of chain-mode calls). Guard by
+		// identity: db/lock.ReleaseFunc is documented idempotent, so a
+		// consumer may call this closure twice. Between the two calls
+		// another writer may have parked ITS OWN conn in s.chainConn —
+		// an unconditional nil-out here would clobber that successor
+		// and silently revert it to the pool path (resurrecting the
+		// MaxConns=1 deadlock this whole mechanism exists to avoid).
+		s.mu.Lock()
+		if s.chainConn == conn {
+			s.chainConn = nil
+		}
+		s.mu.Unlock()
+		release()
+	}, nil
 }
 
 // PurgeBefore deletes events with occurred_at < t.
@@ -295,9 +355,17 @@ func deref(s *string) string {
 	return *s
 }
 
-// isNoRows reports the pgx-no-rows sentinel without importing pgx
-// here directly (db package already wraps it cleanly elsewhere; we
-// match on string for a minimal-footprint check).
+// isNoRows reports the pgx-no-rows sentinel. Checks errors.Is against
+// pgx.ErrNoRows first (the package already imports pgx for the
+// querier interface); falls back to a substring match for cases where
+// the driver error has been wrapped by something that doesn't
+// preserve the sentinel (e.g. db-package wrapping).
 func isNoRows(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "no rows")
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true
+	}
+	return strings.Contains(err.Error(), "no rows")
 }

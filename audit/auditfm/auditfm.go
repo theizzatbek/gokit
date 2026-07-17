@@ -2,13 +2,11 @@ package auditfm
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/theizzatbek/gokit/audit"
-	"github.com/theizzatbek/gokit/errs"
 	"github.com/theizzatbek/gokit/fibermap"
 )
 
@@ -193,17 +191,7 @@ func Emit(c *fiber.Ctx, logger *audit.Logger, spec Spec, handlerErr error) {
 //	    return auditfm.DefaultOutcome(err)
 //	}
 func DefaultOutcome(handlerErr error) audit.Outcome {
-	if handlerErr == nil {
-		return audit.Success
-	}
-	var e *errs.Error
-	if errors.As(handlerErr, &e) {
-		switch e.Kind {
-		case errs.KindUnauthorized, errs.KindPermission:
-			return audit.Denied
-		}
-	}
-	return audit.Failure
+	return audit.OutcomeFromError(handlerErr)
 }
 
 // buildActor populates the Actor from the request context. IP and

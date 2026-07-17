@@ -22,11 +22,14 @@
 //     via [WithIncludeMethods] if your compliance regime requires
 //     reads to be recorded.
 //   - Action verb is `<method>.<route-pattern>` (e.g.
-//     `POST./api/tasks`). Override per-route with [WithActionFn] or
-//     mark a route to inherit a static action via [WithStaticAction].
-//   - Outcome is derived from status code:
-//     2xx → success, 4xx authorization codes → denied, other 4xx/5xx
-//     → failure.
+//     `POST./api/tasks`). Override per-route with [WithAction].
+//   - Outcome is classified from the error the handler returned
+//     (audit.OutcomeFromError: nil → success, Unauthorized/Permission
+//     → denied, else failure). Only when the handler returned nil the
+//     response status refines it: 2xx → success, 401/403 → denied,
+//     other → failure. Metadata carries "status" on the nil-error
+//     path and "error" (the *errs.Error Code) on the error path; for
+//     non-errs errors the value is err.Error() free text.
 //   - Subject is extracted via [WithSubject]; without it the
 //     middleware logs the actor IP only (Actor.Subject stays empty).
 //

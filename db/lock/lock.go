@@ -158,29 +158,44 @@ func (l *Lock) TryAcquire(ctx context.Context) (bool, ReleaseFunc, error) {
 // Returns the release func on success; ctx errors propagate.
 // Other underlying errors map to *errs.Error{Code: CodeAcquireFailed}.
 func (l *Lock) Acquire(ctx context.Context) (ReleaseFunc, error) {
+	_, release, err := l.AcquireConn(ctx)
+	return release, err
+}
+
+// AcquireConn is [Lock.Acquire] that also hands back the pool
+// connection the advisory lock lives on. Session-level advisory locks
+// are bound to their connection, so callers whose critical section
+// must not draw a SECOND conn from the pool (hash-chained audit
+// appends on a small pool, MaxConns=1 test pools) run their queries
+// directly on conn instead of going back to the pool.
+//
+// Do NOT call conn.Release() yourself — the returned ReleaseFunc
+// unlocks AND returns the conn to the pool, exactly like Acquire's.
+// The conn is only valid until release is called.
+func (l *Lock) AcquireConn(ctx context.Context) (*pgxpool.Conn, ReleaseFunc, error) {
 	conn, err := l.db.Pool().Acquire(ctx)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, err
+			return nil, nil, err
 		}
 		l.metrics.recordOutcome(outcomeError)
 		l.logAcquireErr(err)
-		return nil, errs.Wrap(err, errs.KindUnavailable, CodeAcquireFailed,
+		return nil, nil, errs.Wrap(err, errs.KindUnavailable, CodeAcquireFailed,
 			"lock: acquire conn")
 	}
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", l.key); err != nil {
 		conn.Release()
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, err
+			return nil, nil, err
 		}
 		l.metrics.recordOutcome(outcomeError)
 		l.logAcquireErr(err)
-		return nil, errs.Wrap(err, errs.KindUnavailable, CodeAcquireFailed,
+		return nil, nil, errs.Wrap(err, errs.KindUnavailable, CodeAcquireFailed,
 			"lock: pg_advisory_lock")
 	}
 	l.metrics.recordOutcome(outcomeAcquired)
 	l.logAcquired()
-	return l.makeRelease(conn), nil
+	return conn, l.makeRelease(conn), nil
 }
 
 // RunOnce is the convenience wrapper around TryAcquire: if the

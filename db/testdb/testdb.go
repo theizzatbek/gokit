@@ -47,6 +47,10 @@ var shared sharedContainer
 //     out.
 //   - Per-call schema isolation: a `test_<hex>` schema is created
 //     and the connection's `search_path` is pinned to it.
+//   - The pool is pinned to MaxConns=1/MinConns=1 — schema isolation
+//     relies on a session-level `SET search_path`, which only holds
+//     on a single connection. [WithMaxConns] therefore applies to
+//     [SpinCluster] only and is ignored here.
 //   - Cleanup registered via t.Cleanup (Close + schema DROP).
 //
 // Skips the calling test under `go test -short`.
@@ -162,7 +166,9 @@ func startSinglePostgres(ctx context.Context, cfg config) (testcontainers.Contai
 		ConnectTimeout: 5 * time.Second,
 		// MaxConns=1 / MinConns=1 keeps SET search_path effective —
 		// the schema-pinning we do in spinShared depends on every
-		// query landing on the same connection.
+		// query landing on the same connection. This intentionally
+		// overrides WithMaxConns (cluster-only option); see the Spin
+		// doc comment.
 		MaxConns: 1,
 		MinConns: 1,
 	}, nil

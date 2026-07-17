@@ -1,12 +1,15 @@
 package auditmw
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/theizzatbek/gokit/audit"
+	xerrs "github.com/theizzatbek/gokit/errs"
 )
 
 // Options tunes [Middleware].
@@ -112,20 +115,20 @@ func Middleware(logger *audit.Logger, opts ...Option) fiber.Handler {
 		opt(&o)
 	}
 	return func(c *fiber.Ctx) error {
-		next := c.Next()
+		err := c.Next()
 		if logger == nil {
-			return next
+			return err
 		}
 		method := c.Method()
 		if !o.IncludeMethods[method] {
-			return next
+			return err
 		}
 		path := c.OriginalURL()
 		if i := strings.IndexByte(path, '?'); i > 0 {
 			path = path[:i]
 		}
 		if o.SkipPaths[path] {
-			return next
+			return err
 		}
 
 		actor := audit.Actor{IP: c.IP(), UA: c.Get(fiber.HeaderUserAgent)}
@@ -143,8 +146,6 @@ func Middleware(logger *audit.Logger, opts ...Option) fiber.Handler {
 			target = o.TargetFn(c)
 		}
 
-		status := c.Response().StatusCode()
-		outcome := outcomeFromStatus(status)
 		var meta map[string]any
 		if o.MetadataFn != nil {
 			meta = o.MetadataFn(c)
@@ -152,16 +153,41 @@ func Middleware(logger *audit.Logger, opts ...Option) fiber.Handler {
 		if meta == nil {
 			meta = map[string]any{}
 		}
-		meta["status"] = status
 
-		_, _ = logger.Log(c.UserContext(), audit.Event{
+		// Classify by the error the handler RETURNED, not by the
+		// response status: in the kit idiom errors are mapped to
+		// statuses by the app-level ErrorHandler AFTER the middleware
+		// chain unwinds, so Response().StatusCode() still reads 200
+		// here for a request that will end as 403/500 on the wire.
+		outcome := audit.OutcomeFromError(err)
+		if err == nil {
+			status := c.Response().StatusCode()
+			outcome = outcomeFromStatus(status)
+			meta["status"] = status
+		} else {
+			// The wire status is decided later by the error handler —
+			// record the error itself instead of a misleading 200.
+			var e *xerrs.Error
+			if errors.As(err, &e) && e.Code != "" {
+				meta["error"] = e.Code
+			} else {
+				meta["error"] = err.Error()
+			}
+		}
+
+		// Background-derived context — same rationale as auditfm.Emit:
+		// the audit append must outlive the request's ctx, which may
+		// already be cancelled by the time the response was written.
+		emitCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		_, _ = logger.Log(emitCtx, audit.Event{
 			Actor:    actor,
 			Action:   action,
 			Target:   target,
 			Outcome:  outcome,
 			Metadata: meta,
 		})
-		return next
+		return err
 	}
 }
 

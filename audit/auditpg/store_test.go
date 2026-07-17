@@ -207,6 +207,127 @@ func TestHashChain_ConcurrentWritersSerialized(t *testing.T) {
 	}
 }
 
+// Regression for the MaxConns=1 self-deadlock: ChainLock used to park
+// the pool's only connection on the advisory lock while LastHash and
+// Append waited for a second one — forever, because auditfm.Emit
+// calls Log with a Background-derived ctx. The chain section now runs
+// on the lock's own connection, so a single-conn pool must complete
+// promptly.
+func TestHashChain_SingleConnPoolDoesNotDeadlock(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires Postgres container")
+	}
+	pgOnce.Do(initPostgresContainer)
+	if pgErr != nil {
+		t.Fatalf("postgres: %v", pgErr)
+	}
+	cfg := pgCfg
+	cfg.MaxConns = 1
+	cfg.MinConns = 1
+	d, err := db.Connect(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if err := auditpg.ApplySchema(context.Background(), d); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	if _, err := d.Exec(context.Background(), "TRUNCATE audit_events"); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	l, err := audit.New(auditpg.New(d), audit.Config{ServiceName: "test"}, audit.WithHashChain())
+	if err != nil {
+		t.Fatalf("audit.New: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 3; i++ {
+			if _, err := l.Log(context.Background(), audit.Event{
+				Action: "chain.append", Outcome: audit.Success,
+				Actor: audit.Actor{Subject: "u-1"},
+			}); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Log: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("hash-chain Log deadlocked on a MaxConns=1 pool")
+	}
+
+	// The chain written through the lock's conn must still verify.
+	events, err := l.Query(context.Background(), audit.Filter{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("events = %d, want 3", len(events))
+	}
+	if err := audit.Verify(events); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+}
+
+// Regression: a stale double-release of ChainLock must not detach a
+// successor holder's parked connection. On a MaxConns=1 pool a
+// clobbered chainConn would send LastHash back to the exhausted pool
+// and hang — the timeout guard catches that.
+func TestChainLock_StaleDoubleReleaseDoesNotClobberSuccessor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires Postgres container")
+	}
+	pgOnce.Do(initPostgresContainer)
+	if pgErr != nil {
+		t.Fatalf("postgres: %v", pgErr)
+	}
+	cfg := pgCfg
+	cfg.MaxConns = 1
+	cfg.MinConns = 1
+	d, err := db.Connect(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if err := auditpg.ApplySchema(context.Background(), d); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	s := auditpg.New(d)
+
+	rel1, err := s.ChainLock(context.Background())
+	if err != nil {
+		t.Fatalf("ChainLock 1: %v", err)
+	}
+	rel1()
+
+	rel2, err := s.ChainLock(context.Background())
+	if err != nil {
+		t.Fatalf("ChainLock 2: %v", err)
+	}
+	rel1() // stale double-release — must be a no-op for holder 2
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.LastHash(context.Background())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("LastHash: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("LastHash hung — successor's chainConn was clobbered by stale release")
+	}
+	rel2()
+}
+
 func TestLastHash_EmptyTableReturnsNil(t *testing.T) {
 	d := freshDB(t)
 	s := auditpg.New(d)
