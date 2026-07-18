@@ -2,12 +2,14 @@ package fibermap
 
 import (
 	"io"
+	"log/slog"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func TestMetrics_CountsAndExposes(t *testing.T) {
@@ -51,6 +53,43 @@ func TestMetrics_CountsAndExposes(t *testing.T) {
 	// metrics request itself counts).
 	if !strings.Contains(text, "# TYPE fibermap_http_requests_in_flight gauge") {
 		t.Errorf("expected in-flight gauge to be exported, got:\n%s", text)
+	}
+}
+
+// Regression: same root cause as RequestLogger — a middleware rejecting
+// via *errs.Error leaves the response status at the default 200 until
+// ErrorHandler (mounted in fiber.Config, outside the Use chain) writes
+// it. The counter must label by the status the client actually receives.
+func TestMetrics_StatusFromMiddlewareError(t *testing.T) {
+	mw, reg := Metrics()
+
+	app := fiber.New(fiber.Config{ErrorHandler: ErrorHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)))})
+	app.Use(mw)
+	app.Use("/secure", func(c *fiber.Ctx) error {
+		return errs.Unauthorized("missing_token", "no bearer token")
+	})
+	app.Get("/secure", func(c *fiber.Ctx) error { return c.SendString("never") })
+	app.Get("/metrics", MetricsHandler(reg))
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/secure", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 401 {
+		t.Fatalf("client saw status = %d, want 401", resp.StatusCode)
+	}
+
+	resp, err = app.Test(httptest.NewRequest("GET", "/metrics", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+	if !strings.Contains(text, `status="401"`) {
+		t.Errorf("expected requests_total labelled status=\"401\", got:\n%s", text)
+	}
+	if strings.Contains(text, `route="/secure",status="200"`) {
+		t.Errorf("rejected request counted as status=\"200\":\n%s", text)
 	}
 }
 

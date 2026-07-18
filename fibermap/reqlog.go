@@ -85,6 +85,12 @@ func RequestLoggerWithOptions(logger *slog.Logger, opts ...RequestLoggerOption) 
 		start := time.Now()
 		err := c.Next()
 		status := c.Response().StatusCode()
+		if err != nil {
+			// ErrorHandler hangs off fiber.Config — outside the Use
+			// chain — so the response status is still the default 200
+			// here. Resolve it from the error the same way it will.
+			status, _ = resolveStatusBody(err)
+		}
 		latency := time.Since(start)
 		rid, _ := c.Locals(LocalsRequestID).(string)
 

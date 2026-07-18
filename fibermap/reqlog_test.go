@@ -3,12 +3,14 @@ package fibermap
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/theizzatbek/gokit/errs"
 )
 
 func collectLogLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
@@ -112,6 +114,55 @@ func TestRequestLogger_SkipPath(t *testing.T) {
 	}
 	if lines[0]["path"] != "/api" {
 		t.Errorf("path = %v", lines[0]["path"])
+	}
+}
+
+// Regression: gokit middlewares reject requests by returning *errs.Error
+// while the HTTP status is written later by ErrorHandler mounted in
+// fiber.Config — outside the Use chain. RequestLogger must classify by
+// the returned error, not the not-yet-written response status (which is
+// still the default 200 at that point).
+func TestRequestLogger_StatusFromMiddlewareError(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		wantCode  int
+		wantLevel string
+	}{
+		{"unauthorized", errs.Unauthorized("missing_token", "no bearer token"), 401, "INFO"},
+		{"forbidden", errs.Permission("require_role", "admin role required"), 403, "INFO"},
+		{"internal", errs.Internal("boom", "backend down"), 500, "ERROR"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+			app := fiber.New(fiber.Config{ErrorHandler: ErrorHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)))})
+			app.Use(RequestLogger(logger))
+			app.Use(func(c *fiber.Ctx) error { return tc.err })
+			app.Get("/secure", func(c *fiber.Ctx) error { return c.SendString("never") })
+
+			resp, err := app.Test(httptest.NewRequest("GET", "/secure", nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != tc.wantCode {
+				t.Fatalf("client saw status = %d, want %d", resp.StatusCode, tc.wantCode)
+			}
+
+			lines := collectLogLines(t, &buf)
+			if len(lines) != 1 {
+				t.Fatalf("got %d log lines, want 1: %v", len(lines), lines)
+			}
+			r := lines[0]
+			if int(r["status"].(float64)) != tc.wantCode {
+				t.Errorf("logged status = %v, want %d", r["status"], tc.wantCode)
+			}
+			if r["level"] != tc.wantLevel {
+				t.Errorf("level = %v, want %s", r["level"], tc.wantLevel)
+			}
+		})
 	}
 }
 
