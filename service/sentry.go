@@ -15,15 +15,16 @@ import (
 // appends sentrykit.FiberMiddleware to opts.fiberMiddleware. Order
 // of integration:
 //
-//   - setupOtel runs first and prepends otelfiber. The trace span
+//   - setupOtel runs first and fills the otelFiberHandler slot that
+//     appLevelMiddleware installs outermost. The trace span
 //     therefore opens BEFORE the sentry hub clone, so any Sentry
 //     event captured in this request carries the otel trace_id on
 //     the scope's Contexts (sentry-go reads it from
 //     trace.SpanContextFromContext when Setup wires the propagator).
-//   - Sentry middleware is APPENDED (not prepended) so it sits
-//     INSIDE otelfiber but still OUTSIDE every user middleware —
-//     panics in CORS/auth/custom middleware reach the sentry recover
-//     before fibermap.Recover writes the 500.
+//   - Sentry middleware lands in opts.fiberMiddleware, which
+//     appLevelMiddleware installs INSIDE otelfiber/CORS/bearer —
+//     panics in user middleware reach the sentry recover before
+//     fibermap.Recover writes the 500.
 //
 // Errors from sentrykit.Setup propagate; the caller's Close path
 // tears down whatever subsystems were already built.
@@ -53,7 +54,7 @@ func (s *Service[T, C]) setupSentry(ctx context.Context) error {
 	// and tags the hub with the authenticated subject. Runs AFTER
 	// sentrykit.FiberMiddleware (so the hub clone exists on ctx)
 	// and AFTER auth.Bearer (which fills the principal Locals slot
-	// — Bearer is prepended at runOptions time before
+	// — appLevelMiddleware installs Bearer before
 	// opts.fiberMiddleware).
 	if s.Auth != nil && !s.opts.skipSentryUserScope {
 		s.opts.fiberMiddleware = append(

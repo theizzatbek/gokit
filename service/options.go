@@ -40,7 +40,9 @@ type options struct {
 	openapiEnable              bool // WithOpenAPI() flips this
 	openapiOpts                []openapi.Option
 	fiberMiddleware            []fiber.Handler
-	corsWired                  bool // flipped by WithCORS / WithCORSConfig; gates env auto-enable in applyEnvDefaults
+	corsHandler                fiber.Handler // dedicated slot: installed before the bearer layer (after otel) — see appLevelMiddleware
+	otelFiberHandler           fiber.Handler // dedicated slot: otelfiber, outermost app-level middleware; set by setupOtel
+	corsWired                  bool          // flipped by WithCORS / WithCORSConfig; gates env auto-enable in applyEnvDefaults
 	skipBearerLayer            bool
 	httpcOpts                  []httpc.Option
 	apimapOpts                 []apimap.Option
@@ -220,6 +222,11 @@ func WithFiberMiddleware(handlers ...fiber.Handler) Option {
 // listed — per the CORS spec, browsers reject `Access-Control-Allow-
 // Origin: *` together with credentials.
 //
+// The middleware is installed BEFORE the auto Bearer(BearerOptional)
+// layer, so 401s from expired/invalid tokens still carry CORS
+// headers and cross-origin browsers can read them (see
+// [WithCORSConfig] for the full placement contract).
+//
 //	svc, _ := service.New[AppCtx, Claims](ctx, cfg,
 //	    service.WithCORS("https://app.example.com", "https://admin.example.com"))
 //
@@ -244,6 +251,13 @@ func WithCORS(origins ...string) Option {
 // are layered on top, so configure every field you care about
 // (especially AllowOrigins / AllowMethods / AllowHeaders).
 //
+// The CORS middleware occupies a dedicated app-level slot installed
+// BEFORE the auto Bearer(BearerOptional) layer (and after otelfiber,
+// when [WithOtel] is set) — so auth 401s still carry
+// Access-Control-Allow-Origin and cross-origin browsers can read
+// them. Calling WithCORS / WithCORSConfig more than once keeps only
+// the last config (last-write-wins).
+//
 //	svc, _ := service.New[AppCtx, Claims](ctx, cfg,
 //	    service.WithCORSConfig(cors.Config{
 //	        AllowOriginsFunc: func(origin string) bool { return strings.HasSuffix(origin, ".example.com") },
@@ -252,7 +266,7 @@ func WithCORS(origins ...string) Option {
 //	    }))
 func WithCORSConfig(cfg cors.Config) Option {
 	return func(o *options) {
-		o.fiberMiddleware = append(o.fiberMiddleware, cors.New(cfg))
+		o.corsHandler = cors.New(cfg)
 		o.corsWired = true
 	}
 }

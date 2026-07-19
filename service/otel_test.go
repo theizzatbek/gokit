@@ -17,8 +17,8 @@ func TestSetupOtel_EmptyServiceNameIsNoop(t *testing.T) {
 	if s.otelShutdown != nil {
 		t.Errorf("otelShutdown should be nil when WithOtel wasn't passed")
 	}
-	if len(s.opts.fiberMiddleware) != 0 {
-		t.Errorf("fiberMiddleware = %d, want 0", len(s.opts.fiberMiddleware))
+	if s.opts.otelFiberHandler != nil {
+		t.Error("otelFiberHandler should stay nil when WithOtel wasn't passed")
 	}
 	if len(s.opts.httpcOpts) != 0 {
 		t.Errorf("httpcOpts = %d, want 0", len(s.opts.httpcOpts))
@@ -35,8 +35,11 @@ func TestSetupOtel_WiresMiddlewareAndHTTPC(t *testing.T) {
 	if s.otelShutdown == nil {
 		t.Error("otelShutdown should be non-nil after Setup")
 	}
-	if len(s.opts.fiberMiddleware) != 1 {
-		t.Errorf("fiberMiddleware = %d, want 1 (otelfiber prepended)", len(s.opts.fiberMiddleware))
+	if s.opts.otelFiberHandler == nil {
+		t.Error("otelFiberHandler slot should hold otelfiber after Setup")
+	}
+	if len(s.opts.fiberMiddleware) != 0 {
+		t.Errorf("fiberMiddleware = %d, want 0 (otelfiber lives in its own slot)", len(s.opts.fiberMiddleware))
 	}
 	if len(s.opts.httpcOpts) != 1 {
 		t.Errorf("httpcOpts = %d, want 1 (otelhttp base transport)", len(s.opts.httpcOpts))

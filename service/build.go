@@ -79,10 +79,10 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 	s.runCtx, s.runCancel = context.WithCancel(context.Background())
 	s.registerRuntimeCollectors()
 
-	// OTel must run BEFORE the build phase — it mutates
-	// opts.fiberMiddleware (prepending otelfiber) and opts.httpcOpts
-	// (adding the otelhttp transport wrap) which are consumed by
-	// buildHTTPC and run.go.
+	// OTel must run BEFORE the build phase — it fills
+	// opts.otelFiberHandler (the outermost app-level slot) and mutates
+	// opts.httpcOpts (adding the otelhttp transport wrap) which are
+	// consumed by buildHTTPC and run.go.
 	if err := s.setupOtel(ctx); err != nil {
 		return nil, err
 	}

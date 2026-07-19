@@ -48,8 +48,8 @@ func TestApplyEnvDefaults_CORSOriginsConfig_AutoEnable(t *testing.T) {
 	if !o.corsWired {
 		t.Error("corsWired = false, want true (env CORS_ORIGINS supplied two origins)")
 	}
-	if len(o.fiberMiddleware) != 1 {
-		t.Errorf("fiberMiddleware len = %d, want 1 (cors.New appended)", len(o.fiberMiddleware))
+	if o.corsHandler == nil {
+		t.Error("corsHandler = nil, want cors.New handler in the dedicated slot")
 	}
 }
 
@@ -86,12 +86,10 @@ func TestApplyEnvDefaults_CORSOrigins_DefersToCallerOpt(t *testing.T) {
 	cfg.Service.CORSOrigins = "https://from-env.example.com"
 
 	o := &options{corsWired: true} // simulate caller-WithCORS effect
-	preLen := len(o.fiberMiddleware)
 	applyEnvDefaults(o, cfg)
 
-	if len(o.fiberMiddleware) != preLen {
-		t.Errorf("fiberMiddleware len changed from %d to %d; expected env to defer to caller-wired CORS",
-			preLen, len(o.fiberMiddleware))
+	if o.corsHandler != nil {
+		t.Error("corsHandler overwritten by env; expected env to defer to caller-wired CORS")
 	}
 }
 
