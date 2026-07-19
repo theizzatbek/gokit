@@ -8,15 +8,15 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 )
 
-// runCORS mounts the supplied options' fiberMiddleware on a fresh app
-// and returns it. Skips going through full service.New so the test
-// stays focused on the CORS wiring.
+// runCORS mounts the supplied options' CORS slot on a fresh app and
+// returns it. Skips going through full service.New so the test stays
+// focused on the CORS wiring.
 func runCORS(opt Option) *fiber.App {
 	o := &options{}
 	opt(o)
 	app := fiber.New()
-	for _, mw := range o.fiberMiddleware {
-		app.Use(mw)
+	if o.corsHandler != nil {
+		app.Use(o.corsHandler)
 	}
 	app.Get("/x", func(c *fiber.Ctx) error { return c.SendString("ok") })
 	return app

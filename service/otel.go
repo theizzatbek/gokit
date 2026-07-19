@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gofiber/contrib/otelfiber/v2"
-	"github.com/gofiber/fiber/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
@@ -35,16 +34,14 @@ func (s *Service[T, C]) setupOtel(ctx context.Context) error {
 	}
 	s.otelShutdown = shutdown
 
-	// Prepend otelfiber so the trace span begins before any user
-	// middleware (cors, helmet, custom interceptors, …) gets a chance
-	// to short-circuit. Without prepending, an early-return CORS
-	// preflight would skip the span altogether. service.name comes
-	// from the global TracerProvider's resource — otelfiber doesn't
-	// need it set per-middleware.
-	s.opts.fiberMiddleware = append(
-		[]fiber.Handler{otelfiber.Middleware()},
-		s.opts.fiberMiddleware...,
-	)
+	// otelfiber occupies a dedicated slot that appLevelMiddleware
+	// installs FIRST — before CORS, SecurityHeaders, and the bearer
+	// layer — so the trace span begins before anything can
+	// short-circuit: an early-return CORS preflight or a bearer 401
+	// still lands in the trace. service.name comes from the global
+	// TracerProvider's resource — otelfiber doesn't need it set
+	// per-middleware.
+	s.opts.otelFiberHandler = otelfiber.Middleware()
 
 	// Wire otelhttp as httpc's base transport. The retry layer wraps
 	// the base, so each retry attempt is its own CLIENT span — which

@@ -124,7 +124,37 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 	if reg := s.metricsRegistry(); reg != nil {
 		out = append(out, fibermap.WithMetricsRegistry(reg))
 	}
+	if fiberMW := s.appLevelMiddleware(); len(fiberMW) > 0 {
+		out = append(out, fibermap.WithUse(fiberMW...))
+	}
+	out = append(out, s.opts.runOpts...)
+	return out
+}
+
+// appLevelMiddleware assembles the fiber.App-level (WithUse) chain that
+// Run installs before the engine's contextInit. Order matters:
+//
+//		otelfiber → CORS → SecurityHeaders → Bearer(BearerOptional) →
+//		authSubjectBridge → LoggerInjector → opts.fiberMiddleware
+//
+//	  - otelfiber is outermost so every request — including CORS
+//	    preflights and bearer 401s — opens a root span.
+//	  - CORS runs BEFORE the bearer layer so a present-but-invalid
+//	    token's 401 still carries Access-Control-Allow-Origin (the
+//	    browser blocks header-less cross-origin 401s and the front-end
+//	    "caught 401 → refresh" flow never fires). Preflight OPTIONS
+//	    short-circuits here without engaging auth.
+//	  - The bearer layer stays BEFORE the engine's contextInit (which
+//	    runs after this whole chain) — ContextBuilder reads the
+//	    principal from Locals that Bearer fills.
+func (s *Service[T, C]) appLevelMiddleware() []fiber.Handler {
 	var fiberMW []fiber.Handler
+	if s.opts.otelFiberHandler != nil {
+		fiberMW = append(fiberMW, s.opts.otelFiberHandler)
+	}
+	if s.opts.corsHandler != nil {
+		fiberMW = append(fiberMW, s.opts.corsHandler)
+	}
 	if !s.opts.skipSecurityHeaders {
 		fiberMW = append(fiberMW, fibermap.SecurityHeaders(s.opts.securityHeaderOpts...))
 	}
@@ -142,11 +172,7 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 		fiberMW = append(fiberMW, fibermap.LoggerInjector(s.logger))
 	}
 	fiberMW = append(fiberMW, s.opts.fiberMiddleware...)
-	if len(fiberMW) > 0 {
-		out = append(out, fibermap.WithUse(fiberMW...))
-	}
-	out = append(out, s.opts.runOpts...)
-	return out
+	return fiberMW
 }
 
 // buildFiberConfig assembles the fiber.Config used by every

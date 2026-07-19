@@ -292,6 +292,24 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
   in every service.
 
 ### Fixed
+- `service` — CORS headers now reach auth 401s. The CORS middleware
+  (`WithCORS` / `WithCORSConfig` / `CORS_ORIGINS` auto-enable) moved
+  out of the shared `opts.fiberMiddleware` list into a dedicated
+  app-level slot installed BEFORE the auto
+  `Bearer(BearerOptional)` layer. Pre-fix, a present-but-invalid
+  access token was rejected by the bearer layer before CORS ever ran,
+  so the 401 carried no `Access-Control-Allow-Origin` — the browser
+  blocked the response and the standard front-end "caught 401 → go
+  refresh" flow never fired. Preflight OPTIONS now also
+  short-circuits in CORS before auth (even with a stray
+  Authorization header). `otelfiber` (`WithOtel`) likewise moved to
+  its own outermost slot, so bearer 401s and CORS preflights land in
+  traces. The bearer layer stays before the engine's `contextInit` —
+  `ContextBuilder` still sees the principal; the app-level chain is
+  now: otelfiber → CORS → SecurityHeaders → Bearer(BearerOptional) →
+  authSubjectBridge → LoggerInjector → `opts.fiberMiddleware`.
+  Behavioural note: calling `WithCORS`/`WithCORSConfig` twice now
+  keeps only the last config (previously both handlers stacked).
 - `db.Connect` — raw `[16]byte` query arguments now encode to Postgres
   `uuid` columns (OID 2950) without a `pgtype.UUID{Bytes: b, Valid: true}`
   wrap, and scan back into `[16]byte` destinations symmetrically.
