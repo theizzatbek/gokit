@@ -33,4 +33,9 @@ const (
 
 	// CodeOutboxSchemaFailed — WithOutboxAutoSchema run failed.
 	CodeOutboxSchemaFailed = "service_outbox_schema_failed"
+
+	// CodeTLSConfigIncomplete — exactly one of TLS_CERT_FILE /
+	// TLS_KEY_FILE is set. The pair is all-or-nothing; the kit
+	// refuses to silently fall back to plain HTTP.
+	CodeTLSConfigIncomplete = "service_tls_config_incomplete"
 )

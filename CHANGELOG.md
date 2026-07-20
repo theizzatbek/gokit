@@ -9,6 +9,24 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Added
+- App-native TLS: `fibermap.WithTLS(certFile, keyFile) RunOption` +
+  `service.WithTLS(certFile, keyFile) Option` + env pair
+  `TLS_CERT_FILE` / `TLS_KEY_FILE` in `ServiceConfig`. When both PEM
+  files are set, `Run` serves HTTPS via `app.ListenTLS` — in BOTH
+  Listen branches (graceful and no-signals), so SIGINT/SIGTERM
+  graceful shutdown works over TLS too. For edge deployments where
+  the service faces the network itself (no ingress terminating TLS)
+  and for locally exercising Secure-cookie flows; ingress-terminated
+  deployments keep plain HTTP as before (no behaviour change without
+  the option). The pair is all-or-nothing: exactly one of cert/key
+  fails fast — fibermap's `Run` with the new
+  `*Error{Stage: "run", Code: invalid_tls_config}`
+  (`CodeInvalidTLSConfig`), the service env pair at `Config.Validate`
+  with `service_tls_config_incomplete` (`CodeTLSConfigIncomplete`) —
+  never a silent fallback to plain HTTP. Caller-supplied
+  `service.WithTLS` wins over the env pair. mTLS
+  (`ListenMutualTLS`) and certificate hot-reload are out of scope for
+  now — reachable via `WithRunOptions` + `fibermap.WithConfigureApp`.
 - `service.WithErrorHandler(fiber.ErrorHandler) Option` — overrides
   the default `fibermap.ErrorHandler(logger)` install in
   `service.buildFiberConfig`. The typical use case is sentrykit 5xx

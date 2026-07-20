@@ -35,6 +35,8 @@ type runConfig struct {
 	configureApp    func(*fiber.App)
 	shutdownTimeout time.Duration
 	disableSignals  bool
+	tlsCert         string
+	tlsKey          string
 
 	withRecover bool
 	recoverLog  *slog.Logger
@@ -139,6 +141,38 @@ func WithShutdownTimeout(d time.Duration) RunOption {
 // Use when embedding Run in a parent that owns process signals.
 func WithoutSignalHandling() RunOption {
 	return func(c *runConfig) { c.disableSignals = true }
+}
+
+// WithTLS makes Run serve HTTPS: Listen is replaced with
+// app.ListenTLS(addr, certFile, keyFile) in both the graceful and the
+// no-signals paths. Use for edge deployments where the service faces
+// the network itself (no ingress/nginx terminating TLS in front) and
+// for locally exercising Secure-cookie flows.
+//
+// Both files must be PEM-encoded. Supplying only one of the two is a
+// configuration error — Run refuses to start with
+// *Error{Code: CodeInvalidTLSConfig} instead of silently falling back
+// to plain HTTP. Passing two empty strings is equivalent to not
+// calling WithTLS at all.
+//
+// mTLS (ListenMutualTLS) and certificate hot-reload are out of scope
+// here — wire those via [WithConfigureApp] with your own listener if
+// needed.
+func WithTLS(certFile, keyFile string) RunOption {
+	return func(c *runConfig) {
+		c.tlsCert = certFile
+		c.tlsKey = keyFile
+	}
+}
+
+// listen starts the fiber listener, honouring the TLS pair when both
+// files are configured. Single point shared by the graceful and
+// no-signals branches of Run so neither can drift HTTP-only.
+func (c *runConfig) listen(app *fiber.App) error {
+	if c.tlsCert != "" && c.tlsKey != "" {
+		return app.ListenTLS(c.addr, c.tlsCert, c.tlsKey)
+	}
+	return app.Listen(c.addr)
 }
 
 // WithRecover installs [Recover] as the FIRST Fiber-level middleware
@@ -462,6 +496,16 @@ func (e *Engine[T]) Run(opts ...RunOption) error {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	// TLS pair is all-or-nothing: one file without the other is a
+	// config error, not a silent fallback to plain HTTP. Checked
+	// before any load/mount work so misconfiguration fails fast.
+	if (cfg.tlsCert == "") != (cfg.tlsKey == "") {
+		return &Error{
+			Stage:   "run",
+			Code:    CodeInvalidTLSConfig,
+			Message: "WithTLS requires both certFile and keyFile (got only one); refusing to fall back to plain HTTP",
+		}
+	}
 	if cfg.addr == "" {
 		if p := os.Getenv("PORT"); p != "" {
 			cfg.addr = ":" + p
@@ -596,7 +640,7 @@ func (e *Engine[T]) Run(opts ...RunOption) error {
 	}
 
 	if cfg.disableSignals || cfg.shutdownTimeout <= 0 {
-		err := app.Listen(cfg.addr)
+		err := cfg.listen(app)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
@@ -608,7 +652,7 @@ func (e *Engine[T]) Run(opts ...RunOption) error {
 
 	listenErr := make(chan error, 1)
 	go func() {
-		listenErr <- app.Listen(cfg.addr)
+		listenErr <- cfg.listen(app)
 	}()
 
 	select {

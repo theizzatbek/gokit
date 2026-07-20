@@ -111,6 +111,7 @@ Sibling-хелперы — `RegisterHandlerWith{Query,Params,Headers}` — дл�
 | `WithConfigureApp(fn func(*fiber.App))` | none | Хук для манипуляции `*fiber.App` после Mount |
 | `WithShutdownTimeout(d)` | 10s | Graceful shutdown deadline на SIGINT/SIGTERM |
 | `WithoutSignalHandling()` | — | Пропустить built-in signal-handler (caller управляет shutdown'ом) |
+| `WithTLS(certFile, keyFile)` | — | Слушать HTTPS через `app.ListenTLS` (обе ветки — graceful и no-signals). Пара all-or-nothing: один файл без второго → `*Error{Code: invalid_tls_config}`, без тихого fallback на HTTP |
 | `WithRecover(logger)` / `WithoutRecover()` | on (slog.Default) | Panic-recovery со стек-трейсом |
 | `WithoutRequestID()` | request-id on | Инжектит `X-Request-ID` |
 | `WithRequestLogger(logger, skipPaths...)` / `WithoutRequestLogger()` | on (пропускает `/healthz`,`/metrics`) | Структурированный access-лог |

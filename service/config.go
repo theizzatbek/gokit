@@ -88,6 +88,16 @@ type ServiceConfig struct {
 	// use [WithCORSConfig] explicitly — env auto-enable only covers
 	// the kit-defaulted shape.
 	CORSOrigins string `env:"CORS_ORIGINS"` // csv
+
+	// TLSCertFile / TLSKeyFile, when both non-empty, make [Service.Run]
+	// serve HTTPS via fibermap.WithTLS (app.ListenTLS). For edge
+	// deployments without an ingress terminating TLS in front of the
+	// service, and for local Secure-cookie flows. The pair is
+	// all-or-nothing: exactly one set fails Config.Validate with
+	// *errs.Error{Code: CodeTLSConfigIncomplete} instead of silently
+	// starting plain HTTP. Caller-supplied [WithTLS] wins over these.
+	TLSCertFile string `env:"TLS_CERT_FILE"`
+	TLSKeyFile  string `env:"TLS_KEY_FILE"`
 }
 
 // AuthConfig — JWT signing material + TTLs. PrivateKeyPEM is the
@@ -187,6 +197,10 @@ func (c Config) Validate() error {
 	if natsmapOn && c.NATS.URL == "" {
 		return xerrs.Validation(CodeNATSMapNeedsNATS,
 			"service: NATSMap requires NATS (subscribers + publishers need a connection)")
+	}
+	if (c.Service.TLSCertFile == "") != (c.Service.TLSKeyFile == "") {
+		return xerrs.Validation(CodeTLSConfigIncomplete,
+			"service: TLS_CERT_FILE and TLS_KEY_FILE must be set together (got only one); refusing to fall back to plain HTTP")
 	}
 	return nil
 }
