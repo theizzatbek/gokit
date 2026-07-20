@@ -127,8 +127,25 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 	if fiberMW := s.appLevelMiddleware(); len(fiberMW) > 0 {
 		out = append(out, fibermap.WithUse(fiberMW...))
 	}
+	if cert, key := s.resolveTLS(); cert != "" || key != "" {
+		// Forwarded even when incomplete — fibermap.Run rejects a
+		// half-pair with invalid_tls_config rather than silently
+		// starting plain HTTP.
+		out = append(out, fibermap.WithTLS(cert, key))
+	}
 	out = append(out, s.opts.runOpts...)
 	return out
+}
+
+// resolveTLS picks the TLS cert/key pair Run forwards to
+// fibermap.WithTLS. Caller-supplied [WithTLS] wins; otherwise the
+// env-driven ServiceConfig pair (TLS_CERT_FILE / TLS_KEY_FILE)
+// applies. Empty pair → plain HTTP.
+func (s *Service[T, C]) resolveTLS() (cert, key string) {
+	if s.opts.tlsCert != "" || s.opts.tlsKey != "" {
+		return s.opts.tlsCert, s.opts.tlsKey
+	}
+	return s.cfg.Service.TLSCertFile, s.cfg.Service.TLSKeyFile
 }
 
 // appLevelMiddleware assembles the fiber.App-level (WithUse) chain that

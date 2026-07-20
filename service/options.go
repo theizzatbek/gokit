@@ -113,6 +113,8 @@ type options struct {
 	cronMapEnable              bool
 	cronMapEnv                 map[string]string
 	cronMapHandlers            map[string]cronmap.HandlerFn
+	tlsCert                    string
+	tlsKey                     string
 }
 
 // WithLogger overrides the auto-built slog.Logger.
@@ -280,6 +282,29 @@ func containsWildcardOrigin(origins []string) bool {
 		}
 	}
 	return false
+}
+
+// WithTLS makes [Service.Run] serve HTTPS: fibermap's Run switches
+// from app.Listen to app.ListenTLS(addr, certFile, keyFile). Use for
+// edge deployments where the service faces the network itself (no
+// ingress/nginx terminating TLS) and for locally exercising
+// Secure-cookie flows. For ingress-terminated deployments keep plain
+// HTTP — that split is by design.
+//
+// Both files must be PEM-encoded. The pair is all-or-nothing:
+// supplying only one makes Run fail with fibermap's
+// *Error{Code: invalid_tls_config} instead of silently starting
+// plain HTTP. The env equivalent is TLS_CERT_FILE / TLS_KEY_FILE in
+// [ServiceConfig] (validated at Config.Validate); this option wins
+// over the env pair when both are present.
+//
+// mTLS and certificate hot-reload are out of scope — wire those via
+// [WithRunOptions] + [fibermap.WithConfigureApp] if needed.
+func WithTLS(certFile, keyFile string) Option {
+	return func(o *options) {
+		o.tlsCert = certFile
+		o.tlsKey = keyFile
+	}
 }
 
 // WithoutBearerOptionalLayer skips installing auth.Bearer(BearerOptional)
