@@ -97,9 +97,3 @@ func (s *Service[T, C]) OnShutdown(fn func() error) {
 	}
 	s.shutdownFns = append(s.shutdownFns, fn)
 }
-
-// scheduler moves in together with cron.go in Task 5; this stub only
-// exists so Task 4 compiles on its own. Task 5 removes it.
-type scheduler struct{ jobs int }
-
-func (s *scheduler) jobCount() int { return s.jobs }

@@ -25,9 +25,6 @@ const (
 	// CodeDBConnectFailed — db.Connect could not connect.
 	CodeDBConnectFailed = "svckit_db_connect_failed"
 
-	// CodeMigrateFailed — migrations did not apply cleanly.
-	CodeMigrateFailed = "svckit_migrate_failed"
-
 	// CodeAuthInvalidKey — auth.LoadKeysFromPEM / auth.New rejected the key.
 	CodeAuthInvalidKey = "svckit_auth_invalid_key"
 
@@ -42,6 +39,12 @@ const (
 
 	// CodeRoutesYAMLNotFound — routes.yaml is enabled but the file is missing.
 	CodeRoutesYAMLNotFound = "svckit_routes_yaml_not_found"
+
+	// CodeOpenAPIYAMLParse — routes.yaml's top-level `openapi:` block
+	// failed to read or parse. Set by parseOpenAPIBlock, ported from
+	// service/openapi_yaml.go in Task 5; declared here now so the
+	// copied file compiles unmodified.
+	CodeOpenAPIYAMLParse = "svckit_openapi_yaml_parse"
 
 	// CodeExtraValidatorRegister — WithExtraValidators failed to register a tag.
 	CodeExtraValidatorRegister = "svckit_extra_validator_register"

@@ -10,11 +10,13 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/robfig/cron/v3"
 
 	"github.com/theizzatbek/gokit/clients/httpc"
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/fibermap"
 	"github.com/theizzatbek/gokit/fibermap/bind"
+	"github.com/theizzatbek/gokit/fibermap/dev"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
 )
 
@@ -45,6 +47,16 @@ type options struct {
 	preflightTimeout    time.Duration
 	tlsCert             string
 	tlsKey              string
+
+	// cron.go / singleton_cron.go
+	cronJobs   []CronJob
+	cronSlugs  map[string]string
+	cronParser cron.Parser
+
+	// devmode.go
+	devEnable     bool
+	devPrefix     string
+	devConfigOpts []dev.ConfigOption
 
 	// accumulators: written to both by options above and by mods
 	// through Host during Setup/Build/Wire
