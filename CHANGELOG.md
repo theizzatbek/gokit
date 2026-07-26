@@ -9,6 +9,46 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
 ## [Unreleased]
 
 ### Added
+- `svckit/` — new package, a leaner alternative to `service/` for
+  services that don't need every optional subsystem linked into the
+  binary. `service.New` statically calls every optional subsystem's
+  constructor (`buildS3`, `buildRedis`, `buildNATS`, ...), so their
+  SDKs land in the binary whether or not the service actually uses
+  them — measured **39.03 MB** for `service.New[struct{}, struct{}]`
+  with an empty `Config{}` (`-ldflags="-s -w"`, same machine, same
+  Go 1.26.5 toolchain as the numbers below). `svckit.New[T, C]`
+  replaces the static call list with a `Mod` interface (`Name()` plus
+  optional `Setup`/`Build`/`Wire`/`Statuser`) resolved through three
+  phases, and hands each mod a non-generic `Host` instead of the
+  typed `Service` so a mod can't leak type parameters into its own
+  API. `TestCoreDoesNotImportOptionalSubsystems` guards the core's
+  `go list -deps` output against every optional client package and
+  SDK, so a future accidental import fails the build instead of
+  quietly regrowing the binary. Same empty-config baseline with
+  `svckit.New` and no mods: **20.38 MB** — 18.65 MB / 47.8% smaller
+  than the v1 equivalent, purely from not linking S3 / Redis / NATS /
+  OTel / Sentry clients that were never configured.
+
+  First mod: `svckit/mods/s3mod` — `s3m := s3mod.New(cfg)` then
+  `s3m.Option()` passed to `svckit.New`, `s3m.Client()` afterwards.
+  Wraps `clients/s3`; importing it adds **+7.26 MB** (27.64 MB total,
+  11.40 MB / 29.2% still under the v1 baseline) — S3 costs binary
+  size only for services that actually import the mod.
+  `s3mod.Config` is a bare alias of `s3client.Config` (env tags
+  already live there); an empty `Bucket` means "the operator didn't
+  enable S3," not an error — `Enabled()` / `Optional()` report the
+  disabled state, and `Client()` panics naming exactly one of two
+  causes: the missing `S3_BUCKET` env, or (if hit before `svckit.New`
+  ever ran) that the mod handle was never passed to `svckit.New` in
+  the first place. `WithName` lets two instances of the mod coexist
+  in one service (a primary bucket and a backup bucket) — `svckit.New`
+  rejects duplicate mod names before any phase runs, so the collision
+  surfaces at construction, not at the first ambiguous `Client()` call.
+
+  Remaining mods (`redismod`, `natsmod`, `otelmod`, `sentrymod`,
+  `cronmapmod`, `apimapmod`, `webhooksmod`) and the `service/`-facade
+  migration are follow-up work; `service/` itself is unchanged by
+  this round.
 - App-native TLS: `fibermap.WithTLS(certFile, keyFile) RunOption` +
   `service.WithTLS(certFile, keyFile) Option` + env pair
   `TLS_CERT_FILE` / `TLS_KEY_FILE` in `ServiceConfig`. When both PEM
