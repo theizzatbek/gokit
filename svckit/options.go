@@ -325,6 +325,16 @@ func WithOpenAPI(opts ...openapi.Option) Option {
 // `Name() string` + `Check(ctx) error`. Use for migration probes,
 // cache warmup gates, external API pings the service must clear
 // before serving traffic.
+//
+// Order: this option writes to the same accumulator mods append to
+// via Host.AddReadinessChecker during their Build phase. New applies
+// every Option func — including WithReadinessChecker — in one pass
+// before any mod's Build phase runs, so checkers passed here always
+// land BEFORE mod-contributed ones in Service.readinessCheckers(),
+// regardless of where WithReadinessChecker sits relative to WithMod
+// in the New(...) argument list. Readiness / preflight JSON is read
+// top-to-bottom as a dependency tree, so keep that ordering in mind
+// when it matters to an operator.
 func WithReadinessChecker(c ...fibermap.Checker) Option {
 	return func(o *options) { o.readinessCheckers = append(o.readinessCheckers, c...) }
 }

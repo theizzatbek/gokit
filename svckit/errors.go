@@ -40,6 +40,9 @@ const (
 	// CodeRoutesYAMLNotFound — routes.yaml is enabled but the file is missing.
 	CodeRoutesYAMLNotFound = "svckit_routes_yaml_not_found"
 
+	// CodeOpenAPIMountFailed — openapi.Generator.Mount returned an error.
+	CodeOpenAPIMountFailed = "svckit_openapi_mount_failed"
+
 	// CodeOpenAPIYAMLParse — routes.yaml's top-level `openapi:` block
 	// failed to read or parse. Set by parseOpenAPIBlock, ported from
 	// service/openapi_yaml.go in Task 5; declared here now so the
