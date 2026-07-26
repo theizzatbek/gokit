@@ -5,9 +5,8 @@
 package fibermount
 
 import (
-	"github.com/gofiber/fiber/v2"
-
 	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/auth/authmount"
 	"github.com/theizzatbek/gokit/fibermap"
 )
 
@@ -18,19 +17,15 @@ import (
 //
 // T is the engine's per-request data type; C is auth's custom-claims type.
 // They are independent.
+//
+// Delegates to auth/authmount, which holds the actual wiring. This
+// package keeps the same signature for backward compatibility;
+// callers that don't need [MountRateLimitRedisFactory] or
+// [MountIdempotencyKeyFactory] can import authmount directly instead
+// and skip this package's clients/ratelimit → clients/redis
+// dependency.
 func MountMiddlewareFactories[T, C any](eng *fibermap.Engine[T], a *auth.Auth[C]) error {
-	fibermap.RegisterMiddlewareFactory(eng, "bearer", adapt[T](a.BearerFactory))
-	fibermap.RegisterMiddlewareFactory(eng, "require_scope", adapt[T](a.RequireScopeFactory))
-	fibermap.RegisterMiddlewareFactory(eng, "require_role", adapt[T](a.RequireRoleFactory))
-	fibermap.RegisterMiddlewareFactory(eng, "require_any_scope", adapt[T](a.RequireAnyScopeFactory))
-	fibermap.RegisterMiddlewareFactory(eng, "require_any_role", adapt[T](a.RequireAnyRoleFactory))
-	// Use the Auth-bound factories so YAML-mounted chains feed
-	// auth_ratelimit_denied_total / auth_idempotency_total when
-	// auth.WithMetrics is wired. The package-level factories still
-	// exist for callers that bypass fibermount.
-	fibermap.RegisterMiddlewareFactory(eng, "rate_limit", adapt[T](a.RateLimitFactory))
-	fibermap.RegisterMiddlewareFactory(eng, "idempotency", adapt[T](a.IdempotencyFactory))
-	return nil
+	return authmount.MountMiddlewareFactories(eng, a)
 }
 
 // MountAPIKeyFactory registers the `api_key` middleware factory
@@ -47,9 +42,10 @@ func MountMiddlewareFactories[T, C any](eng *fibermap.Engine[T], a *auth.Auth[C]
 //
 // service.WithAPIKeyStore(store) auto-calls this when both Auth and
 // the supplied store are wired.
+//
+// Delegates to auth/authmount — see [MountMiddlewareFactories] doc.
 func MountAPIKeyFactory[T, C any](eng *fibermap.Engine[T], a *auth.Auth[C], store auth.KeyStore) error {
-	fibermap.RegisterMiddlewareFactory(eng, "api_key", adapt[T](a.APIKeyFactory(store)))
-	return nil
+	return authmount.MountAPIKeyFactory(eng, a, store)
 }
 
 // MountIdempotencyKeyFactory registers the `idempotency_key`
@@ -69,23 +65,4 @@ func MountIdempotencyKeyFactory[T any](eng *fibermap.Engine[T], store fibermap.I
 	fibermap.RegisterMiddlewareFactory(eng, "idempotency_key",
 		idempotencyKeyFactory[T](store))
 	return nil
-}
-
-// adapt bridges auth's factory signature (func([]any) (fiber.Handler, error))
-// to fibermap's (func([]string) (MiddlewareFunc[T], error)). YAML factory args
-// always arrive as []string; we promote them to []any for the auth factory,
-// then re-wrap the produced fiber.Handler so fibermap's per-request
-// Context[T] is unwrapped on entry.
-func adapt[T any](authFactory func([]any) (fiber.Handler, error)) fibermap.MiddlewareFactoryFunc[T] {
-	return func(args []string) (fibermap.MiddlewareFunc[T], error) {
-		anyArgs := make([]any, len(args))
-		for i, s := range args {
-			anyArgs[i] = s
-		}
-		h, err := authFactory(anyArgs)
-		if err != nil {
-			return nil, err
-		}
-		return func(c *fibermap.Context[T]) error { return h(c.Ctx) }, nil
-	}
 }

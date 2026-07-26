@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/gofiber/fiber/v2"
 
 	"github.com/theizzatbek/gokit/auth"
+	"github.com/theizzatbek/gokit/auth/authmount"
 	"github.com/theizzatbek/gokit/auth/refreshpg"
 	"github.com/theizzatbek/gokit/clients/httpc"
 	"github.com/theizzatbek/gokit/db"
@@ -122,48 +122,22 @@ func (s *Service[T, C]) buildEngine() error {
 // chosen credential format and calls Auth.IssueLogin / IssueRefresh /
 // Logout).
 //
-// Deliberately does NOT call auth/fibermount.MountMiddlewareFactories.
-// That package also hosts ratelimit_redis.go (MountRateLimitRedisFactory),
-// which imports clients/ratelimit → clients/redis; Go resolves
-// dependencies per package, so importing auth/fibermount AT ALL drags
-// both into svckit's core regardless of which function is actually
-// called. The seven factories below are registered directly under the
-// exact same names fibermount uses, against the exact same *Factory
-// methods on auth.Auth[C] — bit-for-bit the same wiring, just without
-// the transitive import. See authFactoryAdapt below.
+// Uses auth/authmount rather than auth/fibermount: the latter also
+// hosts ratelimit_redis.go (MountRateLimitRedisFactory), which imports
+// clients/ratelimit → clients/redis, and Go resolves dependencies per
+// package — importing auth/fibermount at all would drag both into
+// svckit's core regardless of which function is actually called.
+// authmount holds exactly the same wiring (auth/fibermount.
+// MountMiddlewareFactories now delegates to it) without that
+// transitive import.
 func (s *Service[T, C]) mountAuthMiddleware() error {
 	if s.Auth == nil {
 		return nil
 	}
-	a := s.Auth
-	fibermap.RegisterMiddlewareFactory(s.Engine, "bearer", authFactoryAdapt[T](a.BearerFactory))
-	fibermap.RegisterMiddlewareFactory(s.Engine, "require_scope", authFactoryAdapt[T](a.RequireScopeFactory))
-	fibermap.RegisterMiddlewareFactory(s.Engine, "require_role", authFactoryAdapt[T](a.RequireRoleFactory))
-	fibermap.RegisterMiddlewareFactory(s.Engine, "require_any_scope", authFactoryAdapt[T](a.RequireAnyScopeFactory))
-	fibermap.RegisterMiddlewareFactory(s.Engine, "require_any_role", authFactoryAdapt[T](a.RequireAnyRoleFactory))
-	fibermap.RegisterMiddlewareFactory(s.Engine, "rate_limit", authFactoryAdapt[T](a.RateLimitFactory))
-	fibermap.RegisterMiddlewareFactory(s.Engine, "idempotency", authFactoryAdapt[T](a.IdempotencyFactory))
-	return nil
-}
-
-// authFactoryAdapt bridges auth's factory signature
-// (func([]any) (fiber.Handler, error)) to fibermap's
-// (func([]string) (MiddlewareFunc[T], error)). A copy of
-// auth/fibermount's private `adapt` helper — duplicated here so
-// mountAuthMiddleware does not need to import auth/fibermount (see its
-// doc comment for why).
-func authFactoryAdapt[T any](authFactory func([]any) (fiber.Handler, error)) fibermap.MiddlewareFactoryFunc[T] {
-	return func(args []string) (fibermap.MiddlewareFunc[T], error) {
-		anyArgs := make([]any, len(args))
-		for i, a := range args {
-			anyArgs[i] = a
-		}
-		h, err := authFactory(anyArgs)
-		if err != nil {
-			return nil, err
-		}
-		return func(c *fibermap.Context[T]) error { return h(c.Ctx) }, nil
+	if err := authmount.MountMiddlewareFactories(s.Engine, s.Auth); err != nil {
+		return xerrs.Wrap(err, xerrs.KindInternal, CodeAuthInvalidKey, "svckit: authmount.MountMiddlewareFactories failed")
 	}
+	return nil
 }
 
 // applyConnectRetryDefaults centralises the rule:
