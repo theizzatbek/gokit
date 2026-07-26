@@ -62,3 +62,61 @@ type Host interface {
 	// order. nil is ignored.
 	OnShutdown(func() error)
 }
+
+// hostImpl is the only implementation of Host. It lives exactly as
+// long as New runs: a mod must not hold onto it, because once the
+// build finishes, the accumulators it writes to have already been
+// consumed.
+type hostImpl struct {
+	opts        *options
+	cfg         Config
+	logger      *slog.Logger
+	metrics     prometheus.Registerer
+	db          *db.DB
+	subjectKey  func(*fiber.Ctx) string
+	nodeName    string
+	serverGroup string
+}
+
+func (h *hostImpl) Logger() *slog.Logger           { return h.logger }
+func (h *hostImpl) SetLogger(l *slog.Logger)       { h.logger = l }
+func (h *hostImpl) Metrics() prometheus.Registerer { return h.metrics }
+func (h *hostImpl) DB() *db.DB                     { return h.db }
+func (h *hostImpl) NodeName() string               { return h.nodeName }
+func (h *hostImpl) ServerGroup() string            { return h.serverGroup }
+
+func (h *hostImpl) SubjectKeyFn() func(*fiber.Ctx) string { return h.subjectKey }
+
+func (h *hostImpl) ResolvePath(userPath, defaultName string, enabled bool) string {
+	return resolvePathInDir(h.cfg.Service.ConfigsDir, userPath, defaultName, enabled)
+}
+
+func (h *hostImpl) AddHTTPCOption(o ...httpc.Option) {
+	h.opts.httpcOpts = append(h.opts.httpcOpts, o...)
+}
+
+func (h *hostImpl) UseFiber(mw ...fiber.Handler) {
+	h.opts.fiberMiddleware = append(h.opts.fiberMiddleware, mw...)
+}
+
+func (h *hostImpl) AddRunOption(o ...fibermap.RunOption) {
+	h.opts.runOpts = append(h.opts.runOpts, o...)
+}
+
+func (h *hostImpl) AddReadinessChecker(c ...fibermap.Checker) {
+	h.opts.readinessCheckers = append(h.opts.readinessCheckers, c...)
+}
+
+func (h *hostImpl) RegisterMiddlewareFactory(name string, f FactoryFunc) {
+	if h.opts.modFactories == nil {
+		h.opts.modFactories = map[string]FactoryFunc{}
+	}
+	h.opts.modFactories[name] = f
+}
+
+func (h *hostImpl) OnShutdown(fn func() error) {
+	if fn == nil {
+		return
+	}
+	h.opts.shutdownFns = append(h.opts.shutdownFns, fn)
+}
