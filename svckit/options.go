@@ -1,7 +1,6 @@
 package svckit
 
 import (
-	"context"
 	"io/fs"
 	"log/slog"
 	"strings"
@@ -16,21 +15,11 @@ import (
 	"github.com/theizzatbek/gokit/db"
 	"github.com/theizzatbek/gokit/fibermap"
 	"github.com/theizzatbek/gokit/fibermap/bind"
-	"github.com/theizzatbek/gokit/fibermap/dev"
 	"github.com/theizzatbek/gokit/fibermap/openapi"
 )
 
 // Option configures New beyond what Config covers.
 type Option func(*options)
-
-// cronJob is one accumulated WithCron registration. Unexported: the
-// scheduler that consumes this list is built later (New's Build
-// phase), so nothing outside this package needs the shape yet.
-type cronJob struct {
-	Name     string
-	Schedule string
-	Fn       func(context.Context) error
-}
 
 type options struct {
 	// core
@@ -41,6 +30,7 @@ type options struct {
 	dbOpts              []db.Option
 	skipAutoDBMetrics   bool
 	skipConnectRetry    bool
+	skipRuntimeMetrics  bool
 	dbDrainTimeout      time.Duration
 	migrationsFS        fs.FS
 	routesEnable        bool
@@ -52,12 +42,7 @@ type options struct {
 	skipSecurityHeaders bool
 	skipBearerLayer     bool
 	refreshGCInterval   time.Duration
-	cronJobs            []cronJob
-	subcommands         map[string]func(context.Context) error
 	preflightTimeout    time.Duration
-	devEnable           bool
-	devPrefix           string
-	devConfigOpts       []dev.ConfigOption
 	tlsCert             string
 	tlsKey              string
 
@@ -89,6 +74,20 @@ func WithLogger(l *slog.Logger) Option { return func(o *options) { o.logger = l 
 // WithMetrics overrides the default prometheus.NewRegistry().
 func WithMetrics(reg prometheus.Registerer) Option {
 	return func(o *options) { o.metrics = reg }
+}
+
+// WithoutRuntimeMetrics suppresses auto-registration of the Go
+// runtime and process collectors on the service registry. By default
+// New registers `collectors.NewGoCollector()` and
+// `collectors.NewProcessCollector(ProcessCollectorOpts{})` so a
+// scrape returns goroutine count, heap stats, GC pause histograms,
+// FD count, RSS, and CPU seconds out of the box.
+//
+// Useful when the caller already registered these collectors on the
+// shared registry (avoids prometheus.AlreadyRegisteredError) or when
+// the user wants the registry to contain only kit/app series.
+func WithoutRuntimeMetrics() Option {
+	return func(o *options) { o.skipRuntimeMetrics = true }
 }
 
 // WithValidator overrides the default request validator installed on
@@ -223,20 +222,19 @@ func WithoutSecurityHeaders() Option {
 	return func(o *options) { o.skipSecurityHeaders = true }
 }
 
-// WithSecurityHeaderOptions configures the auto-installed OWASP
-// security headers middleware. Forwards any
-// [fibermap.SecurityHeadersOption] — e.g.
-// [fibermap.WithHSTSIncludeSubdomains], [fibermap.WithCSP],
+// WithSecurityHeaders configures the auto-installed OWASP security
+// headers middleware. Forwards any [fibermap.SecurityHeadersOption]
+// — e.g. [fibermap.WithHSTSIncludeSubdomains], [fibermap.WithCSP],
 // [fibermap.WithoutHSTS]. The middleware is installed regardless;
 // pass [WithoutSecurityHeaders] instead to suppress it entirely.
-func WithSecurityHeaderOptions(opts ...fibermap.SecurityHeadersOption) Option {
+func WithSecurityHeaders(opts ...fibermap.SecurityHeadersOption) Option {
 	return func(o *options) { o.securityHeaderOpts = append(o.securityHeaderOpts, opts...) }
 }
 
-// WithoutBearerLayer skips installing auth.Bearer(BearerOptional) at
-// the fiber.App level. Only sensible if you have no auth or want to
+// WithoutBearerOptionalLayer skips installing auth.Bearer(BearerOptional)
+// at the fiber.App level. Only sensible if you have no auth or want to
 // orchestrate the layer yourself.
-func WithoutBearerLayer() Option {
+func WithoutBearerOptionalLayer() Option {
 	return func(o *options) { o.skipBearerLayer = true }
 }
 
@@ -330,43 +328,6 @@ func WithPreflightTimeout(d time.Duration) Option {
 	return func(o *options) { o.preflightTimeout = d }
 }
 
-// WithDevMode wires the kit's dev-only DX tools:
-//
-//   - HTML error pages with stack traces (on `Accept: text/html`)
-//   - /_dev/routes inspector — list every mounted route
-//   - /_dev/config inspector — effective env vars with secret
-//     redaction
-//
-// prefix is the URL prefix for the inspector endpoints. Pass "" for
-// the default "/_dev".
-//
-// SAFETY: this option is a no-op when Config.Service.Env != "dev".
-// Operators can pass it unconditionally; production deployments stay
-// safe by virtue of their ENV != "dev".
-func WithDevMode(prefix string, opts ...dev.ConfigOption) Option {
-	return func(o *options) {
-		o.devEnable = true
-		o.devPrefix = prefix
-		o.devConfigOpts = append(o.devConfigOpts, opts...)
-	}
-}
-
-// WithCron registers a recurring job. New starts the scheduler after
-// all subsystems are built; the scheduler runs the job on every tick
-// that schedule fires, on a single goroutine per job (overlapping
-// ticks SKIP — the in-progress run blocks the queued one).
-//
-//	svckit.WithCron("daily-rollup", "0 3 * * *", rollups.Run)
-//
-// schedule uses the standard 5-field cron format.
-func WithCron(name, schedule string, fn func(context.Context) error) Option {
-	return func(o *options) {
-		o.cronJobs = append(o.cronJobs, cronJob{
-			Name: name, Schedule: schedule, Fn: fn,
-		})
-	}
-}
-
 // WithRefreshGC schedules periodic garbage collection of expired
 // refresh tokens against the refresh store wired through Auth.
 // Without it, the underlying table grows forever — even though
@@ -403,40 +364,6 @@ func WithRefreshGC(interval time.Duration) Option {
 // process start.
 func WithMigrations(fsys fs.FS) Option {
 	return func(o *options) { o.migrationsFS = fsys }
-}
-
-// WithSubcommand registers a handler dispatched when os.Args[1]
-// matches name (case-sensitive, exact match). When the user invokes
-// `./mybinary <name>`, fn runs instead of Boot's default fn. Other
-// argument values (including no arguments) fall through to the
-// default.
-//
-// Multiple WithSubcommand calls accumulate. The same name registered
-// twice has last-write-wins semantics — callers should treat
-// duplicate names as a programmer error.
-//
-// fn receives the same signal-aware context Boot would have passed to
-// the default fn, so SIGINT / SIGTERM during a long-running seed /
-// migrate operation propagate cleanly.
-func WithSubcommand(name string, fn func(context.Context) error) Option {
-	return func(o *options) {
-		if o.subcommands == nil {
-			o.subcommands = make(map[string]func(context.Context) error)
-		}
-		o.subcommands[name] = fn
-	}
-}
-
-// BootSeed is a named alias for [WithSubcommand]. Identical semantics;
-// the alias signals intent at the call site (every kit-based service
-// eventually grows a `seed` subcommand for demo data / fixtures, and
-// the named form reads better than WithSubcommand("seed", ...) in
-// main.go).
-//
-// Use [WithSubcommand] directly for non-seed names (migrate, inspect,
-// schema-dump, etc).
-func BootSeed(name string, fn func(context.Context) error) Option {
-	return WithSubcommand(name, fn)
 }
 
 // WithDBDrainTimeout caps the wait for in-flight DB queries /
