@@ -43,7 +43,15 @@ type options struct {
 	securityHeaderOpts  []fibermap.SecurityHeadersOption
 	skipSecurityHeaders bool
 	skipBearerLayer     bool
+	skipLoggerInjector  bool
+	errorHandler        fiber.ErrorHandler
+	bodyLimit           int
 	refreshGCInterval   time.Duration
+	skipReadiness       bool
+	readinessPath       string
+	readinessTimeout    time.Duration
+	preflightEnable     bool
+	preflightPath       string
 	preflightTimeout    time.Duration
 	tlsCert             string
 	tlsKey              string
@@ -249,6 +257,63 @@ func WithoutBearerOptionalLayer() Option {
 	return func(o *options) { o.skipBearerLayer = true }
 }
 
+// WithoutLoggerInjector suppresses the auto-installed
+// [fibermap.LoggerInjector] middleware. By default New installs it at
+// the App level so handlers can call `fibermap.LoggerFrom(c)` and get
+// a *slog.Logger pre-bound with `method`, `path`, `request_id`,
+// `user_id` (when authenticated), and `route` (when set).
+//
+// Disable when:
+//   - You install your own request-scoped logger middleware.
+//   - You don't care about the per-request enrichment and want to
+//     keep the middleware chain minimal.
+func WithoutLoggerInjector() Option {
+	return func(o *options) { o.skipLoggerInjector = true }
+}
+
+// WithBodyLimit overrides Fiber's default request-body limit
+// (4 MiB) with the supplied byte count. Fiber returns 413
+// Request Entity Too Large when an inbound request exceeds the
+// limit — set this tight when the service only accepts small
+// JSON payloads to blunt accidental or malicious oversize POSTs.
+//
+//	svckit.WithBodyLimit(64 * 1024) // 64 KiB cap
+//
+// Pass 0 to keep Fiber's default. When the caller also supplies
+// a fiber.Config via [WithRunOptions] / [fibermap.WithFiberConfig],
+// the caller's config wins (it's applied later in the RunOption
+// chain).
+func WithBodyLimit(bytes int) Option {
+	return func(o *options) { o.bodyLimit = bytes }
+}
+
+// WithErrorHandler overrides the default fiber.Config.ErrorHandler.
+// The kit's default is [fibermap.ErrorHandler] (renders *errs.Error
+// returns as the kit's `{code, message, details[]}` JSON wire shape),
+// installed unconditionally regardless of [WithBodyLimit].
+//
+// Pass a wrapper to layer cross-cutting behaviour on top of the kit
+// default — the typical case is sentrykit 5xx auto-capture:
+//
+//	svc, _ := svckit.New[AppCtx, Claims](ctx, cfg,
+//	    svckit.WithErrorHandler(
+//	        sentrykit.WrapErrorHandler(fibermap.ErrorHandler(logger))))
+//
+// `sentrykit.WrapErrorHandler` reports the error to the per-request
+// Sentry hub BEFORE delegating to the supplied fibermap.ErrorHandler
+// for the actual HTTP response. Without this option, the kit's
+// auto-installed default ErrorHandler runs directly — *errs.Error
+// still maps to the right JSON shape, but Sentry sees nothing.
+//
+// Pass nil to keep the kit default (equivalent to never calling
+// WithErrorHandler at all). Caller-supplied [fibermap.WithFiberConfig]
+// via [WithRunOptions] still wins over this option (it's applied
+// later in the RunOption chain) — use either WithErrorHandler OR a
+// custom fiber.Config, not both.
+func WithErrorHandler(h fiber.ErrorHandler) Option {
+	return func(o *options) { o.errorHandler = h }
+}
+
 // WithHTTPCOptions appends to the httpc options applied by New
 // (logger + metrics are already auto-applied).
 func WithHTTPCOptions(opts ...httpc.Option) Option {
@@ -320,6 +385,34 @@ func WithOpenAPI(opts ...openapi.Option) Option {
 	}
 }
 
+// WithoutReadiness suppresses the auto-installed /readyz endpoint.
+// By default New auto-mounts /readyz, which pings every checker in
+// [Service.readinessCheckers] (DB plus whatever mods or
+// [WithReadinessChecker] added) in parallel — pass this option when
+// the deployment uses a custom readiness probe or doesn't want one.
+//
+// Liveness (/healthz) is unaffected — it always stays on unless
+// explicitly disabled via fibermap.WithoutHealthCheck through
+// [WithRunOptions].
+func WithoutReadiness() Option {
+	return func(o *options) { o.skipReadiness = true }
+}
+
+// WithReadinessPath overrides the default "/readyz" mount point.
+// Set to a custom path when an upstream proxy or LB expects a
+// specific readiness URL.
+func WithReadinessPath(path string) Option {
+	return func(o *options) { o.readinessPath = path }
+}
+
+// WithReadinessTimeout sets the deadline for the full set of
+// checkers run by the auto-mounted /readyz handler. Each Checker
+// receives this ctx, so a slow checker doesn't block the others
+// indefinitely. 0 → fibermap's built-in default (5s).
+func WithReadinessTimeout(d time.Duration) Option {
+	return func(o *options) { o.readinessTimeout = d }
+}
+
 // WithReadinessChecker appends app-level checkers to the auto-wired
 // subsystem set. Each checker must satisfy `fibermap.Checker` —
 // `Name() string` + `Check(ctx) error`. Use for migration probes,
@@ -337,6 +430,24 @@ func WithOpenAPI(opts ...openapi.Option) Option {
 // when it matters to an operator.
 func WithReadinessChecker(c ...fibermap.Checker) Option {
 	return func(o *options) { o.readinessCheckers = append(o.readinessCheckers, c...) }
+}
+
+// WithPreflightEndpoint mounts the `/preflight` HTTP endpoint that
+// renders [PreflightResult] as JSON (200 on success, 503 on any
+// failure). Useful for ops smoke-tests and CI pipelines that need an
+// "is staging actually ready" gate before running integration tests.
+//
+// Path is configurable; pass "" to use the default "/preflight".
+//
+// Unlike `/readyz` (auto-mounted, K8s readiness probe), preflight is
+// opt-in — it's a debug / ops surface, not part of the request path.
+// Don't wire it as a K8s readinessProbe unless you've raised the
+// probe timeout to accommodate slower checks.
+func WithPreflightEndpoint(path string) Option {
+	return func(o *options) {
+		o.preflightEnable = true
+		o.preflightPath = path
+	}
 }
 
 // WithPreflightTimeout caps how long Preflight waits on the slowest

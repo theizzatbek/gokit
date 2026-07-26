@@ -75,10 +75,11 @@ func (s *Service[T, C]) mountOpenAPI(routesPath string) error {
 }
 
 // runOptions assembles the production-ops fibermap.RunOption bundle:
-// addr, request logging, metrics, health/readiness endpoints, panic
-// recovery, the app-level fiber config and middleware chain, TLS, and
-// whatever run options mods contributed via Host.AddRunOption or the
-// caller via [WithRunOptions] — both accumulate into s.opts.runOpts.
+// addr, request logging, metrics, health/readiness/preflight
+// endpoints, panic recovery, the app-level fiber config and
+// middleware chain, TLS, and whatever run options mods contributed
+// via Host.AddRunOption or the caller via [WithRunOptions] — both
+// accumulate into s.opts.runOpts.
 func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 	out := []fibermap.RunOption{
 		fibermap.WithAddr(s.cfg.Service.Addr),
@@ -87,9 +88,29 @@ func (s *Service[T, C]) runOptions() []fibermap.RunOption {
 		fibermap.WithHealthCheck("/healthz"),
 		fibermap.WithRecover(s.logger),
 	}
-	checkers := s.readinessCheckers()
-	out = append(out, fibermap.WithReadiness("/readyz", checkers...))
+	if !s.opts.skipReadiness {
+		path := s.opts.readinessPath
+		if path == "" {
+			path = "/readyz"
+		}
+		checkers := s.readinessCheckers()
+		out = append(out, fibermap.WithReadiness(path, checkers...))
+		if s.opts.readinessTimeout > 0 {
+			out = append(out, fibermap.WithReadinessOpts(
+				fibermap.WithReadinessTimeout(s.opts.readinessTimeout)))
+		}
+	}
 	s.mountDevTools()
+	if s.opts.preflightEnable {
+		path := s.opts.preflightPath
+		if path == "" {
+			path = "/preflight"
+		}
+		handler := s.preflightHandler()
+		out = append(out, fibermap.WithConfigureApp(func(app *fiber.App) {
+			app.Get(path, handler)
+		}))
+	}
 	out = append(out, fibermap.WithFiberConfig(s.buildFiberConfig()))
 	// Route /metrics through the unified service registry when the
 	// configured Registerer is also a Gatherer (the default
@@ -163,15 +184,33 @@ func (s *Service[T, C]) appLevelMiddleware() []fiber.Handler {
 		// auth's Principal type.
 		fiberMW = append(fiberMW, s.authSubjectBridge())
 	}
-	fiberMW = append(fiberMW, fibermap.LoggerInjector(s.logger))
+	if !s.opts.skipLoggerInjector {
+		fiberMW = append(fiberMW, fibermap.LoggerInjector(s.logger))
+	}
 	fiberMW = append(fiberMW, s.opts.fiberMiddleware...)
 	return fiberMW
 }
 
 // buildFiberConfig assembles the fiber.Config used by every
-// Service.Run. The ErrorHandler is wired unconditionally so callers
-// returning *errs.Error from handlers always get typed `{code,
-// message, details[]}` JSON.
+// Service.Run, regardless of caller-passed options. The ErrorHandler
+// is wired unconditionally so callers returning *errs.Error from
+// handlers always get typed `{code, message, details[]}` JSON even
+// when [WithBodyLimit] is not set.
+//
+// ErrorHandler precedence: [WithErrorHandler] override wins when
+// non-nil; otherwise the kit installs [fibermap.ErrorHandler] over
+// s.logger.
+//
+// BodyLimit defaults to fiber's own default (4 MiB) — only overridden
+// when [WithBodyLimit] supplied a positive value.
 func (s *Service[T, C]) buildFiberConfig() fiber.Config {
-	return fiber.Config{ErrorHandler: fibermap.ErrorHandler(s.logger)}
+	errHandler := s.opts.errorHandler
+	if errHandler == nil {
+		errHandler = fibermap.ErrorHandler(s.logger)
+	}
+	cfg := fiber.Config{ErrorHandler: errHandler}
+	if s.opts.bodyLimit > 0 {
+		cfg.BodyLimit = s.opts.bodyLimit
+	}
+	return cfg
 }

@@ -42,7 +42,8 @@ type PreflightCheck struct {
 // S3 HEAD probe).
 //
 // Call from main() right after [New] and before [Run] to fail-fast on
-// misconfiguration.
+// misconfiguration. Or wire as the `/preflight` HTTP endpoint via
+// [WithPreflightEndpoint] for ops smoke-tests and CI gates.
 //
 // The returned PreflightResult is always populated, success or
 // failure, so callers can log/render the full per-check breakdown
@@ -119,11 +120,9 @@ func (s *Service[T, C]) preflightResult(ctx context.Context) PreflightResult {
 // pulls the pod from rotation if this is also wired as a K8s
 // readinessProbe.
 //
-// Not mounted automatically by Run — svckit has no
-// WithPreflightEndpoint-equivalent option yet (Task 3 deliberately
-// did not carry it over). Kept ready for a future option to wire via
-// fibermap.WithConfigureApp; today [Service.Preflight] is the only
-// exposed entry point.
+// Mounted by runOptions when [WithPreflightEndpoint] was passed; off
+// by default (see [Service.Preflight] for the always-available
+// programmatic entry point).
 func (s *Service[T, C]) preflightHandler() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		res := s.preflightResult(c.UserContext())
