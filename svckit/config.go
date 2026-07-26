@@ -32,12 +32,14 @@ type Config struct {
 // ServiceConfig — server + logging knobs.
 //
 // NodeName identifies the running instance in multi-node deployments;
-// it defaults to os.Hostname() when unset and flows to
-// natsclient.Config.Name (when NATS.Name is not explicit) and to slog
-// default attrs as "node". ServerGroup labels a cluster of nodes that
-// share work via the same queue groups; when set, natsmap auto-derived
-// subscriber queue groups are suffixed with this value and the logger
-// gains a "server_group" default attr.
+// it defaults to os.Hostname() when unset, flows to slog default
+// attrs as "node", and is exposed to mods via Host.NodeName(). Mods
+// that need per-node identity (e.g. a NATS connection name) read it
+// from there instead of the core knowing about them. ServerGroup
+// labels a cluster of nodes that share work; it flows to slog default
+// attrs as "server_group" and is exposed to mods via
+// Host.ServerGroup() for their own grouping needs (e.g. queue-group
+// suffixes).
 type ServiceConfig struct {
 	Addr        string `env:"ADDR"         envDefault:":3000"`
 	LogLevel    string `env:"LOG_LEVEL"    envDefault:"info"`
@@ -105,7 +107,7 @@ type AuthConfig struct {
 	//
 	// Encoding: standard or URL-safe base64 (padded or raw — every
 	// flavour accepted). Decoded bytes MUST be ≥ 32 bytes (HMAC-
-	// SHA256 best practice). service.New fails with
+	// SHA256 best practice). Core setup fails with
 	// *errs.Error{Code: CodeAuthInvalidAPIKeyHashSecret} when the
 	// env / config string fails to decode or the decoded length is
 	// short.
@@ -124,10 +126,10 @@ type RoutesConfig struct {
 	Path    string `env:"PATH"`
 }
 
-// Validate проверяет то, что ядро может проверить до сборки.
-// Кросс-проверки подсистем ушли в моды вместе с подсистемами:
-// «natsmap требует NATS» больше не существует как класс ошибки,
-// потому что и то и другое живёт в одном моде.
+// Validate checks what the core can check before Build. Cross-
+// subsystem checks moved to the mods along with the subsystems: "natsmap
+// requires NATS" no longer exists as an error class, because both now
+// live in the same mod.
 func (c Config) Validate() error {
 	if c.Auth.PrivateKeyPEM != "" && c.DB.User == "" {
 		return xerrs.Validation(CodeAuthNeedsDB,

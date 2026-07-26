@@ -1,20 +1,21 @@
-// Package svckit — модульное ядро сервиса.
+// Package svckit — the modular service core.
 //
-// Ядро строит DB, Auth, HTTP-клиент и fibermap-движок. Про
-// опциональные подсистемы (S3, Redis, NATS, OTel, …) оно не знает
-// ничего: те живут в модах под svckit/mods/ и попадают в бинарь
-// только когда приложение упомянуло мод в main. В этом и смысл
-// пакета — линкер выбрасывает то, что недостижимо.
+// The core builds DB, Auth, an HTTP client and the fibermap engine.
+// It knows nothing about optional subsystems (S3, Redis, NATS, OTel,
+// …): those live in mods under svckit/mods/ and only end up in the
+// binary when the application referenced the mod from main. That is
+// the whole point of the package — the linker drops what is
+// unreachable.
 //
-// Жизненный цикл:
+// Lifecycle:
 //
-//	Setup(моды) → логгер → DB → migrate → Auth → HTTPC
-//	    → Build(моды) → Engine → auth-фабрики → Wire(моды) → cron
+//	Setup(mods) → logger → DB → migrate → Auth → HTTPC
+//	    → Build(mods) → Engine → auth factories → Wire(mods) → cron
 //
-// Мод реализует Mod плюс те из Setuper / Builder / Wirer, что ему
-// нужны. Освобождение ресурсов — через Host.OnShutdown, в порядке
-// LIFO относительно построения.
+// A mod implements Mod plus whichever of Setuper / Builder / Wirer it
+// needs. Resource cleanup goes through Host.OnShutdown, LIFO relative
+// to construction order.
 //
-// Пакет service (v1) остаётся рабочим: он собирает все моды сразу и
-// потому весит столько же, сколько весил.
+// The service package (v1) stays functional: it wires up every mod
+// unconditionally, so it keeps the binary size it always had.
 package svckit

@@ -1,44 +1,51 @@
 package svckit
 
-// Стабильные Code-константы ядра. Коды модов живут в пакетах модов —
-// ядро их не знает и не перечисляет.
+// Stable Code constants for the core. Mod-specific codes live in the
+// mod packages — the core does not know about them and does not list
+// them here.
 const (
-	// CodeAuthNeedsDB — Config.Auth.PrivateKeyPEM задан, но DB нет.
+	// CodeAuthNeedsDB — Config.Auth.PrivateKeyPEM is set but DB is not.
 	CodeAuthNeedsDB = "svckit_auth_needs_db"
 
-	// CodeTLSConfigIncomplete — задан ровно один из TLS_CERT_FILE / TLS_KEY_FILE.
+	// CodeTLSConfigIncomplete — exactly one of TLS_CERT_FILE / TLS_KEY_FILE is set.
 	CodeTLSConfigIncomplete = "svckit_tls_config_incomplete"
 
-	// CodeModDuplicate — два мода вернули одинаковый Name(), либо Name() пуст.
+	// CodeModDuplicate — two mods returned the same Name(), or Name() is empty.
 	CodeModDuplicate = "svckit_mod_duplicate"
 
-	// CodeModSetupFailed — мод вернул ошибку из фазы Setup.
+	// CodeModSetupFailed — a mod returned an error from its Setup phase.
 	CodeModSetupFailed = "svckit_mod_setup_failed"
 
-	// CodeModBuildFailed — мод вернул ошибку из фазы Build.
+	// CodeModBuildFailed — a mod returned an error from its Build phase.
 	CodeModBuildFailed = "svckit_mod_build_failed"
 
-	// CodeModWireFailed — мод вернул ошибку из фазы Wire.
+	// CodeModWireFailed — a mod returned an error from its Wire phase.
 	CodeModWireFailed = "svckit_mod_wire_failed"
 
-	// CodeDBConnectFailed — db.Connect не смог подключиться.
+	// CodeDBConnectFailed — db.Connect could not connect.
 	CodeDBConnectFailed = "svckit_db_connect_failed"
 
-	// CodeMigrateFailed — миграции не проехали.
+	// CodeMigrateFailed — migrations did not apply cleanly.
 	CodeMigrateFailed = "svckit_migrate_failed"
 
-	// CodeAuthInvalidKey — auth.LoadKeysFromPEM / auth.New отвергли ключ.
+	// CodeAuthInvalidKey — auth.LoadKeysFromPEM / auth.New rejected the key.
 	CodeAuthInvalidKey = "svckit_auth_invalid_key"
 
-	// CodeHTTPCNewFailed — httpc.New вернул ошибку.
+	// CodeAuthInvalidAPIKeyHashSecret — Config.Auth.APIKeyHashSecret failed
+	// to decode as base64, or decoded to fewer than the required bytes.
+	// Set by decodeAPIKeyHashSecret, ported from service/apikey_secret.go
+	// in Task 5; declared here now so the copied file compiles unmodified.
+	CodeAuthInvalidAPIKeyHashSecret = "svckit_auth_invalid_apikey_hash_secret"
+
+	// CodeHTTPCNewFailed — httpc.New returned an error.
 	CodeHTTPCNewFailed = "svckit_httpc_new_failed"
 
-	// CodeRoutesYAMLNotFound — routes.yaml включён, но файла нет.
+	// CodeRoutesYAMLNotFound — routes.yaml is enabled but the file is missing.
 	CodeRoutesYAMLNotFound = "svckit_routes_yaml_not_found"
 
-	// CodeExtraValidatorRegister — WithExtraValidators не смог зарегистрировать тег.
+	// CodeExtraValidatorRegister — WithExtraValidators failed to register a tag.
 	CodeExtraValidatorRegister = "svckit_extra_validator_register"
 
-	// CodePreflightFailed — хотя бы одна preflight-проверка упала.
+	// CodePreflightFailed — at least one preflight check failed.
 	CodePreflightFailed = "svckit_preflight_failed"
 )

@@ -21,7 +21,7 @@ func TestConfigValidate_AuthNeedsDB(t *testing.T) {
 
 func TestConfigValidate_TLSHalfConfigured(t *testing.T) {
 	cfg := Config{}
-	cfg.Service.TLSCertFile = "cert.pem" // ключ не задан
+	cfg.Service.TLSCertFile = "cert.pem" // key not set
 
 	err := cfg.Validate()
 
