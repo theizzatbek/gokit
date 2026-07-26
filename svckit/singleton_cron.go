@@ -12,11 +12,11 @@ import (
 const (
 	// CodeSingletonCronNeedsDB — WithSingletonCron requires
 	// Config.DB to be configured (advisory locks live in Postgres).
-	CodeSingletonCronNeedsDB = "service_singleton_cron_needs_db"
+	CodeSingletonCronNeedsDB = "svckit_singleton_cron_needs_db"
 
 	// CodeSingletonCronLockAcquire — pg_try_advisory_lock returned an
 	// unexpected error (not "false" — that's the expected skip path).
-	CodeSingletonCronLockAcquire = "service_singleton_cron_lock_acquire"
+	CodeSingletonCronLockAcquire = "svckit_singleton_cron_lock_acquire"
 )
 
 // WithSingletonCron is [WithCron] with pg_try_advisory_lock-based

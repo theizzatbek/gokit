@@ -37,7 +37,7 @@ type CronJob struct {
 
 // CodeCronInvalidSchedule — the parser rejected the cron expression
 // at scheduler boot.
-const CodeCronInvalidSchedule = "service_cron_invalid_schedule"
+const CodeCronInvalidSchedule = "svckit_cron_invalid_schedule"
 
 // WithCron registers a recurring job. New starts the scheduler after
 // all subsystems are built; the scheduler runs the job on every tick
@@ -54,22 +54,6 @@ func WithCron(name, schedule string, fn JobFn) Option {
 		o.cronJobs = append(o.cronJobs, CronJob{
 			Name: name, Schedule: schedule, Fn: fn,
 		})
-	}
-}
-
-// WithCronSlug overrides the Sentry Crons slug for a job. Default
-// is the job name with non-identifier characters replaced by `-`
-// (e.g. "Daily Rollup" → "daily-rollup"). Use this when multiple
-// services share one Sentry project and you need explicit
-// disambiguation: "orders-daily-rollup", "payments-daily-rollup".
-//
-// No effect unless [WithSentry] is also wired.
-func WithCronSlug(jobName, slug string) Option {
-	return func(o *options) {
-		if o.cronSlugs == nil {
-			o.cronSlugs = map[string]string{}
-		}
-		o.cronSlugs[jobName] = slug
 	}
 }
 
@@ -233,47 +217,4 @@ func (s *Service[T, C]) buildCron(ctx context.Context) error {
 		return nil
 	})
 	return nil
-}
-
-// cronSlug returns the Sentry Crons slug for a job — either the
-// caller-supplied override or a slugified version of the job name.
-func (s *Service[T, C]) cronSlug(jobName string) string {
-	if s.opts.cronSlugs != nil {
-		if v, ok := s.opts.cronSlugs[jobName]; ok && v != "" {
-			return v
-		}
-	}
-	return slugify(jobName)
-}
-
-// slugify converts an arbitrary label into a Sentry-friendly slug
-// — lowercase, with non-[a-z0-9] runs collapsed to single dashes.
-// Conservative output so the slug stays stable across Sentry's
-// own validation rules.
-func slugify(s string) string {
-	out := make([]byte, 0, len(s))
-	prevDash := true
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c >= 'A' && c <= 'Z':
-			out = append(out, c+32)
-			prevDash = false
-		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'):
-			out = append(out, c)
-			prevDash = false
-		default:
-			if !prevDash {
-				out = append(out, '-')
-				prevDash = true
-			}
-		}
-	}
-	for len(out) > 0 && out[len(out)-1] == '-' {
-		out = out[:len(out)-1]
-	}
-	if len(out) == 0 {
-		return "job"
-	}
-	return string(out)
 }

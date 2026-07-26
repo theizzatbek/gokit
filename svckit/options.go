@@ -50,7 +50,6 @@ type options struct {
 
 	// cron.go / singleton_cron.go
 	cronJobs   []CronJob
-	cronSlugs  map[string]string
 	cronParser cron.Parser
 
 	// devmode.go
