@@ -50,8 +50,16 @@ type PreflightCheck struct {
 // either way. err is nil when every check passed; otherwise it is a
 // [*errs.Error] of CodePreflightFailed describing the first failing
 // check.
+//
+// Signature note for the future service/ facade: v1's
+// service.Preflight returns error only, with the structured result
+// exposed separately via service.PreflightResult(ctx) PreflightResult.
+// This method folds both into one call and one return pair instead —
+// deliberately not matched to v1, see CHANGELOG. [Service.PreflightResult]
+// below is the one v1-shaped piece a facade needs to delegate to
+// verbatim.
 func (s *Service[T, C]) Preflight(ctx context.Context) (PreflightResult, error) {
-	res := s.preflightResult(ctx)
+	res := s.PreflightResult(ctx)
 	if res.Status != "ok" {
 		// First failure — useful for a one-line stderr summary
 		// without the caller having to walk PreflightResult.Checks.
@@ -67,13 +75,17 @@ func (s *Service[T, C]) Preflight(ctx context.Context) (PreflightResult, error) 
 	return res, nil
 }
 
-// preflightResult runs every checker concurrently under
-// preflightTimeout (default 10s) and returns the structured result.
-// Each check's latency is recorded individually.
+// PreflightResult runs every checker concurrently under
+// preflightTimeout (default 10s) and returns the structured result
+// without the error wrapping [Service.Preflight] adds. Exported (v1
+// exposes the identically-named/-shaped method) so a future service/
+// facade over svckit can delegate in two lines instead of
+// reimplementing the concurrent-checker fan-out.
 //
-// Safe to call repeatedly; checks may have their own internal state
-// (connection pool warmup) that benefits from warm runs vs cold.
-func (s *Service[T, C]) preflightResult(ctx context.Context) PreflightResult {
+// Each check's latency is recorded individually. Safe to call
+// repeatedly; checks may have their own internal state (connection
+// pool warmup) that benefits from warm runs vs cold.
+func (s *Service[T, C]) PreflightResult(ctx context.Context) PreflightResult {
 	checkers := s.readinessCheckers()
 	res := PreflightResult{Status: "ok", Checks: make([]PreflightCheck, len(checkers))}
 	if len(checkers) == 0 {
@@ -125,7 +137,7 @@ func (s *Service[T, C]) preflightResult(ctx context.Context) PreflightResult {
 // programmatic entry point).
 func (s *Service[T, C]) preflightHandler() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		res := s.preflightResult(c.UserContext())
+		res := s.PreflightResult(c.UserContext())
 		status := fiber.StatusOK
 		if res.Status != "ok" {
 			status = fiber.StatusServiceUnavailable
