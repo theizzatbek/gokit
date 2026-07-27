@@ -33,10 +33,20 @@ func WithDevMode(prefix string, opts ...dev.ConfigOption) Option {
 // mountDevTools registers the dev inspectors when ENV=dev. Wraps
 // the fiber error handler with [dev.ErrorHandler] so HTML clients
 // get rendered error pages.
+//
+// Guards against being called more than once: it appends to
+// s.opts.runOpts, a getter-with-a-side-effect shape that runOptions()
+// currently only invokes once per Run. Nothing calls Run twice today,
+// but the guard costs one bool and turns "duplicate dev routes" from
+// a latent trap into an impossible outcome instead of a documented one.
 func (s *Service[T, C]) mountDevTools() {
+	if s.devToolsMounted {
+		return
+	}
 	if !s.opts.devEnable {
 		return
 	}
+	s.devToolsMounted = true
 	if s.cfg.Service.Env != "dev" {
 		if s.logger != nil {
 			s.logger.Warn("svckit: WithDevMode requested but ENV != dev — dev inspectors not mounted",

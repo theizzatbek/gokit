@@ -2,34 +2,6 @@ package svckit
 
 import "testing"
 
-func TestResolvePath_OverrideWins(t *testing.T) {
-	got := resolvePath("custom.yaml", "default.yaml", true)
-	if want := "custom.yaml"; got != want {
-		t.Fatalf("got %q want %q", got, want)
-	}
-}
-
-func TestResolvePath_EnabledOnly_UsesDefault(t *testing.T) {
-	got := resolvePath("", "default.yaml", true)
-	if want := "default.yaml"; got != want {
-		t.Fatalf("got %q want %q", got, want)
-	}
-}
-
-func TestResolvePath_PathOnly_BackwardCompat(t *testing.T) {
-	got := resolvePath("explicit.yaml", "default.yaml", false)
-	if want := "explicit.yaml"; got != want {
-		t.Fatalf("got %q want %q (Path-set without Enabled must still trigger)", got, want)
-	}
-}
-
-func TestResolvePath_NeitherSet_ReturnsEmpty(t *testing.T) {
-	got := resolvePath("", "default.yaml", false)
-	if got != "" {
-		t.Fatalf("got %q want empty", got)
-	}
-}
-
 func TestResolvePathInDir_OverridePassesThrough(t *testing.T) {
 	// Explicit per-subsystem Path wins even when ConfigsDir is set —
 	// operators expect their literal path to be honoured.
@@ -67,5 +39,15 @@ func TestResolvePathInDir_Disabled_NoConfigsDir(t *testing.T) {
 	got := resolvePathInDir("configs", "", "routes.yaml", false)
 	if got != "" {
 		t.Fatalf("got %q want empty (disabled, no userPath)", got)
+	}
+}
+
+func TestResolvePathInDir_PathOnly_BackwardCompat(t *testing.T) {
+	// A non-empty userPath triggers the subsystem even when enabled is
+	// false — preserves the original "Path-presence is the opt-in"
+	// behaviour regardless of ConfigsDir.
+	got := resolvePathInDir("configs", "explicit.yaml", "default.yaml", false)
+	if want := "explicit.yaml"; got != want {
+		t.Fatalf("got %q want %q (Path-set without Enabled must still trigger)", got, want)
 	}
 }

@@ -22,10 +22,18 @@ type ModStatus struct {
 // collectModStatus snapshots the slice once at the end of New: after
 // that, mod state doesn't change, just like the fields didn't change
 // in v1.
+//
+// Enabled defaults to true — a mod reaching this point survived every
+// phase without erroring — but a mod that implements [Enabler] (e.g.
+// s3mod, which comes up disabled-but-not-failed on an empty Bucket)
+// gets to report its own, more precise answer instead.
 func (s *Service[T, C]) collectModStatus() {
 	s.modStat = make([]ModStatus, 0, len(s.mods))
 	for _, m := range s.mods {
 		ms := ModStatus{Name: m.Name(), Enabled: true}
+		if em, ok := m.(Enabler); ok {
+			ms.Enabled = em.Enabled()
+		}
 		if st, ok := m.(Statuser); ok {
 			ms.Detail = st.Status()
 		}

@@ -101,9 +101,11 @@ type AuthConfig struct {
 	// APIKeyHashSecret is the HMAC pepper auth.APIKey middleware
 	// uses to derive `keyHash` from a plain key before calling
 	// KeyStore.Lookup. Required only when the service wires API-key
-	// auth (auth/fibermount.MountAPIKeyFactory or a manual
-	// auth.APIKey middleware install); safe to omit for pure-JWT
-	// services.
+	// auth (auth/authmount.MountAPIKeyFactory — the core's own
+	// mountAuthMiddleware uses this package, not auth/fibermount, to
+	// avoid dragging clients/ratelimit + clients/redis into svckit —
+	// or a manual auth.APIKey middleware install); safe to omit for
+	// pure-JWT services.
 	//
 	// Encoding: standard or URL-safe base64 (padded or raw — every
 	// flavour accepted). Decoded bytes MUST be ≥ 32 bytes (HMAC-

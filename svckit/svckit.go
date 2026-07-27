@@ -40,6 +40,10 @@ type Service[T any, C any] struct {
 	// scheduler is non-nil when WithCron jobs were registered.
 	scheduler *scheduler
 
+	// devToolsMounted guards mountDevTools against running twice — see
+	// that method's doc.
+	devToolsMounted bool
+
 	// runCtx is the long-lived context for background workers.
 	// Cancelled at the head of Close, before the OnShutdown chain.
 	runCtx    context.Context

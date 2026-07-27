@@ -16,6 +16,9 @@
 // needs. Resource cleanup goes through Host.OnShutdown, LIFO relative
 // to construction order.
 //
-// The service package (v1) stays functional: it wires up every mod
-// unconditionally, so it keeps the binary size it always had.
+// The service package (v1) stays functional and unchanged: it doesn't
+// know about mods at all — it calls every optional subsystem's
+// constructor directly (buildS3, buildRedis, buildNATS, ...), so it
+// keeps the binary size it always had regardless of what an
+// individual service actually configures.
 package svckit

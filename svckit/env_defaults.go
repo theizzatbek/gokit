@@ -24,13 +24,24 @@ var telemetryEnvs = []struct {
 // operationally but not connected in code. The logger isn't built yet
 // at this point, so warnings go into options — New flushes them right
 // after the logger is assembled.
+//
+// OTEL_SDK_DISABLED=true is the W3C-standard kill switch (v1 honours
+// it in otelkit.Setup) — an operator who deliberately disabled OTel
+// this way but left OTEL_EXPORTER_OTLP_ENDPOINT in the environment
+// (e.g. a shared base .env) should NOT get a false "telemetry will not
+// be sent" warning on every boot. The switch is OTel-specific — it
+// must not silence the unrelated SENTRY_DSN warning.
 func warnOrphanedEnv(o *options) {
+	otelDisabled := strings.EqualFold(os.Getenv("OTEL_SDK_DISABLED"), "true")
 	connected := make(map[string]struct{}, len(o.mods))
 	for _, m := range o.mods {
 		connected[m.Name()] = struct{}{}
 	}
 	seen := make(map[string]struct{}, len(telemetryEnvs))
 	for _, te := range telemetryEnvs {
+		if te.modName == "otel" && otelDisabled {
+			continue
+		}
 		if os.Getenv(te.env) == "" {
 			continue
 		}

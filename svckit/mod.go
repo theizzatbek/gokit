@@ -45,10 +45,22 @@ type Statuser interface {
 	Status() any
 }
 
+// Enabler is an optional refinement of ModStatus.Enabled. A mod that
+// can come up disabled without erroring (e.g. s3mod with an empty
+// Bucket — Build returns nil, not an error) implements this so
+// Status() reports the same "enabled" the mod's own Enabled() method
+// would. Mods without it default to Enabled: true — the core has no
+// other signal, and every mod that reached Wire without failing a
+// phase counts as "up" absent evidence otherwise.
+type Enabler interface {
+	Enabled() bool
+}
+
 // FactoryFunc is the non-generic shape of a YAML middleware factory.
 // The core wraps it into fibermap.MiddlewareFunc[T], plugging in
-// c.Ctx — see registerModFactories in engine.go. The mod receives a
-// bare *fiber.Ctx and knows nothing about the type parameter T.
+// c.Ctx — see registerModFactories in engine_factories.go. The mod
+// receives a bare *fiber.Ctx and knows nothing about the type
+// parameter T.
 type FactoryFunc func(args []string) (func(*fiber.Ctx) error, error)
 
 // validateMods checks the set before anything is built: an empty
