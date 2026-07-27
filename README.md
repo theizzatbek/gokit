@@ -45,7 +45,8 @@ audit, schedulers, file uploads, webhook'и.
 | [`auth/refreshredis/`](auth/refreshredis/README.md) | Redis-backed `RefreshStore` (Lua-atomic). |
 | [`auth/apikeypg/`](auth/apikeypg/README.md) | Postgres-backed API-key store. |
 | [`auth/sessions/`](auth/sessions/README.md) | Server-side cookie sessions с revocation. |
-| [`auth/fibermount/`](auth/fibermount/README.md) | Bridge между `auth` и `fibermap` middleware factories. |
+| [`auth/fibermount/`](auth/fibermount/README.md) | Bridge между `auth` и `fibermap` middleware factories (включая `rate_limit_redis`/`idempotency_key` — тянет Redis). |
+| [`auth/authmount/`](auth/authmount/README.md) | Redis-свободное подмножество `auth/fibermount` — core factory middleware (`bearer`/`require_scope`/`require_role`/`api_key`/…) без `clients/redis` в графе зависимостей. Используется `svckit` напрямую. |
 
 ### Исходящий HTTP
 
@@ -123,7 +124,8 @@ audit, schedulers, file uploads, webhook'и.
 
 | Пакет | Что делает |
 |---|---|
-| [`service/`](service/README.md) | `service.New(ctx, cfg, opts...)` всё-в-одном wiring. Auto-detect optionality + startup log + Status() introspection. |
+| [`service/`](service/README.md) | `service.New(ctx, cfg, opts...)` всё-в-одном wiring. Auto-detect optionality + startup log + Status() introspection. Всегда линкует все опциональные подсистемы — 39 MB независимо от того, что сервис реально использует. |
+| [`svckit/`](svckit/README.md) | `svckit.New(ctx, cfg, opts...)` — модульное ядро: DB/Auth/HTTPC/Engine в ядре, S3/Redis/NATS/OTel/Sentry/… в подключаемых `Mod`'ах под `svckit/mods/`. Не подключил мод — не заплатил за его SDK в бинаре (20.38 MB без модов против 39.03 MB у `service/`). |
 
 ## Decision guide — "мне нужно X"
 
@@ -163,12 +165,15 @@ clients/webhooks                            → errs + db + clients/httpc
 auth                                        → errs + crypto + jwt + fiber
 auth/refreshpg, auth/apikeypg, auth/sessions → auth + db
 auth/refreshredis                           → auth + go-redis
-auth/fibermount                             → auth + fibermap
+auth/authmount                              → auth + fibermap
+auth/fibermount                             → auth/authmount + clients/ratelimit (+ go-redis транзитивно)
 fibermap                                    → errs + fiber
 fibermap/uploadguard                        → fibermap + clients/s3
 otelkit, sentrykit, runbook                 → fibermap + provider SDK
 audit                                       → errs + db (audit/auditpg)
 service                                     → почти всё (это и есть all-in-one)
+svckit                                      → fibermap + errs + db + auth/authmount + clients/httpc — ничего опционального
+svckit/mods/s3mod                           → svckit + clients/s3
 ```
 
 Корневой пакет `gokit` пустой — без экспортируемых символов. Импорт одного

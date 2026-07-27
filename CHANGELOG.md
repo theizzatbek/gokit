@@ -49,6 +49,41 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
   `cronmapmod`, `apimapmod`, `webhooksmod`) and the `service/`-facade
   migration are follow-up work; `service/` itself is unchanged by
   this round.
+
+  Fix wave from the first whole-branch review, before merge: `Host`
+  grew three more methods the next mods in line need —
+  `HTTPC() *http.Client` (webhooksmod's delivery transport, shared
+  with the rest of the kit's observability/breaker/bulkhead stack
+  instead of a parallel client), `Context() context.Context` (the
+  service's long-lived `runCtx` — cronmap's background runtime needs
+  exactly this ctx, not the boot ctx passed into Setup/Build), and
+  `WrapCronJob(func(JobFn) JobFn)` (lets sentrymod re-wrap every
+  core-scheduled cron tick and the refresh-GC ticker with
+  `sentrykit.MonitorCronWithConfig`, restoring v1's per-tick
+  monitoring without the core depending on Sentry). `Service` gained
+  the `MustDB`/`OptionalDB`, `MustAuth`/`OptionalAuth`,
+  `MustHasher`/`OptionalHasher` accessor pairs v1's
+  `service/accessors.go` already has for the core-built subsystems
+  (DB/Auth/Hasher are built by `svckit` itself, not a mod, so they
+  live directly on `Service` rather than mirroring `s3mod`'s
+  `Client`/`Optional` pattern). `Preflight`'s internal
+  `preflightResult` helper is now the exported
+  `PreflightResult(ctx) PreflightResult` — v1 exposes the
+  identically-named/-shaped method — so a future `service/` facade
+  can delegate to it in two lines instead of reimplementing the
+  concurrent-checker fan-out; `Preflight(ctx) (PreflightResult, error)`
+  keeps its new, more ergonomic single-call signature rather than
+  being forced back to v1's `error`-only shape — the two packages'
+  `Preflight` methods are intentionally NOT signature-compatible.
+  New `README.md` for `svckit`, `svckit/mods/s3mod`, and
+  `auth/authmount` (previously undocumented at the per-package level
+  despite CLAUDE.md declaring `<subpkg>/README.md` the canonical
+  API-contract source); root `README.md`'s "Что в коробке" and
+  dependency-graph sections now list both; `auth/fibermount/README.md`
+  now explains why `authmount` exists (Go resolves dependencies
+  per-package — importing `fibermount` for its core wiring alone
+  still drags `ratelimit_redis.go`'s `clients/ratelimit` →
+  `clients/redis` chain along).
 - App-native TLS: `fibermap.WithTLS(certFile, keyFile) RunOption` +
   `service.WithTLS(certFile, keyFile) Option` + env pair
   `TLS_CERT_FILE` / `TLS_KEY_FILE` in `ServiceConfig`. When both PEM
@@ -350,6 +385,59 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
   in every service.
 
 ### Fixed
+- `svckit` — mod factories registered during the `Wire` phase
+  (`Host.RegisterMiddlewareFactory` called inside a mod's `Wire(h)`)
+  now reach the engine. `registerModFactories` ran once, before the
+  `Wire` loop; anything a mod registered from `Wire` sat unread in
+  `opts.modFactories` — despite `Wirer`'s own godoc promising
+  "registering YAML middleware factories" as a `Wire`-phase action —
+  and a `routes.yaml` referencing that name only failed much later,
+  at `Mount`, with `CodeUnknownMiddleware` and no indication which mod
+  was responsible. Fixed by making `registerModFactories` idempotent
+  (`delete`s each name from `opts.modFactories` as it lands on the
+  engine) and calling it a second time right after the `Wire` loop.
+  Regression test: `TestNew_WireModFactoryReachesEngine`; also added
+  `TestNew_SetupFailureUnwindsEarlierMods` and
+  `TestNew_WireFailureUnwindsEarlierMods` (previously only the
+  `Build`-phase failure path had unwind coverage).
+- `svckit` — `ModStatus.Enabled` no longer hardcodes `true` for every
+  mod regardless of whether it actually came up. A mod implementing
+  the new optional `Enabler` interface (`Enabled() bool` — `s3mod`
+  does) reports its own answer; mods without it still default to
+  `true`.
+- `svckit` — `New`'s Setup-phase shutdown-callback transfer no longer
+  duplicates `drainHostShutdowns`'s bulk-copy inline (once in the
+  per-mod failure branch, again after the loop) without its mutex;
+  both paths now call `drainHostShutdowns` directly, so the
+  failure path gets the same mutex-protected protocol as every other
+  phase.
+- `svckit` — `warnOrphanedEnv` now honours the W3C-standard
+  `OTEL_SDK_DISABLED=true` kill switch (v1's `otelkit.Setup` already
+  does). An operator who deliberately disabled OTel this way but left
+  `OTEL_EXPORTER_OTLP_ENDPOINT` in the environment no longer gets a
+  spurious "telemetry will not be sent" warning on every boot; the
+  unrelated `SENTRY_DSN` warning is unaffected by the switch.
+- `svckit` — `hostImpl.RegisterMiddlewareFactory` now logs a warning
+  when two mods (or the same mod twice) register the same middleware
+  factory name, instead of silently last-write-wins with no signal at
+  all.
+- `svckit` — dead code removed: `resolvePath` (superseded by
+  `resolvePathInDir`; the only callers were its own now-removed
+  tests). `mountDevTools` now guards against running twice — it
+  appends to `opts.runOpts`, a getter-with-a-side-effect shape that
+  would otherwise mount duplicate dev routes on a second call (not
+  reachable today, but no longer a live trap).
+- `svckit` — doc/comment fixes: `mod.go`'s `FactoryFunc` doc pointed
+  at "registerModFactories in engine.go" (the function lives in
+  `engine_factories.go`); `doc.go` said `service/` "wires up every
+  mod unconditionally" (`service/` has no concept of mods at all — it
+  calls each optional subsystem's constructor directly); `paths.go`'s
+  doc described "All three default YAMLs" while naming four
+  (routes/clients/subscribers/publishers) and the core only has one
+  (`routes.yaml`); `config.go`'s `APIKeyHashSecret` doc pointed at
+  `auth/fibermount.MountAPIKeyFactory` — the exact package `authmount`
+  exists to let the core avoid — instead of `auth/authmount`, which
+  is what `mountAuthMiddleware` actually calls.
 - `service` — CORS headers now reach auth 401s. The CORS middleware
   (`WithCORS` / `WithCORSConfig` / `CORS_ORIGINS` auto-enable) moved
   out of the shared `opts.fiberMiddleware` list into a dedicated

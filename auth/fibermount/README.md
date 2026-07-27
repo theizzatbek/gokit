@@ -5,6 +5,8 @@ One-call мост между `*auth.Auth[C]` и `*fibermap.Engine[T]`. Реги�
 **Родитель:** [../README.md](../README.md)
 **Импорт:** `github.com/theizzatbek/gokit/auth/fibermount`
 
+**Внутри этого пакета:** core-wiring (`bearer`/`require_scope`/`require_role`/`require_any_scope`/`require_any_role`/`rate_limit`/`idempotency`/`api_key`) фактически живёт в [`auth/authmount`](../authmount/README.md) — этот пакет делегирует туда для обратной совместимости и добавляет ровно два фактора сверху: `rate_limit_redis` (`ratelimit_redis.go`) и `idempotency_key`. Оба тянут `clients/ratelimit` → `clients/redis`, и Go резолвит зависимости попакетно — значит любой каллер, импортирующий `fibermount` хотя бы ради `MountMiddlewareFactories`, тащит Redis в свой граф вместе с этими двумя файлами, даже если ни разу их не вызывает. Если вам не нужны `rate_limit_redis`/`idempotency_key` — импортируйте `auth/authmount` напрямую и держите `go-redis` вне бинаря.
+
 ## Использование
 
 ```go
@@ -53,6 +55,7 @@ groups:
 ## См. также
 
 - [`auth`](../README.md) — родитель: предоставляет методы `Bearer`/`RequireScopeFactory`/`RequireRoleFactory`, которые этот мост оборачивает
+- [`auth/authmount`](../authmount/README.md) — Redis-свободное подмножество этого пакета; берите его напрямую, если `rate_limit_redis`/`idempotency_key` не нужны
 - [`fibermap`](../../fibermap/README.md) — `RegisterMiddlewareFactory`, `WithUse`
 - [`examples/urlshort`](../../examples/urlshort/README.md) — использует fibermount end-to-end
 </content>
