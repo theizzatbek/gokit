@@ -73,9 +73,16 @@ type options struct {
 	runOpts           []fibermap.RunOption
 	readinessCheckers []fibermap.Checker
 	modFactories      map[string]FactoryFunc
-	cronWrappers      []func(JobFn) JobFn
-	shutdownFns       []func() error
-	bootWarnings      []string
+	// modFactoriesDone tracks names already handed to Engine by a
+	// prior registerModFactories pass. Kept separate from
+	// modFactories (deleted from as each name lands on the engine —
+	// see engine_factories.go) so hostImpl.RegisterMiddlewareFactory
+	// can still detect a cross-phase collision after the name has
+	// already been flushed out of the pending map.
+	modFactoriesDone map[string]struct{}
+	cronWrappers     []func(JobFn) JobFn
+	shutdownFns      []func() error
+	bootWarnings     []string
 }
 
 // WithMod connects a mod. Usually called not directly but through the

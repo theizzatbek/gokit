@@ -417,10 +417,29 @@ archived in [`docs/CHANGELOG-0.x.md`](docs/CHANGELOG-0.x.md).
   `OTEL_EXPORTER_OTLP_ENDPOINT` in the environment no longer gets a
   spurious "telemetry will not be sent" warning on every boot; the
   unrelated `SENTRY_DSN` warning is unaffected by the switch.
-- `svckit` — `hostImpl.RegisterMiddlewareFactory` now logs a warning
-  when two mods (or the same mod twice) register the same middleware
-  factory name, instead of silently last-write-wins with no signal at
-  all.
+- `svckit` — two mods (or the same mod twice) registering the same
+  middleware factory name always logs a warning and never panics, in
+  every phase combination — not just silent last-write-wins. This
+  needed two passes: the initial fix only compared against the
+  still-pending `opts.modFactories` map, so a name already flushed to
+  the engine by the first `registerModFactories` call (see the
+  `Wire`-phase fix above — it runs `registerModFactories` twice) was
+  invisible to the check by the time a second mod claimed it from a
+  later phase; the second registration then went back into the
+  pending map unchallenged, and the second `registerModFactories`
+  pass called `Engine.RegisterMiddlewareFactory` with a name fibermap
+  already had — a real duplicate, which panics uncaught. Same
+  programmer error, two different outcomes depending on which phases
+  the two registrations landed in. Fixed by tracking names already
+  handed to the engine in a separate set (`opts.modFactoriesDone`);
+  the duplicate check now covers both "still pending" and "already
+  given to the engine," and a name in the latter set is dropped
+  rather than re-queued. Regression tests:
+  `TestNew_DuplicateFactoryName_SamePhase_WarnsAndSucceeds` (the
+  baseline behaviour, preserved) and
+  `TestNew_DuplicateFactoryName_CrossPhase_DoesNotPanic` (the actual
+  bug — reproduced the panic pre-fix by temporarily reverting, to
+  confirm the test catches it).
 - `svckit` — dead code removed: `resolvePath` (superseded by
   `resolvePathInDir`; the only callers were its own now-removed
   tests). `mountDevTools` now guards against running twice — it

@@ -84,6 +84,13 @@ type Host interface {
 	// registrations after Build and again after Wire, so a mod that
 	// needs the engine to exist first (v1's rate_limit_redis mounts
 	// after buildEngine) can still reach it from Wire.
+	//
+	// Two mods (or the same mod twice) claiming the same name always
+	// logs a warning and never panics, regardless of which phases the
+	// two calls land in — the first registration to actually reach the
+	// engine wins; a later collision, even from a different phase, is
+	// dropped rather than forwarded into fibermap's own duplicate-name
+	// panic.
 	RegisterMiddlewareFactory(name string, f FactoryFunc)
 
 	// WrapCronJob registers a decorator applied around every tick the
@@ -156,16 +163,31 @@ func (h *hostImpl) RegisterMiddlewareFactory(name string, f FactoryFunc) {
 	if h.opts.modFactories == nil {
 		h.opts.modFactories = map[string]FactoryFunc{}
 	}
-	if _, dup := h.opts.modFactories[name]; dup && h.logger != nil {
+	_, pending := h.opts.modFactories[name]
+	_, done := h.opts.modFactoriesDone[name]
+	if (pending || done) && h.logger != nil {
 		// Two mods (or the same mod twice) claimed the same factory
 		// name. Unlike validateMods (mod names, caught before any
 		// phase runs) there's no equivalent up-front check here — the
 		// collision only exists once two Setup/Build/Wire calls have
-		// both landed on this map — so the best the core can do is
-		// warn loudly and keep last-write-wins, matching what the map
-		// assignment below does regardless.
-		h.logger.Warn("svckit: middleware factory name registered more than once — last registration wins",
+		// both landed on this name — so the best the core can do is
+		// warn loudly.
+		h.logger.Warn("svckit: middleware factory name registered more than once — first registration onto the engine wins",
 			"name", name)
+	}
+	if done {
+		// The winning registration already reached Engine in an
+		// earlier registerModFactories pass (e.g. this same name was
+		// registered during Build and already flushed before this
+		// Wire-phase call runs). There is no way to unregister from
+		// fibermap, and re-queuing this one would make the NEXT
+		// registerModFactories pass call Engine.RegisterMiddlewareFactory
+		// with a name it already has — which fibermap treats as a
+		// true duplicate and panics on. Drop it instead: the warning
+		// above is the only trace, by design — a diagnosable message
+		// beats an unrecoverable panic regardless of which phases the
+		// two registrations happened to land in.
+		return
 	}
 	h.opts.modFactories[name] = f
 }
