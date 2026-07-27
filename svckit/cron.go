@@ -73,6 +73,25 @@ type scheduler struct {
 	wg   sync.WaitGroup
 }
 
+// wrapCronJob applies every decorator a mod registered via
+// [Host.WrapCronJob] around fn, in registration order (each wrap
+// layers over the previous result, so the last-registered decorator
+// ends up outermost). Used for every tick the core schedules —
+// [WithCron]/[WithSingletonCron] entries, [Service.AddCron]/
+// [Service.AddSingletonCron] registrations, and the refresh-GC ticker
+// — so a mod like sentrymod can restore per-tick monitoring without
+// the core knowing what Sentry is.
+func (s *Service[T, C]) wrapCronJob(fn JobFn) JobFn {
+	if s.opts == nil {
+		return fn
+	}
+	wrapped := fn
+	for _, w := range s.opts.cronWrappers {
+		wrapped = w(wrapped)
+	}
+	return wrapped
+}
+
 // jobCount returns the number of registered entries. Used by
 // [Service.Status]. nil-safe.
 func (s *scheduler) jobCount() int {
@@ -97,6 +116,7 @@ func (s *scheduler) jobCount() int {
 // registered at config time. Errors with [CodeCronInvalidSchedule]
 // when the schedule string is rejected by the parser.
 func (s *Service[T, C]) AddCron(name, schedule string, fn JobFn) error {
+	fn = s.wrapCronJob(fn)
 	if s.scheduler == nil {
 		parser := s.opts.cronParser
 		emptyParser := cron.Parser{}
@@ -176,6 +196,7 @@ func (s *Service[T, C]) buildCron(ctx context.Context) error {
 		if j.Singleton {
 			jobFn = s.wrapSingleton(j.Name, j.Fn)
 		}
+		jobFn = s.wrapCronJob(jobFn)
 		wrapped := func() {
 			// Use the service-scoped runCtx so shutdown propagates
 			// into observably-aware fn implementations. The boot ctx

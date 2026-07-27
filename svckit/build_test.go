@@ -3,6 +3,7 @@ package svckit
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -174,6 +175,57 @@ func TestNew_DuplicateModNameIsCaughtBeforePhases(t *testing.T) {
 	}
 	if len(journal) != 0 {
 		t.Fatalf("duplicate must be caught before phases, but journal is non-empty: %v", journal)
+	}
+}
+
+// hostProbeMod captures what Host.HTTPC() and Host.Context() return
+// at each phase, so New's wiring of those two Host additions can be
+// checked end to end rather than only at the hostImpl unit level.
+type hostProbeMod struct {
+	httpcAtSetup, httpcAtBuild *http.Client
+	ctxAtSetup, ctxAtBuild     context.Context
+}
+
+func (*hostProbeMod) Name() string { return "host_probe" }
+
+func (m *hostProbeMod) Setup(_ context.Context, h Host) error {
+	m.httpcAtSetup = h.HTTPC()
+	m.ctxAtSetup = h.Context()
+	return nil
+}
+
+func (m *hostProbeMod) Build(_ context.Context, h Host) error {
+	m.httpcAtBuild = h.HTTPC()
+	m.ctxAtBuild = h.Context()
+	return nil
+}
+
+func TestNew_HostExposesHTTPCAndContext(t *testing.T) {
+	probe := &hostProbeMod{}
+	svc, err := New[struct{}, struct{}](context.Background(), Config{}, WithMod(probe))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+
+	if probe.httpcAtSetup != nil {
+		t.Error("Host.HTTPC() during Setup: want nil (buildHTTPC hasn't run yet), got non-nil")
+	}
+	if probe.httpcAtBuild == nil {
+		t.Fatal("Host.HTTPC() during Build: want the kit-built client, got nil")
+	}
+	if probe.httpcAtBuild != svc.HTTPC {
+		t.Error("Host.HTTPC() during Build did not return the same client as svc.HTTPC")
+	}
+
+	if probe.ctxAtSetup == nil {
+		t.Fatal("Host.Context() during Setup: want the service's runCtx, got nil")
+	}
+	if probe.ctxAtSetup != probe.ctxAtBuild {
+		t.Error("Host.Context() changed between Setup and Build — it must be the one long-lived runCtx")
+	}
+	if probe.ctxAtSetup != svc.runCtx {
+		t.Error("Host.Context() did not return svc.runCtx")
 	}
 }
 

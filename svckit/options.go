@@ -73,6 +73,7 @@ type options struct {
 	runOpts           []fibermap.RunOption
 	readinessCheckers []fibermap.Checker
 	modFactories      map[string]FactoryFunc
+	cronWrappers      []func(JobFn) JobFn
 	shutdownFns       []func() error
 	bootWarnings      []string
 }

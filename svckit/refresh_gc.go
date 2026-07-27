@@ -25,6 +25,17 @@ func (s *Service[T, C]) startRefreshGC() {
 	store := s.refreshStore
 	logger := s.logger
 
+	tick := s.wrapCronJob(func(ctx context.Context) error {
+		n, err := store.GarbageCollect(ctx, time.Now())
+		if err != nil {
+			return err
+		}
+		if logger != nil && n > 0 {
+			logger.Info("svckit: refresh GC", "removed", n)
+		}
+		return nil
+	})
+
 	ctx, cancel := context.WithCancel(context.Background())
 	var done sync.WaitGroup
 	done.Add(1)
@@ -43,16 +54,6 @@ func (s *Service[T, C]) startRefreshGC() {
 				return
 			case <-ticker.C:
 				runCtx, runCancel := context.WithTimeout(ctx, interval)
-				tick := func(ctx context.Context) error {
-					n, err := store.GarbageCollect(ctx, time.Now())
-					if err != nil {
-						return err
-					}
-					if logger != nil && n > 0 {
-						logger.Info("svckit: refresh GC", "removed", n)
-					}
-					return nil
-				}
 				err := tick(runCtx)
 				runCancel()
 				if err != nil {
