@@ -56,6 +56,7 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		metrics:     metrics,
 		nodeName:    cfg.Service.NodeName,
 		serverGroup: cfg.Service.ServerGroup,
+		ctx:         s.runCtx,
 	}
 
 	// Setup phase — before the logger lands on Service and before
@@ -66,7 +67,7 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 			continue
 		}
 		if err := sm.Setup(ctx, h); err != nil {
-			s.shutdownFns = append(s.shutdownFns, o.shutdownFns...)
+			s.drainHostShutdowns(o)
 			s.Close()
 			return nil, wrapModErr(err, m.Name(), CodeModSetupFailed, "setup")
 		}
@@ -75,9 +76,9 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 	s.logger = h.logger
 
 	// An error at any step below must unwind everything that already
-	// registered: stash modShutdown on Service ahead of time.
-	s.shutdownFns = append(s.shutdownFns, o.shutdownFns...)
-	o.shutdownFns = nil
+	// registered: drain what Setup accumulated on Host now, through
+	// the same mutex-protected path the failure branch above uses.
+	s.drainHostShutdowns(o)
 
 	if err := s.buildDB(ctx); err != nil {
 		s.Close()
@@ -97,6 +98,7 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 		s.Close()
 		return nil, err
 	}
+	h.httpc = s.HTTPC
 
 	// Build phase — clients and runtimes.
 	for _, m := range o.mods {
@@ -137,6 +139,17 @@ func New[T any, C any](ctx context.Context, cfg Config, opts ...Option) (*Servic
 			s.Close()
 			return nil, wrapModErr(err, m.Name(), CodeModWireFailed, "wire")
 		}
+	}
+	// A mod is entitled to call Host.RegisterMiddlewareFactory from
+	// Wire (v1's rate_limit_redis mounts after the engine is built —
+	// squarely a Wire-phase action). registerModFactories is
+	// idempotent (see engine_factories.go), so calling it again here
+	// only picks up names a mod added during the Wire loop above;
+	// names already registered by the first call (right after
+	// buildEngine) were deleted from opts.modFactories as they landed.
+	if err := s.registerModFactories(); err != nil {
+		s.Close()
+		return nil, err
 	}
 
 	s.collectModStatus()

@@ -91,6 +91,77 @@ func TestNew_BuildFailureUnwindsEarlierMods(t *testing.T) {
 	}
 }
 
+// TestNew_SetupFailureUnwindsEarlierMods mirrors
+// TestNew_BuildFailureUnwindsEarlierMods for the Setup phase. Setup's
+// unwind path is structurally different from Build/Wire's: the
+// bulk-copy of Host-accumulated shutdown callbacks onto Service
+// happens once, right after the whole Setup loop finishes (see
+// build.go), rather than per-mod inside the loop like Build/Wire.
+// A mod failing Setup before that bulk-copy runs must still see its
+// own (and every earlier mod's) OnShutdown honoured.
+func TestNew_SetupFailureUnwindsEarlierMods(t *testing.T) {
+	var journal []string
+	_, err := New[struct{}, struct{}](context.Background(), Config{},
+		WithMod(&phaseMod{name: "ok", journal: &journal}),
+		WithMod(&phaseMod{name: "bad", journal: &journal, failAt: "setup"}))
+
+	var e *xerrs.Error
+	if !errors.As(err, &e) || e.Code != CodeModSetupFailed {
+		t.Fatalf("want Code=%q, got %#v", CodeModSetupFailed, err)
+	}
+	// Neither mod reached :build or :wire.
+	for _, entry := range journal {
+		if entry == "ok:build" || entry == "ok:wire" || entry == "bad:build" || entry == "bad:wire" {
+			t.Fatalf("phase after setup ran despite setup failure: %v", journal)
+		}
+	}
+	// Both mods registered OnShutdown from their own Setup — both must
+	// be torn down, in LIFO order.
+	last := journal[len(journal)-2:]
+	if last[0] != "bad:shutdown" || last[1] != "ok:shutdown" {
+		t.Fatalf("teardown not LIFO: %v", journal)
+	}
+}
+
+// TestNew_WireFailureUnwindsEarlierMods mirrors
+// TestNew_BuildFailureUnwindsEarlierMods for the Wire phase — the
+// same phase Fix #1 (Wire-time RegisterMiddlewareFactory) touches, so
+// this is the regression anchor for that fix: a mod failing during
+// Wire must still unwind cleanly even though registerModFactories now
+// runs a second time right after the Wire loop.
+func TestNew_WireFailureUnwindsEarlierMods(t *testing.T) {
+	var journal []string
+	_, err := New[struct{}, struct{}](context.Background(), Config{},
+		WithMod(&phaseMod{name: "ok", journal: &journal}),
+		WithMod(&phaseMod{name: "bad", journal: &journal, failAt: "wire"}))
+
+	var e *xerrs.Error
+	if !errors.As(err, &e) || e.Code != CodeModWireFailed {
+		t.Fatalf("want Code=%q, got %#v", CodeModWireFailed, err)
+	}
+	// Both mods reached build (Wire fails after Build completes for
+	// everyone), but "bad" itself never finished wiring.
+	want := []string{
+		"ok:setup", "bad:setup",
+		"ok:build", "bad:build",
+		"ok:wire", "bad:wire",
+	}
+	if len(journal) < len(want) {
+		t.Fatalf("journal shorter than expected: %v", journal)
+	}
+	for i := range want {
+		if journal[i] != want[i] {
+			t.Fatalf("journal[%d]: want %q, got %q (full: %v)", i, want[i], journal[i], journal)
+		}
+	}
+	// Both mods registered OnShutdown in Setup — both must be torn
+	// down, in LIFO order.
+	last := journal[len(journal)-2:]
+	if last[0] != "bad:shutdown" || last[1] != "ok:shutdown" {
+		t.Fatalf("teardown not LIFO: %v", journal)
+	}
+}
+
 func TestNew_DuplicateModNameIsCaughtBeforePhases(t *testing.T) {
 	var journal []string
 	_, err := New[struct{}, struct{}](context.Background(), Config{},
@@ -150,5 +221,57 @@ groups:
 	app := fiber.New()
 	if err := svc.Engine.Mount(app); err != nil {
 		t.Fatalf("Mount: mod factory did not reach the engine: %v", err)
+	}
+}
+
+// wireFactoryMod registers a YAML factory from the Wire phase instead
+// of Build — the phase Fix #1 is about. Before the fix,
+// registerModFactories ran once, BEFORE the Wire loop, so anything a
+// mod registered from Wire sat unread in opts.modFactories and Mount
+// would fail with CodeUnknownMiddleware instead of ever reaching the
+// engine. This is exactly the shape v1's rate_limit_redis wiring
+// takes (service/ratelimit.go mounts its factory after buildEngine,
+// i.e. in what would be the Wire-equivalent step) — the case the task
+// description calls out as the next mod to hit this gap.
+type wireFactoryMod struct{}
+
+func (wireFactoryMod) Name() string { return "wire_factory" }
+
+func (wireFactoryMod) Wire(h Host) error {
+	h.RegisterMiddlewareFactory("wire_test_factory",
+		func(args []string) (func(*fiber.Ctx) error, error) {
+			return func(c *fiber.Ctx) error { return c.Next() }, nil
+		})
+	return nil
+}
+
+func TestNew_WireModFactoryReachesEngine(t *testing.T) {
+	svc, err := New[struct{}, struct{}](context.Background(), Config{}, WithMod(wireFactoryMod{}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+
+	// Same YAML shape as TestNew_ModFactoryReachesEngine — Mount needs
+	// an explicit ContextBuilder before it will validate the plan.
+	yaml := []byte(`
+groups:
+  - routes:
+      - method: GET
+        path: /ping
+        handler: ping
+        middleware:
+          - wire_test_factory: []
+`)
+	svc.SetContextBuilder(func(c *fiber.Ctx) (struct{}, error) { return struct{}{}, nil })
+	svc.Engine.RegisterHandler("ping", func(c *fibermap.Context[struct{}]) error {
+		return c.Ctx.SendStatus(fiber.StatusOK)
+	})
+	if err := svc.Engine.LoadBytes(yaml); err != nil {
+		t.Fatalf("LoadBytes: %v", err)
+	}
+	app := fiber.New()
+	if err := svc.Engine.Mount(app); err != nil {
+		t.Fatalf("Mount: Wire-phase mod factory did not reach the engine: %v", err)
 	}
 }
